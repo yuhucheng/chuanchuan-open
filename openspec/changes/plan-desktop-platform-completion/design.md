@@ -52,3 +52,11 @@
 - `lib/features/transfers/file_access.dart`（仓库根目录相对路径）
 - `macos/Platform/Sources/ShareHubPlatform/SelectedFileStore.swift`（仓库根目录相对路径）
 - 用户已确认的公开产品约束，已在本文件摘录；候选实现建议单独标明。本摘要不依赖任何非公开源码、部署环境或凭据。
+
+## Cross-repository Development Plan
+
+- 计划与阶段：[两仓开发计划 v0.1.0](../../../docs/superpowers/plans/2026-09-15-cross-repository-development.md)，**D / S0→S1**。
+- 本仓职责：客户端宿主、预览编排与 Windows 文件准备；协作对象为 closed:plan-desktop-preview-acceptance。
+- 前置条件：当前 SDK/公开接口；预览问题先按证据定位所属层，文件准备独立验收。
+- 联合验收：真实所选来源首帧、停止和权限撤回与闭源 D 联测；文件令牌/摘要/释放单独留证。
+- 本节补开发顺序和分阶段依赖，保留上文的未决设计与发布目标；不能把工程联调结果当作正式上线资格。

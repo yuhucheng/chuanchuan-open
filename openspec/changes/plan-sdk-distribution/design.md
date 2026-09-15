@@ -52,3 +52,11 @@ ABI、包容器、签名渠道、下载服务、SDK 许可证定稿和稳定发�
 - `tool/test_configure_media_sdk.ps1`（仓库根目录相对路径）
 - `docs/validation/required-sdk-client.md`（仓库根目录相对路径）
 - 用户已确认的公开产品约束，已在本文件摘录；候选实现建议单独标明。本摘要不依赖任何非公开源码、部署环境或凭据。
+
+## Cross-repository Development Plan
+
+- 计划与阶段：[两仓开发计划 v0.1.0](../../../docs/superpowers/plans/2026-09-15-cross-repository-development.md)，**K / 格式设计可前置，S4 交付**。
+- 本仓职责：安装布局、兼容诊断、公开获取文档及无私有源码构建；协作对象为 closed:plan-sdk-distribution。
+- 前置条件：消费闭源 K 的真实制品和能力清单；D/M 等只对实际声明能力构成验收前提。
+- 联合验收：同一制品身份完成缺包/错误布局/不兼容/失败保护测试、签名与实际加载；未交付能力不进入发行声明。
+- 本节补开发顺序和分阶段依赖，保留上文的未决设计与发布目标；不能把工程联调结果当作正式上线资格。

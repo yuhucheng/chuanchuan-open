@@ -17,3 +17,10 @@
 
 - [ ] 3.1 使用正式 SDK 在 Windows/macOS 运行 `flutter pub get`、`flutter analyze --no-pub`、`flutter test --no-pub` 与对应平台构建；验证默认入口和插件依赖加载。
 - [ ] 3.2 核验实际客户端启动、媒体能力、完整制品签名/依赖与发布清单，记录可追溯制品身份；只有验收通过后才填写正式下载链接和发行状态。
+
+## Cross-repository Development Plan
+
+- 按 [两仓开发计划 v0.1.0](../../../docs/superpowers/plans/2026-09-15-cross-repository-development.md) 的 **K / 格式设计可前置，S4 交付** 推进；先执行 1.1/1.2；有真实测试制品后执行 2.x，正式消费按 3.x 验收。
+- 前置条件：消费闭源 K 的真实制品和能力清单；D/M 等只对实际声明能力构成验收前提。
+- 协作对象：closed:plan-sdk-distribution；联合验收要求：同一制品身份完成缺包/错误布局/不兼容/失败保护测试、签名与实际加载；未交付能力不进入发行声明。
+- 原任务编号保持不变，每项按本仓证据单独勾选；只完成子集时其余任务保持未完成，不能归档整个 change。

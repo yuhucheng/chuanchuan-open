@@ -17,3 +17,10 @@
 
 - [ ] 3.1 运行 `flutter analyze --no-pub`、`flutter test --no-pub` 和目标桌面构建，与 SDK 维护方执行匹配版本契约检查并记录结果。
 - [ ] 3.2 在真实 Windows/macOS 设备分别验收发送与观看、直连与中继、来源匹配、对端首帧和停止后不再更新；未通过平台保持待验收，不以 fake 填补。
+
+## Cross-repository Development Plan
+
+- 按 [两仓开发计划 v0.1.0](../../../docs/superpowers/plans/2026-09-15-cross-repository-development.md) 的 **M / S3** 推进；先执行 1.1/1.2，接口明确后执行 2.x；3.x 与闭源 M 用同一版本双机验收。
+- 前置条件：公开远端契约先评审；D 真实预览和 C 可信连接通过，正式资格接 A。
+- 协作对象：closed:plan-media-sessions；联合验收要求：Windows→Mac 与 Mac→Windows 分别验证来源/对端首帧/持续帧/停止，直连和受控 relay 分开留证。
+- 原任务编号保持不变，每项按本仓证据单独勾选；只完成子集时其余任务保持未完成，不能归档整个 change。

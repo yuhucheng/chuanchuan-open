@@ -50,3 +50,11 @@ release-target 为 unassigned；先设计用户设备关系、邀请协议、资
 - `packages/share_hub_media_api/README.md`（仓库根目录相对路径）
 - `macos/Platform/Sources/ShareHubPlatform/PlatformServices.swift`（仓库根目录相对路径）
 - 用户已确认的公开产品约束，已在本文件摘录；候选实现建议单独标明。本摘要不依赖任何非公开源码、部署环境或凭据。
+
+## Cross-repository Development Plan
+
+- 计划与阶段：[两仓开发计划 v0.1.0](../../../docs/superpowers/plans/2026-09-15-cross-repository-development.md)，**A / S0 决策，实现仍未排期**。
+- 本仓职责：资格交互、本地材料保存/恢复及执行方验证接入；协作对象为 closed:plan-activation-service。
+- 前置条件：先指定 release-target 并评审资格契约；资格基础先行，完整离线核心操作在 C/M 可用后验收。
+- 联合验收：与闭源 A 核对同一资格样例、取消/重复兑换、持有证明和离线语义；正式辅助连接不得绕过资格。
+- 本节补开发顺序和分阶段依赖，保留上文的未决设计与发布目标；不能把工程联调结果当作正式上线资格。

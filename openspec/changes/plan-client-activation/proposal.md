@@ -35,3 +35,7 @@
 - [版本计划](../../../docs/version-plan.md)
 - [公共媒体契约](../../../packages/share_hub_media_api/README.md)
 - 用户已确认的公开产品约束与既有设计整理，详见本变更 design.md；未决选择没有提升为确认需求。
+
+## Cross-repository Development Plan
+
+[两仓开发计划 v0.1.0](../../../docs/superpowers/plans/2026-09-15-cross-repository-development.md)统一本 change 的执行次序：**A / S0 决策，实现仍未排期**。协作对象：closed:plan-activation-service。本仓交付：资格交互、本地材料保存/恢复及执行方验证接入。需求条款与 spec-version 保持不变；本次同步仅更新规划，不勾选实施任务。

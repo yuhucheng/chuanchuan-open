@@ -51,3 +51,11 @@ release-target 为 unassigned；先确定系统版本/设备矩阵和依赖能�
 - `packages/share_hub_media_api/README.md`（仓库根目录相对路径）
 - `lib/platform/client_platform.dart`（仓库根目录相对路径）
 - 用户已确认的公开产品约束，已在本文件摘录；候选实现建议单独标明。本摘要不依赖任何非公开源码、部署环境或凭据。
+
+## Cross-repository Development Plan
+
+- 计划与阶段：[两仓开发计划 v0.1.0](../../../docs/superpowers/plans/2026-09-15-cross-repository-development.md)，**N / 桌面能力稳定后，未排期**。
+- 本仓职责：官方 Android 客户端、权限/生命周期与主控角色；协作对象为 closed:plan-android-host-sdk（第三方互通组合，不是官方宿主实现）。
+- 前置条件：先指定 release-target；消费 C/M/A/K 的可用契约与包，F/U 按能力接入；第三方组合才依赖 H。
+- 联合验收：真实 Android 上验证已有发送/观看/文件/控制能力；官方 Android 不变为被控，缺失能力和第三方未测项不宣称完成。
+- 本节补开发顺序和分阶段依赖，保留上文的未决设计与发布目标；不能把工程联调结果当作正式上线资格。

@@ -1,5 +1,7 @@
 # 串串开源规格索引
 
+全部未归档 change 的开发顺序、跨仓依赖与联合验收见[两仓开发计划 v0.1.0](../docs/superpowers/plans/2026-09-15-cross-repository-development.md)。当前下一开发入口为桌面事实与根因收敛，连接契约和资格决定可并行准备。
+
 本目录使用 **Fission-AI OpenSpec 1.13.0**。当前产品基线 **v0.1.0**，每份初始规格版本 **0.1.0**；公共媒体 API 版本独立维护。机器清单见 [catalog.json](catalog.json)，命令、版本与归档规则见 [OpenSpec 管理](../docs/development/openspec.md)。
 
 `specs/` 是当前能力和约束的基线，`changes/` 是尚未完成的设计。每份规格列出实现状态、来源和验证边界；本次不实施这些待办功能。

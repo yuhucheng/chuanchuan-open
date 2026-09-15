@@ -51,3 +51,11 @@
 - `lib/features/preview/preview_controller.dart`（仓库根目录相对路径）
 - `docs/validation/main-integration.md`（仓库根目录相对路径）
 - 用户已确认的公开产品约束，已在本文件摘录；候选实现建议单独标明。本摘要不依赖任何非公开源码、部署环境或凭据。
+
+## Cross-repository Development Plan
+
+- 计划与阶段：[两仓开发计划 v0.1.0](../../../docs/superpowers/plans/2026-09-15-cross-repository-development.md)，**M / S3**。
+- 本仓职责：远端发送/观看的公开状态、授权、来源选择和对端首帧展示；协作对象为 closed:plan-media-sessions。
+- 前置条件：公开远端契约先评审；D 真实预览和 C 可信连接通过，正式资格接 A。
+- 联合验收：Windows→Mac 与 Mac→Windows 分别验证来源/对端首帧/持续帧/停止，直连和受控 relay 分开留证。
+- 本节补开发顺序和分阶段依赖，保留上文的未决设计与发布目标；不能把工程联调结果当作正式上线资格。

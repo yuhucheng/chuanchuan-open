@@ -35,3 +35,7 @@
 - [版本计划](../../../docs/version-plan.md)
 - [公共媒体契约](../../../packages/share_hub_media_api/README.md)
 - 用户已确认的公开产品约束与既有设计整理，详见本变更 design.md；未决选择没有提升为确认需求。
+
+## Cross-repository Development Plan
+
+[两仓开发计划 v0.1.0](../../../docs/superpowers/plans/2026-09-15-cross-repository-development.md)统一本 change 的执行次序：**K / 格式设计可前置，S4 交付**。协作对象：closed:plan-sdk-distribution。本仓交付：安装布局、兼容诊断、公开获取文档及无私有源码构建。需求条款与 spec-version 保持不变；本次同步仅更新规划，不勾选实施任务。

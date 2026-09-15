@@ -50,3 +50,11 @@ release-target 为 unassigned；先完成控制授权和输入协议评审，再
 - `macos/Platform/Sources/ShareHubPlatform/PlatformServices.swift`（仓库根目录相对路径）
 - `packages/share_hub_media_api/README.md`（仓库根目录相对路径）
 - 用户已确认的公开产品约束，已在本文件摘录；候选实现建议单独标明。本摘要不依赖任何非公开源码、部署环境或凭据。
+
+## Cross-repository Development Plan
+
+- 计划与阶段：[两仓开发计划 v0.1.0](../../../docs/superpowers/plans/2026-09-15-cross-repository-development.md)，**U / M 之后，未排期**。
+- 本仓职责：控制授权交互、公开输入契约与控制端状态；协作对象为 closed:plan-remote-control-engine。
+- 前置条件：先指定 release-target；依赖 C 身份、M 几何/画面和 A 资格；先验收桌面控制端，Android 组合在 N 后补齐。
+- 联合验收：与闭源 U 联测真实系统输入、仅观看越权拒绝、失焦输入释放、断线/停止/权限失效撤权；未完成 Android 任务不归档。
+- 本节补开发顺序和分阶段依赖，保留上文的未决设计与发布目标；不能把工程联调结果当作正式上线资格。

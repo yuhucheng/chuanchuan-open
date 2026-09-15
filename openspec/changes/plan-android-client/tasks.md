@@ -17,3 +17,10 @@
 
 - [ ] 3.1 运行 `flutter analyze --no-pub`、`flutter test --no-pub` 与 Android Debug 构建，按设备矩阵逐项记录授权、真实远端帧、文件完整性和控制端表现。
 - [ ] 3.2 对已批准互通范围的第三方被控设备验证身份、实际能力及输入权限失效；没有对应设备或 SDK 的项目保留待验收，不以桌面结果补齐。
+
+## Cross-repository Development Plan
+
+- 按 [两仓开发计划 v0.1.0](../../../docs/superpowers/plans/2026-09-15-cross-repository-development.md) 的 **N / 桌面能力稳定后，未排期** 推进；先执行 1.1/1.2 的矩阵与兼容清单；2.x 接入实际能力，3.1 先验官方端，3.2 待 H 条件具备。
+- 前置条件：先指定 release-target；消费 C/M/A/K 的可用契约与包，F/U 按能力接入；第三方组合才依赖 H。
+- 协作对象：closed:plan-android-host-sdk（第三方互通组合，不是官方宿主实现）；联合验收要求：真实 Android 上验证已有发送/观看/文件/控制能力；官方 Android 不变为被控，缺失能力和第三方未测项不宣称完成。
+- 原任务编号保持不变，每项按本仓证据单独勾选；只完成子集时其余任务保持未完成，不能归档整个 change。

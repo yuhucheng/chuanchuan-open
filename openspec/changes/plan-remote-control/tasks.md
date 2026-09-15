@@ -17,3 +17,10 @@
 
 - [ ] 3.1 运行客户端静态检查和测试，在真实 Windows/macOS 被控设备验收输入、拒绝、撤回、系统权限失败与断线释放；记录 SDK 和平台版本。
 - [ ] 3.2 当 Android 控制端有可用产物后再单独验收其控制电脑能力；不能从模拟输入或桌面 UI 测试推定 Android/第三方被控能力完成。
+
+## Cross-repository Development Plan
+
+- 按 [两仓开发计划 v0.1.0](../../../docs/superpowers/plans/2026-09-15-cross-repository-development.md) 的 **U / M 之后，未排期** 推进；先执行 1.1/1.2，再执行 2.x 与桌面 3.1；3.2 单独等待 Android 产物，不阻塞桌面子集开发。
+- 前置条件：先指定 release-target；依赖 C 身份、M 几何/画面和 A 资格；先验收桌面控制端，Android 组合在 N 后补齐。
+- 协作对象：closed:plan-remote-control-engine；联合验收要求：与闭源 U 联测真实系统输入、仅观看越权拒绝、失焦输入释放、断线/停止/权限失效撤权；未完成 Android 任务不归档。
+- 原任务编号保持不变，每项按本仓证据单独勾选；只完成子集时其余任务保持未完成，不能归档整个 change。

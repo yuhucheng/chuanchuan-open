@@ -17,3 +17,10 @@
 
 - [ ] 3.1 运行 `flutter analyze --no-pub`、`flutter test --no-pub` 和 Windows/macOS 对应 Debug 构建，记录使用的客户端、SDK 与公共 API 版本。
 - [ ] 3.2 用两台真实设备完成断公网本地连接、实际直连/中继、信令阻断与取消验收；记录对端身份和实际路径证据，更新公开验证记录后再审查是否可归档。
+
+## Cross-repository Development Plan
+
+- 按 [两仓开发计划 v0.1.0](../../../docs/superpowers/plans/2026-09-15-cross-repository-development.md) 的 **C / S0 契约，S1 本地，S2 辅助** 推进；先执行 1.1/1.2；2.x 按本地可信连接→辅助连接推进，3.2 分别记录本地与 relay 结果。
+- 前置条件：先解决 C0 身份/消息/取消契约；A0 明确资格依赖，正式上线需要有效资格链路。
+- 协作对象：closed:plan-connection-services；联合验收要求：与闭源 C 联测身份/会话归属、拒绝/取消、断公网本地、内网配置及实际选中路径；资格未交付时只记录隔离工程结果。
+- 原任务编号保持不变，每项按本仓证据单独勾选；只完成子集时其余任务保持未完成，不能归档整个 change。

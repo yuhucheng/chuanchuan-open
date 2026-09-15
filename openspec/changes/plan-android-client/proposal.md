@@ -35,3 +35,7 @@ Android 是既有产品目标，但当前仓库只有 Windows/macOS 宿主。迁
 - [版本计划](../../../docs/version-plan.md)
 - [公共媒体契约](../../../packages/share_hub_media_api/README.md)
 - 用户已确认的公开产品约束与既有设计整理，详见本变更 design.md；未决选择没有提升为确认需求。
+
+## Cross-repository Development Plan
+
+[两仓开发计划 v0.1.0](../../../docs/superpowers/plans/2026-09-15-cross-repository-development.md)统一本 change 的执行次序：**N / 桌面能力稳定后，未排期**。协作对象：closed:plan-android-host-sdk（第三方互通组合，不是官方宿主实现）。本仓交付：官方 Android 客户端、权限/生命周期与主控角色。需求条款与 spec-version 保持不变；本次同步仅更新规划，不勾选实施任务。
