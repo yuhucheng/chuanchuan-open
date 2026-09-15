@@ -6,6 +6,8 @@
 
 ## 构建
 
+两个仓库日常开发统一使用 `main`，当前目标 `v0.1.0`。开发和提交前阅读 [版本计划](docs/version-plan.md) 与 [分支管理规则](docs/development/branch-management.md)，运行 `pwsh -File tool/install_git_hooks.ps1` 启用本地检查。
+
 安装 Flutter 3.47.2 / Dart 3.13.2；Windows 需要 VS 2022 C++ 桌面工具链和 Windows SDK，脚本使用 PowerShell 7；Mac 需要完整 Xcode。
 
 SDK 是必需的构建依赖，标准位置为 `.local/media-sdk/package`。正式 SDK 可按此包布局解压；当前尚未交付正式二进制包或下载地址，本地开发使用已有内部适配包，通过脚本链接到标准位置：
@@ -42,4 +44,4 @@ SDK 依赖项、锁文件和原生插件注册随正常客户端维护；`.local
 
 应用身份沿用 `share_hub.exe` / `Software\ShareHub\Client` 和 `dev.sharehub.client`。Windows 真实预览首帧仍需修复，当前没有可信发行签名。
 
-验证见 [统一 SDK 构建记录](docs/validation/required-sdk-client.md)。开源远程地址仍待配置。
+验证见 [统一 SDK 构建记录](docs/validation/required-sdk-client.md) 和 [Mac 合并与主线收敛记录](docs/validation/main-integration.md)。开源远程地址为 `git@github.com:yuhucheng/chuanchuan-open.git`。

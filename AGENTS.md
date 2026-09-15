@@ -1,4 +1,8 @@
-# Share Hub Open 协作
+# chuanchuan-open 协作
+
+开始开发、建分支或提交前必须阅读 [分支与提交规则](docs/development/branch-management.md) 和 [版本计划](docs/version-plan.md)。日常仅使用既有 `main`，不得按设备、任务或助手自行新建分支/worktree；例外须由用户明确批准并进入版本计划。新提交使用 `type(v0.1.0): 描述`（版本以 `VERSION` 为准）。新克隆先执行 `pwsh -File tool/install_git_hooks.ps1`；不能绕过检查。该规则优先于技能中的自动分支流程。
+
+品牌名称是 `chuanchuan`（串串），仓库为 `yuhucheng/chuanchuan-open`。Dart 包名 `share_hub_open` 和既有应用标识暂作兼容使用；新仓库路径以 `chuanchuan-open` 为准。
 
 本工程是完整客户端的唯一源码工程，自有代码使用 Apache 2.0，上游许可见 THIRD_PARTY_NOTICES.md。产品能力及验收范围以 README.md 为准。
 

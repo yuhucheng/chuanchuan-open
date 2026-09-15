@@ -1,12 +1,59 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:share_hub_open/platform/mac_platform.dart';
+import 'package:share_hub_open/features/preview/preview_engine.dart';
 import 'package:share_hub_open/ui/client_app.dart';
 
 import 'fakes.dart';
 import 'file_fakes.dart';
 
 void main() {
+  testWidgets(
+    'parent rebuild keeps capture and visible texture on the same engine',
+    (tester) async {
+      tester.view.physicalSize = const Size(1180, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final platform = FakePlatform()
+        ..status = const PermissionStatus(screenRecording: true);
+      final engine = _NamedEngine('original texture');
+      await tester.pumpWidget(
+        ShareHubApp(
+          targetPlatform: TargetPlatform.macOS,
+          platform: platform,
+          previewEngine: engine,
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('预览本机屏幕'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('读取屏幕与窗口'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(DropdownButtonFormField<CaptureSource>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('显示器 · 内建显示器').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('开始预览'));
+      await tester.pumpAndSettle();
+      engine.firstFrame!();
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(
+        ShareHubApp(
+          targetPlatform: TargetPlatform.macOS,
+          platform: platform,
+          previewEngine: _NamedEngine('replacement texture'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('original texture'), findsOneWidget);
+      expect(find.text('replacement texture'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+      expect(engine.closed, true);
+      await platform.events.close();
+    },
+  );
   testWidgets(
     'Windows keeps discovery opt-in and hides unavailable native actions',
     (tester) async {
@@ -44,6 +91,10 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('屏幕录制设置'), findsNothing);
       await tester.tap(find.text('读取屏幕与窗口'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(DropdownButtonFormField<CaptureSource>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('显示器 · 内建显示器').last);
       await tester.pumpAndSettle();
       await tester.ensureVisible(find.text('开始预览'));
       engine.failStart = true;
@@ -122,6 +173,10 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('读取屏幕与窗口'));
       await tester.pumpAndSettle();
+      await tester.tap(find.byType(DropdownButtonFormField<CaptureSource>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('显示器 · 内建显示器').last);
+      await tester.pumpAndSettle();
       await tester.ensureVisible(find.text('开始预览'));
       await tester.tap(find.text('开始预览'));
       await tester.pumpAndSettle();
@@ -143,4 +198,11 @@ void main() {
       await platform.events.close();
     },
   );
+}
+
+class _NamedEngine extends FakePreviewEngine {
+  _NamedEngine(this.label);
+  final String label;
+  @override
+  Widget get view => Text(label);
 }

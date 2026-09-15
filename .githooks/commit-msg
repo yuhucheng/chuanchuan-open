@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+version=$(git show :VERSION 2>/dev/null) || {
+  echo 'Version policy: stage VERSION before committing.' >&2
+  exit 1
+}
+IFS= read -r subject < "$1" || true
+subject=${subject:-}
+case "$subject" in
+  feat\(v"$version"\):\ ?*|fix\(v"$version"\):\ ?*|refactor\(v"$version"\):\ ?*|docs\(v"$version"\):\ ?*|test\(v"$version"\):\ ?*|build\(v"$version"\):\ ?*|ci\(v"$version"\):\ ?*|chore\(v"$version"\):\ ?*|merge\(v"$version"\):\ ?*) ;;
+  *)
+    echo "Version policy: use type(v$version): description (see docs/development/branch-management.md)." >&2
+    exit 1
+    ;;
+esac

@@ -15,7 +15,7 @@ const _ink = Color(0xFF1D3430);
 const _green = Color(0xFF247A68);
 const _muted = Color(0xFF697A74);
 
-class ShareHubApp extends StatelessWidget {
+class ShareHubApp extends StatefulWidget {
   const ShareHubApp({
     super.key,
     this.platform,
@@ -31,8 +31,18 @@ class ShareHubApp extends StatelessWidget {
   final String appTitle;
 
   @override
+  State<ShareHubApp> createState() => _ShareHubAppState();
+}
+
+class _ShareHubAppState extends State<ShareHubApp> {
+  // Keep controller ownership and its rendered texture stable across rebuilds.
+  late final _platform = widget.platform ?? MethodChannelClientPlatform();
+  late final _engine = widget.previewEngine;
+  late final _fileAccess = widget.fileAccess ?? MethodChannelFileAccess();
+
+  @override
   Widget build(BuildContext context) => MaterialApp(
-    title: appTitle,
+    title: widget.appTitle,
     debugShowCheckedModeBanner: false,
     theme: ThemeData(
       useMaterial3: true,
@@ -41,9 +51,10 @@ class ShareHubApp extends StatelessWidget {
         surface: const Color(0xFFF6F7F3),
       ),
       scaffoldBackgroundColor: const Color(0xFFF6F7F3),
-      platform: targetPlatform ?? defaultTargetPlatform,
+      platform: widget.targetPlatform ?? defaultTargetPlatform,
       fontFamily:
-          (targetPlatform ?? defaultTargetPlatform) == TargetPlatform.windows
+          (widget.targetPlatform ?? defaultTargetPlatform) ==
+              TargetPlatform.windows
           ? 'Microsoft YaHei UI'
           : '.AppleSystemUIFont',
       textTheme: ThemeData.light().textTheme.apply(
@@ -67,11 +78,11 @@ class ShareHubApp extends StatelessWidget {
       ),
     ),
     home: ClientWindow(
-      appTitle: appTitle,
-      platform: platform ?? MethodChannelClientPlatform(),
-      engine: previewEngine,
-      fileAccess: fileAccess ?? MethodChannelFileAccess(),
-      targetPlatform: targetPlatform ?? defaultTargetPlatform,
+      appTitle: widget.appTitle,
+      platform: _platform,
+      engine: _engine,
+      fileAccess: _fileAccess,
+      targetPlatform: widget.targetPlatform ?? defaultTargetPlatform,
     ),
   );
 }
@@ -599,6 +610,7 @@ class _ClientWindowState extends State<ClientWindow>
                       initialValue: _preview.selected,
                       isExpanded: true,
                       decoration: const InputDecoration(labelText: '选择画面'),
+                      hint: const Text('请选择一个显示器或窗口'),
                       items: _preview.sources
                           .map(
                             (source) => DropdownMenuItem(

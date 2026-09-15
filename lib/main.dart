@@ -5,5 +5,5 @@ import 'ui/client_app.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(ShareHubApp(previewEngine: createPreviewEngine()));
+  runApp(ShareHubApp(appTitle: 'chuanchuan', previewEngine: createPreviewEngine()));
 }

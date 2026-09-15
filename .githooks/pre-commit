@@ -1,0 +1,18 @@
+#!/bin/sh
+set -eu
+branch=$(git symbolic-ref --quiet --short HEAD) || {
+  echo 'Version policy: detached HEAD commits are not allowed.' >&2
+  exit 1
+}
+if [ "$branch" != main ]; then
+  echo "Version policy: commit on main; branch '$branch' has no approved version plan." >&2
+  exit 1
+fi
+version=$(git show :VERSION 2>/dev/null) || {
+  echo 'Version policy: stage VERSION before committing.' >&2
+  exit 1
+}
+if ! printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+  echo 'Version policy: VERSION must contain one major.minor.patch version.' >&2
+  exit 1
+fi
