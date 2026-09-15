@@ -1,66 +1,45 @@
 # Share Hub · 开源客户端
 
-这是串串客户端的唯一源码工程，包含 Flutter 界面、设备发现、文件准备、Windows/macOS 宿主和 SDK 接口。**客户端使用可选媒体 SDK；闭源工程负责 SDK 实现，不再作为客户端宿主。**
+这是串串客户端的唯一源码工程，包含界面、设备发现、文件模块、Windows/macOS 宿主和公开 SDK 契约。**正常构建统一依赖媒体 SDK，不提供无 SDK 客户端。**
 
-自有代码使用 [Apache License 2.0](LICENSE)，Flutter 等上游保留原许可，见 [第三方声明](THIRD_PARTY_NOTICES.md)。不安装 SDK 也可以独立构建和运行基础功能，不需要官方邀请码。官方 SDK 的运行授权与开源代码复用分开处理，当前尚未实现生产激活体系。
+自有代码使用 [Apache License 2.0](LICENSE)，上游许可见 [第三方声明](THIRD_PARTY_NOTICES.md)。闭源 SDK 不公开实现源码，但计划免费向贡献者和集成者提供可分发包；闭源不意味着贡献者不能取得 SDK。
 
-## 目录与能力
+## 构建
 
-| 模块 | 位置与状态 |
-| --- | --- |
-| 客户端与界面 | `lib/main.dart`、`lib/ui`，全部在本工程 |
-| 设备发现 | `lib/features/devices`，Windows DNS-SD / macOS Bonjour；默认关闭 |
-| 文件准备 | `lib/features/transfers`，macOS 可选文件、计算摘要、管理队列；Windows 待实现 |
-| 平台宿主与适配 | `windows`、`macos`，全部在本工程 |
-| 媒体契约 | 独立包 `packages/share_hub_media_api`，客户端和 SDK 实现共享 |
-| 媒体实现 | 可选外部 SDK，未安装时显示不可用；当前接口只覆盖本机视频预览 |
-| 配对、网络传输、远控、Android | 尚未完成，不把本地准备或预览当作跨设备功能 |
+安装 Flutter 3.47.2 / Dart 3.13.2；Windows 需要 VS 2022 C++ 桌面工具链和 Windows SDK，脚本使用 PowerShell 7；Mac 需要完整 Xcode。
 
-SDK 实现不依赖客户端包，只实现公共媒体契约。原 `lib/features/preview/preview_engine.dart` 继续导出契约以兼容现有引用；生命周期控制器和不可用实现属于客户端。
-
-## 无 SDK 的独立构建
-
-使用 Flutter 3.47.2 / Dart 3.13.2，将 Flutter `bin` 加入 PATH。Windows 需要 VS 2022 C++ 桌面工具链和 Windows SDK，脚本使用 PowerShell 7；Mac 需要完整 Xcode。
-
-从本工程根目录运行：
+SDK 是必需的构建依赖，标准位置为 `.local/media-sdk/package`。正式 SDK 可按此包布局解压；当前尚未交付正式二进制包或下载地址，本地开发使用已有内部适配包，通过脚本链接到标准位置：
 
 ```powershell
-flutter pub get
+./tool/configure_media_sdk.ps1 -SdkPath /absolute/path/to/share_hub_media_sdk
 flutter analyze --no-pub
 flutter test --no-pub
 flutter build windows --debug --no-pub
 ./build/windows/x64/runner/Debug/share_hub.exe
 ```
 
-Mac 使用 `flutter build macos --debug --no-pub`，输出 `build/macos/Build/Products/Debug/Share Hub.app`。新布局尚未在 Mac 上编译验收。
+脚本只建立 SDK 包目录链接并执行 pub get，不复制私有源码，不修改 manifest，不生成另一套 main。已有 SDK 目录或冲突链接不会被覆盖。缺少 SDK 属于依赖未安装，需先准备 SDK；不会退回缺功能版本。已按标准目录解压包时可直接运行 `flutter pub get`。
 
-## 接入开发 SDK
+若 Flutter 不在 PATH，可传 `-FlutterCommand` 指定完整路径。Windows 插件 symlink 权限不足时运行 `tool/prepare_windows_plugins.ps1`，再重试配置；不需改变系统安全策略。SDK 更新后建议清理旧构建产物，再获取依赖。
 
-当前 SDK 仍是授权开发者本地使用的 Dart/WebRTC 实现包，尚不是对外分发的闭源二进制。安装该包不代表已获得生产连接授权，也不解决现有首帧问题。
+macOS 使用相同 `lib/main.dart`，运行 `flutter build macos --debug --no-pub`；输出为 `build/macos/Build/Products/Debug/Share Hub.app`，本轮未在 Mac 编译验收。
 
-```powershell
-./tool/configure_media_sdk.ps1 -SdkPath /absolute/path/to/share_hub_media_sdk
-flutter build windows --debug --no-pub -t .local/media-sdk/main.dart
-# 或使用 flutter run -d windows -t .local/media-sdk/main.dart
-```
+## 工程边界与实现状态
 
-脚本会暂时把 SDK 加入直接依赖，并生成被 Git 忽略的依赖覆盖配置和启动入口。它保存原始 manifest，拒绝覆盖开发者已有或手动修改的配置。SDK 源码不会复制进本仓库。Flutter 不在 PATH 时可传 `-FlutterCommand` 指定工具路径；遇到插件链接权限问题可使用 `tool/prepare_windows_plugins.ps1` 后重试。
+| 内容 | 位置 / 当前状态 |
+| --- | --- |
+| 唯一客户端入口 | `lib/main.dart`，固定注入 SDK 的 `createPreviewEngine()` |
+| 公共媒体契约 | `packages/share_hub_media_api`，客户端与 SDK 共享 |
+| 媒体实现 | SDK 包；当前内部开发适配器尚不是可分发二进制 SDK |
+| 界面、设备发现 | `lib/ui`、`lib/features/devices`；手动 DNS-SD / Bonjour 发现 |
+| 文件准备 | `lib/features/transfers`；macOS 已实现本地选文件和摘要，Windows 待实现 |
+| 平台宿主 | 全部在本仓库的 `windows`、`macos` |
+| 配对、网络传输、远控、Android | 尚未完成 |
 
-禁用并恢复默认构建：
+UI 必须显式获得媒体引擎，测试可以注入 fake，但 fake 只存在于测试工具，不用于产品入口。启动应用不会自动采集屏幕，仍需用户选择并开始预览。
 
-```powershell
-./tool/configure_media_sdk.ps1 -Disable
-flutter clean
-flutter pub get
-flutter build windows --debug --no-pub
-```
+SDK 依赖项、锁文件和原生插件注册随正常客户端维护；`.local` 中的包和本机目录链接不提交。SDK 不依赖客户端 UI。SDK 的正式二进制交付、签名、激活与远端会话仍待实现，不能把当前预览适配器当作完整核心。
 
-切换 SDK 配置后应清理旧构建产物，避免打包残留插件。启用期间 manifest、锁文件与生成的插件列表可能有本地变化；提交公共源码前先禁用并恢复默认依赖，不提交开发 SDK 配置。
+应用身份沿用 `share_hub.exe` / `Software\ShareHub\Client` 和 `dev.sharehub.client`。Windows 真实预览首帧仍需修复，当前没有可信发行签名。
 
-客户端身份为 Windows `share_hub.exe` / `HKCU\Software\ShareHub\Client`、Mac `dev.sharehub.client`，沿用原官方宿主的设备资料位置。上一轮临时 OpenClient 身份的数据不自动迁移。
-
-## 验证与交付限制
-
-`flutter test` 检查公共逻辑；`tool/windows_test_native.ps1` 检查 Windows 原生基础，Mac 可运行 `swift test --package-path macos/Platform`。`integration_test/windows_platform_test.dart` 保留真实 Windows 设备资料检查，需 Windows 宿主运行；它不采集屏幕。`tool/test_configure_media_sdk.ps1` 验证可选配置及用户文件保护。
-
-最新结果见 [依赖方向验证](docs/validation/client-sdk-direction.md)。当前没有可信发行签名，Windows 安全策略仍可能拦截；局域网广播未经认证，不能据此信任对端。尚未创建公共远程仓库。
+验证见 [统一 SDK 构建记录](docs/validation/required-sdk-client.md)。开源远程地址仍待配置。

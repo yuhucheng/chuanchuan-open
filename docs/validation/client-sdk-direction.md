@@ -1,5 +1,7 @@
 # 客户端与 SDK 依赖方向验证
 
+历史记录：可选 SDK 和无 SDK 入口已移除，当前见 [统一 SDK 构建](required-sdk-client.md)。
+
 日期：2026-09-15。此工程现在拥有唯一客户端和 Windows/macOS 宿主，可选择消费外部媒体 SDK。SDK 实现只需公开 `share_hub_media_api` 包，不依赖客户端 UI。
 
 已通过：公共 Flutter 测试 33 项、静态分析、Windows 原生 CTest 2 项、Windows 平台宿主集成测试 1 项、无 SDK 的 Windows Debug 构建。集成测试检查本机身份与非法名称处理，不采集屏幕。

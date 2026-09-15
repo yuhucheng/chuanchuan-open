@@ -19,13 +19,13 @@ class ShareHubApp extends StatelessWidget {
   const ShareHubApp({
     super.key,
     this.platform,
-    this.previewEngine,
+    required this.previewEngine,
     this.fileAccess,
     this.targetPlatform,
     this.appTitle = 'Share Hub',
   });
   final ClientPlatform? platform;
-  final PreviewEngine? previewEngine;
+  final PreviewEngine previewEngine;
   final FileAccess? fileAccess;
   final TargetPlatform? targetPlatform;
   final String appTitle;
@@ -69,7 +69,7 @@ class ShareHubApp extends StatelessWidget {
     home: ClientWindow(
       appTitle: appTitle,
       platform: platform ?? MethodChannelClientPlatform(),
-      engine: previewEngine ?? const UnavailablePreviewEngine(),
+      engine: previewEngine,
       fileAccess: fileAccess ?? MethodChannelFileAccess(),
       targetPlatform: targetPlatform ?? defaultTargetPlatform,
     ),

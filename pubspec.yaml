@@ -8,6 +8,8 @@ environment:
   flutter: '>=3.47.2'
 
 dependencies:
+  share_hub_media_sdk:
+    path: .local/media-sdk/package
   flutter:
     sdk: flutter
   crypto: 3.0.6
@@ -20,6 +22,10 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: 6.0.0
+
+dependency_overrides:
+  share_hub_media_api:
+    path: packages/share_hub_media_api
 
 flutter:
   config:

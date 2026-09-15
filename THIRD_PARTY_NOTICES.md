@@ -15,7 +15,7 @@ The independent `windows/platform/**`, `windows/tests/**`, `macos/Platform/**`, 
 
 ## Resolved dependencies and binary distribution
 
-`pubspec.lock` records the package versions. Dependencies are resolved by Flutter and are not vendored source in this repository. Flutter and Dart runtime libraries, `crypto`, test tools and their transitive dependencies retain their respective licenses. The default open build does not depend on `flutter_webrtc`.
+`pubspec.lock` records the package versions. Dependencies are resolved by Flutter and are not vendored source in this repository. Flutter and Dart runtime libraries, `crypto`, test tools and their transitive dependencies retain their respective licenses. The normal client requires a media SDK; the current development SDK depends on `flutter_webrtc`. Its upstream license and NOTICE remain applicable, and the private SDK implementation is not covered by this repository's Apache license.
 
 For binary releases, include the exact resolved Flutter/Dart and transitive dependency license notices (Flutter generates `NOTICES.Z` in the application assets). The source notices here are not a substitute for an inventory of all binaries in an eventual installer.
 
