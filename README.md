@@ -65,4 +65,4 @@ macOS 工程引用已随拆分调整，但拆分后尚未在 Mac 上编译或进
 
 界面渲染工具 `tool/render_preview.dart` 使用测试状态，可设置 `SHARE_HUB_PREVIEW_FONT` 指向本机 CJK 字体并运行 `flutter test tool/render_preview.dart`；Windows 布局再设置 `SHARE_HUB_PREVIEW_TARGET=windows`。图片写入 `build/ui-preview`，不代表原生功能验收。
 
-代码由原客户端按明确边界提取，以新的 Git 历史维护；来源说明见 [迁移记录](docs/source-origin.md)。本地工程已建立，尚未创建公共远程仓库。
+代码由原客户端按明确边界提取，以新的 Git 历史维护；来源说明见 [迁移记录](docs/source-origin.md)。代码仓库：[yuhucheng/chuanchuan-open](https://github.com/yuhucheng/chuanchuan-open)。
