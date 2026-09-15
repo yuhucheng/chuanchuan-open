@@ -1,5 +1,7 @@
 # chuanchuan-open 协作
 
+规格入口为 [OpenSpec 索引](openspec/README.md)，工作流与版本约定见 [OpenSpec 管理](docs/development/openspec.md)。修改行为前阅读对应基线和待办 change；规格版本与产品/API 版本分别维护，更新前言及 `openspec/catalog.json` 后运行 `npm run spec:validate`。`planned` 仅表示设计待办，不能把未实现或未验证能力当成已交付，也不自动恢复此前暂停的产品开发。公开规格必须可独立阅读，不复制私有实现、生产实例信息或运营凭据。
+
 开始开发、建分支或提交前必须阅读 [分支与提交规则](docs/development/branch-management.md) 和 [版本计划](docs/version-plan.md)。日常仅使用既有 `main`，不得按设备、任务或助手自行新建分支/worktree；例外须由用户明确批准并进入版本计划。新提交使用 `type(v0.1.0): 描述`（版本以 `VERSION` 为准）。新克隆先执行 `pwsh -File tool/install_git_hooks.ps1`；不能绕过检查。该规则优先于技能中的自动分支流程。
 
 品牌名称是 `chuanchuan`（串串），仓库为 `yuhucheng/chuanchuan-open`。Dart 包名 `share_hub_open` 和既有应用标识暂作兼容使用；新仓库路径以 `chuanchuan-open` 为准。

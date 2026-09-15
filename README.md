@@ -4,6 +4,10 @@
 
 自有代码使用 [Apache License 2.0](LICENSE)，上游许可见 [第三方声明](THIRD_PARTY_NOTICES.md)。闭源 SDK 不公开实现源码，但计划免费向贡献者和集成者提供可分发包；闭源不意味着贡献者不能取得 SDK。
 
+## OpenSpec 规格
+
+客户端、公开媒体契约、设备发现、预览与文件准备的规格见 [规格索引](openspec/README.md)；跨网配对、目录、信令及其他未实现设计保留为待办 change。每份规格独立版本化，产品仍以 `VERSION` 和版本计划为准。使用方式见 [OpenSpec 管理](docs/development/openspec.md)：`npm ci` 后运行 `npm run spec:validate`，这些 Node 工具不参与客户端运行。
+
 ## 构建
 
 两个仓库日常开发统一使用 `main`，当前目标 `v0.1.0`。开发和提交前阅读 [版本计划](docs/version-plan.md) 与 [分支管理规则](docs/development/branch-management.md)，运行 `pwsh -File tool/install_git_hooks.ps1` 启用本地检查。

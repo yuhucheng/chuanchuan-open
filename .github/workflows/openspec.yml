@@ -1,0 +1,40 @@
+name: OpenSpec
+on:
+  push:
+    paths:
+      - 'openspec/**'
+      - 'tool/check_spec_versions*'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'VERSION'
+      - 'docs/version-plan.md'
+      - '.github/workflows/openspec.yml'
+  pull_request:
+    paths:
+      - 'openspec/**'
+      - 'tool/check_spec_versions*'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'VERSION'
+      - 'docs/version-plan.md'
+      - '.github/workflows/openspec.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    env:
+      OPENSPEC_TELEMETRY: '0'
+      OPENSPEC_NO_UPDATE_CHECK: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm run spec:test
+      - run: npm run spec:validate
