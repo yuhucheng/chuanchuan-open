@@ -1,0 +1,3 @@
+PRODUCT_NAME = Share Hub Open
+PRODUCT_BUNDLE_IDENTIFIER = dev.sharehub.open.client
+PRODUCT_COPYRIGHT = Copyright © 2026 Share Hub

@@ -1,0 +1,9 @@
+* text=auto
+*.dart text eol=lf
+*.swift text eol=lf
+*.cpp text eol=lf
+*.h text eol=lf
+*.md text eol=lf
+*.yaml text eol=lf
+*.lock text eol=lf
+*.ps1 text eol=crlf

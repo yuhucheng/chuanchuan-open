@@ -1,0 +1,23 @@
+name: share_hub_open
+description: Share Hub open client foundation and platform adapters.
+publish_to: none
+version: 0.1.0-dev.1+1
+
+environment:
+  sdk: '>=3.13.2 <4.0.0'
+  flutter: '>=3.47.2'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  crypto: 3.0.6
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: 6.0.0
+
+flutter:
+  config:
+    enable-swift-package-manager: true
+  uses-material-design: true
