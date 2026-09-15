@@ -1,0 +1,10 @@
+name: share_hub_media_api
+description: Public media contracts for Share Hub client and SDK implementations.
+version: 0.1.0
+publish_to: none
+environment:
+  sdk: '>=3.13.2 <4.0.0'
+  flutter: '>=3.47.2'
+dependencies:
+  flutter:
+    sdk: flutter

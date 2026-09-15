@@ -22,7 +22,7 @@ class ShareHubApp extends StatelessWidget {
     this.previewEngine,
     this.fileAccess,
     this.targetPlatform,
-    this.appTitle = 'Share Hub Open',
+    this.appTitle = 'Share Hub',
   });
   final ClientPlatform? platform;
   final PreviewEngine? previewEngine;
@@ -83,7 +83,7 @@ class ClientWindow extends StatefulWidget {
     required this.engine,
     required this.fileAccess,
     this.targetPlatform = TargetPlatform.macOS,
-    this.appTitle = 'Share Hub Open',
+    this.appTitle = 'Share Hub',
   });
   final ClientPlatform platform;
   final PreviewEngine engine;

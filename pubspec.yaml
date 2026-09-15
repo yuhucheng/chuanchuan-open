@@ -11,8 +11,12 @@ dependencies:
   flutter:
     sdk: flutter
   crypto: 3.0.6
+  share_hub_media_api:
+    path: packages/share_hub_media_api
 
 dev_dependencies:
+  integration_test:
+    sdk: flutter
   flutter_test:
     sdk: flutter
   flutter_lints: 6.0.0

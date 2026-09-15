@@ -29,7 +29,7 @@ bool FlutterWindow::OnCreate() {
   RegisterPlugins(flutter_controller_->engine());
   platform_bridge_ = std::make_unique<share_hub::PlatformBridge>(
       flutter_controller_->engine()->messenger(), GetHandle(),
-      L"Software\\ShareHub\\OpenClient");
+      L"Software\\ShareHub\\Client");
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {

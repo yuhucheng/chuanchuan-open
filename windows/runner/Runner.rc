@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "dev.sharehub" "\0"
-            VALUE "FileDescription", "Share Hub Open" "\0"
+            VALUE "FileDescription", "Share Hub" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "share_hub_open" "\0"
+            VALUE "InternalName", "share_hub" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 Share Hub contributors" "\0"
-            VALUE "OriginalFilename", "share_hub_open.exe" "\0"
-            VALUE "ProductName", "Share Hub Open" "\0"
+            VALUE "OriginalFilename", "share_hub.exe" "\0"
+            VALUE "ProductName", "Share Hub" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END
