@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 
 import '../../platform/client_platform.dart';
 import 'preview_engine.dart';
@@ -41,7 +42,8 @@ class PreviewController extends ChangeNotifier {
     final found = await engine.sources();
     if (!_current(token)) return;
     sources = found;
-    selected = found.isEmpty ? null : found.first;
+    // A refreshed list can contain different windows; require a fresh choice.
+    selected = null;
     if (found.isEmpty) error = '没有可预览的屏幕或窗口，请检查权限后刷新。';
   });
 
@@ -118,9 +120,13 @@ class PreviewController extends ChangeNotifier {
     return _pending = () async {
       try {
         await action(token);
-      } catch (_) {
+      } catch (failure) {
         if (_current(token)) {
-          error = '预览未能启动，请刷新来源后重新选择画面。';
+          error =
+              failure is PlatformException &&
+                  failure.code == 'source_unavailable'
+              ? '所选窗口或显示器已不可用，请重新读取画面来源。'
+              : '预览未能启动，请刷新来源后重新选择画面。';
           try {
             await engine.stop();
           } catch (_) {

@@ -23,7 +23,20 @@ void main() {
   Future<void> prepare() async {
     platform.status = const PermissionStatus(screenRecording: true);
     await controller.loadSources();
+    controller.select(controller.sources.first);
   }
+
+  test('source refresh requires an explicit choice and never starts a default screen', () async {
+    platform.status = const PermissionStatus(screenRecording: true);
+    await controller.loadSources();
+    expect(controller.selected, isNull);
+    await controller.start();
+    expect(engine.starts, 0);
+    controller.select(controller.sources.first);
+    await controller.loadSources();
+    expect(controller.selected, isNull);
+    expect(engine.starts, 0);
+  });
 
   test('permission denial never enumerates or starts capture', () async {
     await controller.loadSources();

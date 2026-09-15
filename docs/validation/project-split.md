@@ -1,5 +1,7 @@
 # 独立工程拆分验证
 
+后续 macOS 构建与实机基础验收见 [macOS 验证](macos-foundation.md)，下文保留首次在 Windows 拆分时的状态。
+
 日期：2026-09-15。环境：Windows、Flutter 3.47.2 / Dart 3.13.2、VS 2022 与 Windows SDK 10.0.26100。
 
 已通过：

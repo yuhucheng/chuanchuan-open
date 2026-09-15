@@ -1,4 +1,6 @@
-# Share Hub Open 协作
+# chuanchuan-open 协作
+
+品牌名称是 `chuanchuan`（串串），仓库为 `yuhucheng/chuanchuan-open`。Dart 包名 `share_hub_open` 和既有应用标识暂作兼容使用；新仓库路径以 `chuanchuan-open` 为准。
 
 本工程是独立开源客户端基础，自有代码使用 Apache 2.0，上游许可见 THIRD_PARTY_NOTICES.md。产品能力及验收范围以 README.md 为准。
 
