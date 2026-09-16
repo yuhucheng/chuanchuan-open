@@ -348,7 +348,7 @@ class _ClientWindowState extends State<ClientWindow>
                 ),
                 SizedBox(height: 6),
                 Text(
-                  '免费 · 无订阅',
+                  '跨设备协作',
                   style: TextStyle(color: Color(0xFFA8C1B2), fontSize: 12),
                 ),
               ],
@@ -562,7 +562,7 @@ class _ClientWindowState extends State<ClientWindow>
         ),
       ),
       const SizedBox(height: 22),
-      _notice('当前为开发预览，尚未接入邀请码激活。跨设备投屏、文件传送和远程控制将在后续阶段开放。'),
+      _notice('Windows、macOS 无需激活或激活码。当前为开发预览，跨设备投屏、文件传送和远程控制将在后续阶段开放。'),
     ],
   );
 
@@ -877,7 +877,7 @@ class _ClientWindowState extends State<ClientWindow>
           ),
         ),
       const SizedBox(height: 22),
-      _notice('${widget.appTitle} 0.1 开发预览\n邀请码激活、可信设备配对与连接服务尚未接入。当前版本仅供开发验证。'),
+      _notice('${widget.appTitle} 0.1 开发预览\nWindows、macOS 无需激活或激活码。可信设备配对与连接服务尚未接入，当前版本仅供开发验证。'),
     ],
   );
 

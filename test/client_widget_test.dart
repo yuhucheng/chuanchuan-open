@@ -138,7 +138,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text('从这台 Mac 开始'), findsOneWidget);
-    expect(find.textContaining('尚未接入邀请码激活'), findsOneWidget);
+    expect(find.textContaining('Windows、macOS 无需激活或激活码'), findsOneWidget);
     expect(platform.starts, 0);
     expect(platform.permissionRequests, 0);
     await tester.tap(find.byType(Switch));
