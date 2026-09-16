@@ -1,12 +1,17 @@
 #include "platform_bridge.h"
 #include "device_preferences.h"
 #include "native_discovery.h"
+#include "selected_file_store.h"
 #include <shellapi.h>
+#include <shobjidl.h>
+#include <wrl/client.h>
 #include <flutter/encodable_value.h>
 #include <flutter/event_channel.h>
 #include <flutter/event_stream_handler_functions.h>
 #include <flutter/method_channel.h>
 #include <flutter/standard_method_codec.h>
+#include <climits>
+#include <optional>
 #include <utility>
 
 namespace share_hub {
@@ -15,6 +20,31 @@ using Value = flutter::EncodableValue;
 using Map = flutter::EncodableMap;
 using List = flutter::EncodableList;
 constexpr UINT_PTR kTimer = 0x53484453;
+using Microsoft::WRL::ComPtr;
+std::optional<int64_t> Integer(const Value& value) {
+  if (const auto* number = std::get_if<int64_t>(&value)) return *number;
+  if (const auto* number = std::get_if<int32_t>(&value)) return *number;
+  return std::nullopt;
+}
+const Value* Field(const Map& value, const char* name) {
+  auto found = value.find(Value(name));
+  return found == value.end() ? nullptr : &found->second;
+}
+const char* FileMessage(SelectedFileError reason) {
+  switch (reason) {
+    case SelectedFileError::closed: return u8"文件访问已结束，请重新选择文件。";
+    case SelectedFileError::limit: return u8"一次最多保留 64 个文件，请先移除部分文件。";
+    case SelectedFileError::unavailable: return u8"无法读取所选文件，请选择本机可用的普通文件。";
+    case SelectedFileError::changed: return u8"文件在准备过程中发生变化，请重新选择。";
+    case SelectedFileError::invalid_read: return u8"文件读取顺序或分块大小无效。";
+    case SelectedFileError::incomplete: return u8"文件内容尚未完整读取。";
+    case SelectedFileError::invalid_token: return u8"文件令牌无效，请重新选择。";
+  }
+  return u8"文件访问失败，请重新选择。";
+}
+void FileFailure(flutter::MethodResult<Value>* result, SelectedFileError reason) {
+  result->Error("file_access", FileMessage(reason));
+}
 Value DeviceValue(const Device& device) {
   return Value(Map{{Value("id"), Value(device.id)}, {Value("name"), Value(device.name)}});
 }
@@ -37,13 +67,75 @@ struct PlatformBridge::Impl {
   UINT_PTR timer = 0;
   DevicePreferences preferences;
   NativeDiscovery discovery;
+  SelectedFileStore files;
+  ComPtr<IFileOpenDialog> picker;
   std::unique_ptr<flutter::MethodChannel<Value>> methods;
   std::unique_ptr<flutter::EventChannel<Value>> events;
   std::unique_ptr<flutter::EventSink<Value>> sink;
 };
+namespace {
+template <typename State>
+void PickFiles(std::shared_ptr<State> state,
+               std::unique_ptr<flutter::MethodResult<Value>> result) {
+  if (state->picker) { FileFailure(result.get(), SelectedFileError::unavailable); return; }
+  ComPtr<IFileOpenDialog> dialog;
+  if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+                              IID_PPV_ARGS(&dialog)))) {
+    FileFailure(result.get(), SelectedFileError::unavailable); return;
+  }
+  DWORD options = 0;
+  if (FAILED(dialog->GetOptions(&options)) ||
+      FAILED(dialog->SetOptions(options | FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST |
+                                FOS_PATHMUSTEXIST | FOS_ALLOWMULTISELECT |
+                                FOS_NODEREFERENCELINKS))) {
+    FileFailure(result.get(), SelectedFileError::unavailable); return;
+  }
+  dialog->SetTitle(L"选择要准备的文件");
+  dialog->SetOkButtonLabel(L"加入队列");
+  state->picker = dialog;
+  const HRESULT shown = dialog->Show(state->window);
+  state->picker.Reset();
+  if (state->closed) return;
+  if (shown == HRESULT_FROM_WIN32(ERROR_CANCELLED)) { result->Success(Value(List{})); return; }
+  if (FAILED(shown)) { FileFailure(result.get(), SelectedFileError::unavailable); return; }
+  ComPtr<IShellItemArray> selected;
+  DWORD count = 0;
+  if (FAILED(dialog->GetResults(&selected)) || !selected ||
+      FAILED(selected->GetCount(&count))) {
+    FileFailure(result.get(), SelectedFileError::unavailable); return;
+  }
+  if (count > SelectedFileStore::kMaximumFiles - state->files.count()) {
+    FileFailure(result.get(), SelectedFileError::limit); return;
+  }
+  std::vector<std::wstring> paths;
+  paths.reserve(count);
+  for (DWORD index = 0; index < count; ++index) {
+    ComPtr<IShellItem> item;
+    wchar_t* raw = nullptr;
+    if (FAILED(selected->GetItemAt(index, &item)) || !item ||
+        FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &raw)) || !raw) {
+      if (raw) CoTaskMemFree(raw);
+      FileFailure(result.get(), SelectedFileError::unavailable); return;
+    }
+    paths.emplace_back(raw);
+    CoTaskMemFree(raw);
+  }
+  try {
+    List output;
+    for (const auto& file : state->files.AddPickerPaths(paths)) {
+      output.emplace_back(Map{{Value("token"), Value(file.token)},
+                              {Value("name"), Value(file.name)},
+                              {Value("size"), Value(file.size)}});
+    }
+    result->Success(Value(output));
+  } catch (const SelectedFileException& error) {
+    FileFailure(result.get(), error.reason());
+  }
+}
+}
 PlatformBridge::PlatformBridge(flutter::BinaryMessenger* messenger, HWND window,
                                std::wstring registry_key)
-    : impl_(std::make_unique<Impl>(window, std::move(registry_key))) {
+    : impl_(std::make_shared<Impl>(window, std::move(registry_key))) {
   const auto* codec = &flutter::StandardMethodCodec::GetInstance();
   impl_->methods = std::make_unique<flutter::MethodChannel<Value>>(messenger, "dev.sharehub.client/platform", codec);
   impl_->events = std::make_unique<flutter::EventChannel<Value>>(messenger, "dev.sharehub.client/discovery", codec);
@@ -65,6 +157,36 @@ PlatformBridge::PlatformBridge(flutter::BinaryMessenger* messenger, HWND window,
                                              std::unique_ptr<flutter::MethodResult<Value>> result) {
     if (impl_->closed) { result->Error("closed", u8"客户端已关闭。"); return; }
     const auto& method = call.method_name();
+    if (method == "files.pick") {
+      PickFiles(impl_, std::move(result));
+      return;
+    }
+    if (method == "files.read" || method == "files.finish" || method == "files.release") {
+      try {
+        if (method == "files.read") {
+          const auto* args = call.arguments() ? std::get_if<Map>(call.arguments()) : nullptr;
+          const auto* token_value = args ? Field(*args, "token") : nullptr;
+          const auto* offset_value = args ? Field(*args, "offset") : nullptr;
+          const auto* length_value = args ? Field(*args, "length") : nullptr;
+          const auto* token = token_value ? std::get_if<std::string>(token_value) : nullptr;
+          const auto offset = offset_value ? Integer(*offset_value) : std::nullopt;
+          const auto length = length_value ? Integer(*length_value) : std::nullopt;
+          if (!token || !offset || !length || *length < 0 || *length > INT_MAX) {
+            FileFailure(result.get(), SelectedFileError::invalid_read); return;
+          }
+          result->Success(Value(impl_->files.Read(*token, *offset, static_cast<int>(*length))));
+        } else {
+          const auto* token = call.arguments() ? std::get_if<std::string>(call.arguments()) : nullptr;
+          if (!token) { FileFailure(result.get(), SelectedFileError::invalid_token); return; }
+          if (method == "files.finish") impl_->files.Finish(*token);
+          else impl_->files.Release(*token);
+          result->Success();
+        }
+      } catch (const SelectedFileException& error) {
+        FileFailure(result.get(), error.reason());
+      }
+      return;
+    }
     if (method == "loadDevice" || method == "setDeviceName" || method == "startDiscovery") {
       if (!impl_->loaded) impl_->loaded = impl_->preferences.Load();
       if (!impl_->loaded) { result->Error("storage_failed", impl_->preferences.error()); return; }
@@ -112,6 +234,8 @@ bool PlatformBridge::HandleMessage(UINT message, WPARAM wparam) {
 void PlatformBridge::Close() {
   if (impl_->closed) return;
   impl_->closed = true;
+  if (impl_->picker) impl_->picker->Close(HRESULT_FROM_WIN32(ERROR_CANCELLED));
+  impl_->files.Shutdown();
   if (impl_->timer) { KillTimer(impl_->window, impl_->timer); impl_->timer = 0; }
   impl_->discovery.Close(); impl_->sink.reset();
   // Channels do not automatically unregister handlers when destroyed.

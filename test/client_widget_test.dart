@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:ui' show AppExitResponse;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:share_hub_open/platform/mac_platform.dart';
@@ -55,7 +58,7 @@ void main() {
     },
   );
   testWidgets(
-    'Windows keeps discovery opt-in and hides unavailable native actions',
+    'Windows keeps discovery opt-in and exposes local file preparation',
     (tester) async {
       tester.view.physicalSize = const Size(1180, 780);
       tester.view.devicePixelRatio = 1;
@@ -80,8 +83,11 @@ void main() {
       expect(platform.starts, 1);
       await tester.tap(find.byTooltip('文件传送'));
       await tester.pumpAndSettle();
-      expect(find.text('选择文件'), findsNothing);
-      expect(find.textContaining('Windows 文件准备功能开发中'), findsOneWidget);
+      expect(find.text('选择文件'), findsOneWidget);
+      await tester.tap(find.text('选择文件'));
+      await tester.pumpAndSettle();
+      expect(files.picks, 1);
+      expect(find.text('先加入想分享的文件'), findsOneWidget);
       await tester.tap(find.byTooltip('设置'));
       await tester.pumpAndSettle();
       expect(find.text('辅助功能'), findsNothing);
@@ -116,7 +122,7 @@ void main() {
       await tester.pumpWidget(const SizedBox());
       await tester.pumpAndSettle();
       await platform.events.close();
-      expect(files.picks, 0);
+      expect(files.picks, 1);
       expect(files.reads, isEmpty);
       expect(files.finished, isEmpty);
       expect(files.releases, isEmpty);
@@ -198,6 +204,106 @@ void main() {
       await platform.events.close();
     },
   );
+
+  testWidgets('Windows exit waits for active capture to stop', (tester) async {
+    tester.view.physicalSize = const Size(1180, 780);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final platform = FakePlatform()
+      ..status = const PermissionStatus(screenRecording: true);
+    final engine = _DelayedStopEngine();
+    await tester.pumpWidget(
+      ShareHubApp(
+        targetPlatform: TargetPlatform.windows,
+        platform: platform,
+        previewEngine: engine,
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('屏幕预览'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('读取屏幕与窗口'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(DropdownButtonFormField<CaptureSource>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('显示器 · 内建显示器').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('开始预览'));
+    await tester.pumpAndSettle();
+    engine.firstFrame!();
+    await tester.pump();
+
+    engine.stopGate = Completer<void>();
+    final exitRequest = WidgetsBinding.instance.handleRequestAppExit();
+    final repeatedExitRequest = WidgetsBinding.instance.handleRequestAppExit();
+    var answered = false;
+    exitRequest.then((_) => answered = true);
+    await tester.pump();
+    expect(engine.stopEntered, 1);
+    expect(answered, false);
+    engine.stopGate!.complete();
+    expect(await exitRequest, AppExitResponse.exit);
+    expect(await repeatedExitRequest, AppExitResponse.exit);
+    expect(engine.released, true);
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+    await platform.events.close();
+  });
+
+  testWidgets(
+    'Windows exit cancels after failed capture cleanup and permits retry',
+    (tester) async {
+      tester.view.physicalSize = const Size(1180, 780);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final platform = FakePlatform()
+        ..status = const PermissionStatus(screenRecording: true);
+      final engine = FakePreviewEngine();
+      await tester.pumpWidget(
+        ShareHubApp(
+          targetPlatform: TargetPlatform.windows,
+          platform: platform,
+          previewEngine: engine,
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('屏幕预览'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('读取屏幕与窗口'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(DropdownButtonFormField<CaptureSource>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('显示器 · 内建显示器').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('开始预览'));
+      await tester.pumpAndSettle();
+      engine.firstFrame!();
+      await tester.pump();
+
+      engine.failStop = true;
+      expect(
+        await WidgetsBinding.instance.handleRequestAppExit(),
+        AppExitResponse.cancel,
+      );
+      await tester.pump();
+      expect(find.textContaining('屏幕采集释放失败'), findsOneWidget);
+      engine.failStop = false;
+      await tester.tap(find.text('停止预览').last);
+      await tester.pump();
+      expect(engine.released, true);
+      expect(
+        await WidgetsBinding.instance.handleRequestAppExit(),
+        AppExitResponse.exit,
+      );
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+      await platform.events.close();
+    },
+  );
 }
 
 class _NamedEngine extends FakePreviewEngine {
@@ -205,4 +311,16 @@ class _NamedEngine extends FakePreviewEngine {
   final String label;
   @override
   Widget get view => Text(label);
+}
+
+class _DelayedStopEngine extends FakePreviewEngine {
+  Completer<void>? stopGate;
+  int stopEntered = 0;
+
+  @override
+  Future<void> stop() async {
+    stopEntered++;
+    await stopGate?.future;
+    await super.stop();
+  }
 }

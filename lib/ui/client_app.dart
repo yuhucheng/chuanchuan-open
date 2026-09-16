@@ -2,6 +2,7 @@ import '../features/connections/connection_controller.dart';
 import '../features/connections/connection_panel.dart';
 
 import 'dart:async';
+import 'dart:ui' show AppExitResponse;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -143,6 +144,14 @@ class _ClientWindowState extends State<ClientWindow>
     }
   }
 
+  @override
+  Future<AppExitResponse> didRequestAppExit() async {
+    await _preview.stop();
+    return _preview.cleanupFailed
+        ? AppExitResponse.cancel
+        : AppExitResponse.exit;
+  }
+
   void _navigate(int index) {
     if (index == _page) return;
     if (index == 3 && !_nameFocus.hasFocus) {
@@ -211,12 +220,7 @@ class _ClientWindowState extends State<ClientWindow>
                             switch (_page) {
                               0 => _devicesPage(),
                               1 => _previewPage(),
-                              2 =>
-                                _windows
-                                    ? _notice(
-                                        'Windows 文件准备功能开发中。当前可以发现附近设备和预览本机画面。',
-                                      )
-                                    : TransfersPage(queue: _transfers),
+                              2 => TransfersPage(queue: _transfers),
                               _ => _settingsPage(),
                             },
                           ],
