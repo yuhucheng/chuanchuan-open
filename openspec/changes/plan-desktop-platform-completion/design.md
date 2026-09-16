@@ -2,7 +2,7 @@
 
 ## Context
 
-当前主线在 Windows 完成静态检查、Flutter 测试和 Debug 构建。Windows 真实首帧仍失败；macOS 新 SDK 插件尚未原生构建；Windows FileAccess 未实现。动机见 proposal.md。
+当前主线在 Windows 完成静态检查、Flutter 测试和 Debug 构建。2026-09-16 Windows 所选窗口高 DPI 实采已通过，显示器与完整生命周期矩阵待验收；macOS 新 SDK 插件尚未原生构建；Windows FileAccess 未实现。动机见 proposal.md。
 
 本文件是既有设计迁移，lifecycle/delivery 均为 planned，能力尚未实现；此次只整理规格，不表示已授权实施，也不恢复已停止的产品开发。规格版本 0.1.0、产品基线 0.1.0、release-target 0.1.0。具体实现需另行进入 apply，并先解决下文的设计门槛。
 
@@ -38,7 +38,7 @@
 
 ## Decisions Required Before Implementation
 
-最低操作系统版本、正式签名与发行矩阵仍须确定。首帧失败根因依赖现场证据，不能从旧测试推断；这一步作为具体诊断任务保留。
+最低操作系统版本、正式签名与发行矩阵仍须确定。Windows 首帧根因与修复已有本轮实采证据，Mac 等未测平台不能从该结果推断。
 
 当前计划文件已整理齐全，但这些门槛解决前不应声称具备可直接执行的最终接口设计。任何新增产品范围先更新版本计划，具体任务见 tasks.md，全部保持未完成。
 

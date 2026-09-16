@@ -40,3 +40,7 @@ Windows 真实预览首帧与 macOS 新 SDK 插件布局仍有验收缺口，Win
 ## Cross-repository Development Plan
 
 [两仓开发计划 v0.1.0](../../../docs/superpowers/plans/2026-09-15-cross-repository-development.md)统一本 change 的执行次序：**D / S0→S1**。协作对象：closed:plan-desktop-preview-acceptance。本仓交付：客户端宿主、预览编排与 Windows 文件准备。需求条款与 spec-version 保持不变；本次同步仅更新规划，不勾选实施任务。
+
+## 实施进展（2026-09-16）
+
+以上为初始迁移背景。用户继续授权 Windows 开发后，已完成高 DPI 所选窗口真实像素验收；剩余平台和生命周期缺口见 tasks.md 与验证记录，未归档或宣称整个能力交付。

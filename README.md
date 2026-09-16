@@ -46,6 +46,8 @@ UI 必须显式获得媒体引擎，测试可以注入 fake，但 fake 只存在
 
 SDK 依赖项、锁文件和原生插件注册随正常客户端维护；`.local` 中的包和本机目录链接不提交。SDK 不依赖客户端 UI。SDK 的正式二进制交付、签名、激活与远端会话仍待实现，不能把当前预览适配器当作完整核心。
 
-应用身份沿用 `share_hub.exe` / `Software\ShareHub\Client` 和 `dev.sharehub.client`。Windows 真实预览首帧仍需修复，当前没有可信发行签名。
+应用身份沿用 `share_hub.exe` / `Software\ShareHub\Client` 和 `dev.sharehub.client`。Windows 高 DPI 所选窗口已通过真实像素验收；显示器、多屏及完整生命周期待验收，当前没有可信发行签名。
+
+Windows 高 DPI 修复与 [实采记录](docs/validation/windows-preview-dpi.md) 已完成；Windows 构建前须按所选 SDK 的说明准备原生依赖。带验证材料的 SDK 可通过 `tool/test_media_sdk_windows.ps1` 执行原生像素测试，并自动恢复普通应用构建。
 
 验证见 [统一 SDK 构建记录](docs/validation/required-sdk-client.md) 和 [Mac 合并与主线收敛记录](docs/validation/main-integration.md)。开源远程地址为 `git@github.com:yuhucheng/chuanchuan-open.git`。
