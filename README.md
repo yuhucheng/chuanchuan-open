@@ -1,12 +1,16 @@
 # Share Hub · 开源客户端
 
+> 2026-09-16 产品决定：Windows、macOS 无需激活、激活码或邀请码，不要求首次联网激活。商业模式改为增值订阅，订阅权益、价格、计费和账户方案以后另行设计，本轮不实现订阅或设置订阅门槛。Android 与第三方 Android SDK 的准入规则本次不变，仍未排期。设备身份验证、配对确认、会话同意、系统权限和官方服务防滥用措施继续独立执行。
+
 这是串串客户端的唯一源码工程，包含界面、设备发现、文件模块、Windows/macOS 宿主和公开 SDK 契约。**正常构建统一依赖媒体 SDK，不提供无 SDK 客户端。**
 
 自有代码使用 [Apache License 2.0](LICENSE)，上游许可见 [第三方声明](THIRD_PARTY_NOTICES.md)。闭源 SDK 不公开实现源码，但计划免费向贡献者和集成者提供可分发包；闭源不意味着贡献者不能取得 SDK。
 
-## OpenSpec 规格
+## 开发管理
 
-客户端、公开媒体契约、设备发现、预览与文件准备的规格见 [规格索引](openspec/README.md)；跨网配对、目录、信令及其他未实现设计保留为待办 change。每份规格独立版本化，产品仍以 `VERSION` 和版本计划为准。使用方式见 [OpenSpec 管理](docs/development/openspec.md)：`npm ci` 后运行 `npm run spec:validate`，这些 Node 工具不参与客户端运行。
+Agent 配置、OpenSpec 和内部计划已迁至独立私有管理仓，本仓只维护产品交付内容。构建无需管理仓。说明见[开发与文档边界](docs/development.md)。
+
+当前公开能力与契约见[规格说明](docs/specifications/README.md)。
 
 ## 构建
 
@@ -28,7 +32,7 @@ flutter build windows --debug --no-pub
 
 若 Flutter 不在 PATH，可传 `-FlutterCommand` 指定完整路径。Windows 插件 symlink 权限不足时运行 `tool/prepare_windows_plugins.ps1`，再重试配置；不需改变系统安全策略。SDK 更新后建议清理旧构建产物，再获取依赖。
 
-macOS 使用相同 `lib/main.dart`，运行 `flutter build macos --debug --no-pub`；输出为 `build/macos/Build/Products/Debug/Share Hub.app`，本轮未在 Mac 编译验收。
+macOS 使用相同 `lib/main.dart`，运行 `flutter build macos --debug --no-pub`；输出为 `build/macos/Build/Products/Debug/Share Hub.app`，2026-09-16 已在 Mac 编译并启动，已取得 A/B 真实首帧、持续帧和启停证据，来源退出释放修复已通过单次回归；完整生命周期仍待验收，见[运行验证](docs/validation.md)。
 
 ## 工程边界与实现状态
 
@@ -44,8 +48,8 @@ macOS 使用相同 `lib/main.dart`，运行 `flutter build macos --debug --no-pu
 
 UI 必须显式获得媒体引擎，测试可以注入 fake，但 fake 只存在于测试工具，不用于产品入口。启动应用不会自动采集屏幕，仍需用户选择并开始预览。
 
-SDK 依赖项、锁文件和原生插件注册随正常客户端维护；`.local` 中的包和本机目录链接不提交。SDK 不依赖客户端 UI。SDK 的正式二进制交付、签名、激活与远端会话仍待实现，不能把当前预览适配器当作完整核心。
+SDK 依赖项、锁文件和原生插件注册随正常客户端维护；`.local` 中的包和本机目录链接不提交。SDK 不依赖客户端 UI。SDK 的正式二进制交付、签名与远端会话仍待实现，不能把当前预览适配器当作完整核心。
 
 应用身份沿用 `share_hub.exe` / `Software\ShareHub\Client` 和 `dev.sharehub.client`。Windows 真实预览首帧仍需修复，当前没有可信发行签名。
 
-验证见 [统一 SDK 构建记录](docs/validation/required-sdk-client.md) 和 [Mac 合并与主线收敛记录](docs/validation/main-integration.md)。开源远程地址为 `git@github.com:yuhucheng/chuanchuan-open.git`。
+验证见 [统一 SDK 构建记录](docs/validation.md) 和 [Mac 合并与主线收敛记录](docs/validation.md)。开源远程地址为 `git@github.com:yuhucheng/chuanchuan-open.git`。

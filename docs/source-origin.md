@@ -1,6 +1,6 @@
 # Source origin
 
-The subsequent architecture correction made this repository the sole client host. The media contract moved into `packages/share_hub_media_api`; an optional externally supplied SDK implements it. Original official application identities were restored here. The table below records the first extraction only.
+The subsequent architecture correction made this repository the sole client host. The media contract moved into `packages/share_hub_media_api`; a required externally supplied SDK implements it. Original official application identities were restored here. The table below records the first extraction only.
 
 This repository was extracted on 2026-09-15 from the Share Hub desktop client at source revision `f5904ce`. It starts with a new Git history and contains selected source files, not the original repository history.
 
