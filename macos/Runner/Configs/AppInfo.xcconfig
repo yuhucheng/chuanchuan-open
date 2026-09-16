@@ -1,3 +1,8 @@
 PRODUCT_NAME = Share Hub
 PRODUCT_BUNDLE_IDENTIFIER = dev.sharehub.client
+
+// A developer may reuse a local certificate for Debug builds. The optional
+// file holds only a certificate fingerprint, never a private key.
+CHUAN_DEBUG_SIGNING_IDENTITY = -
+#include? "../../../.local/macos-signing.xcconfig"
 PRODUCT_COPYRIGHT = Copyright © 2026 Share Hub
