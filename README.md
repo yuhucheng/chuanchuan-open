@@ -14,7 +14,7 @@ Agent 配置、OpenSpec 和内部计划已迁至独立私有管理仓，本仓�
 
 ## 构建
 
-两个仓库日常开发统一使用 `main`，当前目标 `v0.1.0`。开发和提交前阅读 [版本计划](docs/version-plan.md) 与 [分支管理规则](docs/development/branch-management.md)，运行 `pwsh -File tool/install_git_hooks.ps1` 启用本地检查。
+两个业务仓在统一工作区内跟随管理仓当前同名分支，当前为 `release/v0.1.0`，目标 `v0.1.0`；`main` 保持主线。开发和提交前阅读 [版本计划](docs/version-plan.md) 与 [分支管理规则](docs/development/branch-management.md)，运行 `pwsh -File tool/install_git_hooks.ps1` 启用本地检查。
 
 安装 Flutter 3.47.2 / Dart 3.13.2；Windows 需要 VS 2022 C++ 桌面工具链和 Windows SDK，脚本使用 PowerShell 7；Mac 需要完整 Xcode。
 
