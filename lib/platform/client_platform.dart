@@ -21,7 +21,17 @@ class PermissionStatus {
 }
 
 class NearbyDevice {
-  const NearbyDevice(this.id, this.name, this.platform);
+  const NearbyDevice(
+    this.id,
+    this.name,
+    this.platform, {
+    this.host,
+    this.port,
+    this.publicKey,
+  });
+  final String? host;
+  final int? port;
+  final String? publicKey;
   final String id;
   final String name;
   final String platform;
@@ -48,6 +58,9 @@ class DiscoverySnapshot {
                 item['id'] as String,
                 item['name'] as String,
                 item['platform'] as String,
+                host: item['host'] as String?,
+                port: int.tryParse(item['port']?.toString() ?? ''),
+                publicKey: item['key'] as String?,
               ),
             )
             .toList(growable: false),

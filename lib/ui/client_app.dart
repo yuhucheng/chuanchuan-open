@@ -1,3 +1,6 @@
+import '../features/connections/connection_controller.dart';
+import '../features/connections/connection_panel.dart';
+
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
@@ -109,6 +112,7 @@ class ClientWindow extends StatefulWidget {
 class _ClientWindowState extends State<ClientWindow>
     with WidgetsBindingObserver {
   late final _devices = DeviceController(widget.platform);
+  late final _connections = ConnectionController(MacConnectionPlatform());
   late final _preview = PreviewController(widget.platform, widget.engine);
   late final _transfers = TransferQueue(widget.fileAccess);
   final _name = TextEditingController();
@@ -153,6 +157,7 @@ class _ClientWindowState extends State<ClientWindow>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _devices.dispose();
+    _connections.dispose();
     _preview.dispose();
     _transfers.dispose();
     _name.dispose();
@@ -162,7 +167,7 @@ class _ClientWindowState extends State<ClientWindow>
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
-    animation: Listenable.merge([_devices, _preview]),
+    animation: Listenable.merge([_devices, _preview, _connections]),
     builder: (context, _) => Scaffold(
       body: Row(
         children: [
@@ -551,17 +556,34 @@ class _ClientWindowState extends State<ClientWindow>
                     overflow: TextOverflow.ellipsis,
                   ),
                   subtitle: Text('${device.platform} · 身份尚未验证'),
-                  trailing: const _Tag('未配对'),
+                  trailing:
+                      !_windows &&
+                          device.host != null &&
+                          device.port != null &&
+                          device.publicKey != null
+                      ? TextButton(
+                          onPressed: _connections.busy
+                              ? null
+                              : () => showConnectionDialog(
+                                  context,
+                                  _connections,
+                                  device: device,
+                                ),
+                          child: const Text('输入短接码'),
+                        )
+                      : const _Tag('未开放接入'),
                 ),
               ),
             const Text(
-              '设备配对开发中；当前仅发现设备，暂不能建立连接。',
+              '发现不代表可信；开启短接码接入后，另一台 Mac 可选择设备并输入短接码。',
               style: TextStyle(color: _muted, fontSize: 12),
             ),
           ],
         ),
       ),
       const SizedBox(height: 22),
+      if (!_windows) ConnectionPanel(controller: _connections),
+      const SizedBox(height: 16),
       _notice('Windows、macOS 无需激活或激活码。当前为开发预览，跨设备投屏、文件传送和远程控制将在后续阶段开放。'),
     ],
   );
@@ -877,7 +899,9 @@ class _ClientWindowState extends State<ClientWindow>
           ),
         ),
       const SizedBox(height: 22),
-      _notice('${widget.appTitle} 0.1 开发预览\nWindows、macOS 无需激活或激活码。可信设备配对与连接服务尚未接入，当前版本仅供开发验证。'),
+      _notice(
+        '${widget.appTitle} 0.1 开发预览\nWindows、macOS 无需激活或激活码。可信设备配对与连接服务尚未接入，当前版本仅供开发验证。',
+      ),
     ],
   );
 

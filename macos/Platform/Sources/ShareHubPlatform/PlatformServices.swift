@@ -1,6 +1,8 @@
 import AppKit
 import ApplicationServices
 import Network
+import Security
+import SystemConfiguration
 
 /// This identifier is only for discovery deduplication. It is NOT a device key,
 /// activation credential, or proof of identity.
@@ -40,6 +42,7 @@ public struct DiscoveredDevice: Equatable {
     public let id: String
     public let name: String
     public let platform: String
+    public let connection: [String: String]
 
     public init?(record: [String: String], localID: String) {
         guard record["v"] == "1", let id = record["id"], UUID(uuidString: id) != nil,
@@ -53,9 +56,18 @@ public struct DiscoveredDevice: Equatable {
         self.id = id.lowercased()
         self.name = name
         self.platform = platform
+        var endpoint: [String: String] = [:]
+        if let host = record["host"], host.utf8.count <= 253, host.hasSuffix(".local"),
+           let port = record["port"], let number = Int(port), (1...65535).contains(number),
+           let key = record["key"], key.utf8.count == 44 {
+            endpoint = ["host": host, "port": port, "key": key]
+        }
+        self.connection = endpoint
     }
 
-    public var dictionary: [String: String] { ["id": id, "name": name, "platform": platform] }
+    public var dictionary: [String: String] {
+        ["id": id, "name": name, "platform": platform].merging(connection) { _, new in new }
+    }
 }
 
 /// All state and callbacks are confined to the main queue. Discovery is opt-in,
@@ -63,6 +75,8 @@ public struct DiscoveredDevice: Equatable {
 public final class LocalDiscovery {
     public static let serviceType = "_sharehub-dev._tcp"
     public var onChange: (([String: Any]) -> Void)?
+    private var connectionRecord: [String: String] = [:]
+    private var presence: [String: String] = [:]
     private var listener: NWListener?
     private var browser: NWBrowser?
     private var generation = 0
@@ -86,7 +100,8 @@ public final class LocalDiscovery {
         let listener = try NWListener(using: .tcp)
         self.listener = listener
         var service = NWListener.Service(name: id, type: Self.serviceType, domain: "local.")
-        service.txtRecordObject = NWTXTRecord(["v": "1", "id": id, "name": name, "platform": "macos"])
+        presence = ["v": "1", "id": id, "name": name, "platform": "macos"]
+        service.txtRecordObject = NWTXTRecord(presence.merging(connectionRecord) { _, new in new })
         listener.service = service
         // This milestone advertises presence only. No inbound protocol exists,
         // so accepted sockets are immediately closed without reading input.
@@ -117,7 +132,7 @@ public final class LocalDiscovery {
             for result in results {
                 guard found.count < 128, case .bonjour(let txt) = result.metadata else { continue }
                 var values: [String: String] = [:]
-                for key in ["v", "id", "name", "platform"] { values[key] = txt[key] }
+                for key in ["v", "id", "name", "platform", "host", "port", "key"] { values[key] = txt[key] }
                 guard let device = DiscoveredDevice(record: values, localID: id) else { continue }
                 found[device.id] = device
             }
@@ -128,6 +143,19 @@ public final class LocalDiscovery {
         emit()
         listener.start(queue: .main)
         browser.start(queue: .main)
+    }
+
+    public func advertiseConnection(port: Int?, key: String?) -> String? {
+        connectionRecord = [:]
+        let host = (SCDynamicStoreCopyLocalHostName(nil) as String?).map { $0 + ".local" }
+        if let port, let key, let host, (1...65535).contains(port) {
+            connectionRecord = ["host": host, "port": String(port), "key": key]
+        }
+        if var service = listener?.service {
+            service.txtRecordObject = NWTXTRecord(presence.merging(connectionRecord) { _, new in new })
+            listener?.service = service
+        }
+        return host
     }
 
     public func stop() {
@@ -182,3 +210,43 @@ public enum SystemPermissions {
         return NSWorkspace.shared.open(url)
     }
 }
+
+/// Identity seed is unrelated to the app's development signing certificate.
+/// Authorization leases remain in memory and are never restored from Keychain.
+public enum ConnectionSecurity {
+    public static func identitySeed() throws -> Data {
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "dev.sharehub.client.connection.v1",
+            kSecAttrAccount as String: "ed25519-seed"]
+        var read = query
+        read[kSecReturnData as String] = true
+        read[kSecMatchLimit as String] = kSecMatchLimitOne
+        var value: CFTypeRef?
+        let status = SecItemCopyMatching(read as CFDictionary, &value)
+        if status == errSecSuccess, let data = value as? Data, data.count == 32 { return data }
+        guard status == errSecItemNotFound else { throw ConnectionSecurityError.identityUnavailable }
+        var bytes = [UInt8](repeating: 0, count: 32)
+        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
+            throw ConnectionSecurityError.identityUnavailable
+        }
+        let data = Data(bytes)
+        var insert = query
+        insert[kSecValueData as String] = data
+        insert[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        guard SecItemAdd(insert as CFDictionary, nil) == errSecSuccess else {
+            throw ConnectionSecurityError.identityUnavailable
+        }
+        return data
+    }
+
+    /// mach_continuous_time includes system sleep and ignores wall-clock edits.
+    public static var continuousMicros: UInt64 {
+        var info = mach_timebase_info_data_t()
+        mach_timebase_info(&info)
+        let ticks = mach_continuous_time()
+        let divisor = UInt64(info.denom) * 1000
+        return (ticks / divisor) * UInt64(info.numer)
+            + ((ticks % divisor) * UInt64(info.numer)) / divisor
+    }
+}
+public enum ConnectionSecurityError: Error { case identityUnavailable }

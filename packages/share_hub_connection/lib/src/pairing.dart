@@ -1,0 +1,397 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:math';
+import 'dart:typed_data';
+
+import 'package:pointycastle/export.dart';
+import 'package:pointycastle/srp/srp6_client.dart';
+import 'package:pointycastle/srp/srp6_server.dart';
+import 'package:pointycastle/srp/srp6_standard_groups.dart';
+import 'package:pointycastle/srp/srp6_verifier_generator.dart';
+
+import 'channel.dart';
+import 'identity.dart';
+import 'session.dart';
+
+const offerLifetime = Duration(minutes: 5);
+const handshakeTimeout = Duration(seconds: 30);
+final _group = SRP6StandardGroups.rfc5054_3072;
+FortunaRandom _random() => FortunaRandom()..seed(KeyParameter(randomBytes(32)));
+Uint8List _bytes(BigInt value, int length) {
+  final result = Uint8List(length);
+  for (var i = length - 1; i >= 0; i--) {
+    result[i] = (value & BigInt.from(255)).toInt();
+    value >>= 8;
+  }
+  if (value != BigInt.zero) throw const ConnectionFailure('invalid_message');
+  return result;
+}
+
+String _number(BigInt? value, int length) =>
+    encodeBytes(_bytes(value!, length));
+BigInt _readNumber(Object? value, int length, {bool public = false}) {
+  var result = BigInt.zero;
+  for (final byte in decodeBytes(value, length)) {
+    result = (result << 8) | BigInt.from(byte);
+  }
+  if (public && (result <= BigInt.zero || result >= _group.N)) {
+    throw const ConnectionFailure('invalid_message');
+  }
+  return result;
+}
+
+Uint8List _transcript(List<Object?> fields) =>
+    Uint8List.fromList(utf8.encode(jsonEncode(fields)));
+void _message(Map<String, dynamic> message, String type) {
+  if (message['v'] != 1 || message['type'] != type) {
+    throw const ConnectionFailure('protocol_mismatch');
+  }
+}
+
+/// No code, verifier or authorization is persisted. One offer permits five
+/// handshake reservations total, even if a caller disconnects without proof.
+class PairingOffer {
+  PairingOffer(this.issuedMicros)
+    : id = encodeBytes(randomBytes(16)),
+      code = Random.secure().nextInt(1000000).toString().padLeft(6, '0');
+  final String id;
+  final String code;
+  final int issuedMicros;
+  int _attempts = 0;
+  bool _consumed = false;
+  bool _revoked = false;
+  int? _last;
+  bool available(int now) {
+    if (now < issuedMicros || (_last != null && now < _last!)) _revoked = true;
+    _last = now;
+    return !_consumed &&
+        !_revoked &&
+        now < issuedMicros + offerLifetime.inMicroseconds;
+  }
+
+  bool reservable(int now) => available(now) && _attempts < 5;
+  void reserve(int now) {
+    if (!reservable(now)) throw const ConnectionFailure('offer_unavailable');
+    _attempts++;
+  }
+
+  void consume(int now) {
+    if (!available(now)) throw const ConnectionFailure('offer_unavailable');
+    _consumed = true;
+  }
+
+  void revoke() => _revoked = true;
+}
+
+class PairingHost {
+  PairingHost({
+    required this.identity,
+    required this.clock,
+    required this.onConnection,
+  });
+  final DeviceIdentity identity;
+  final ContinuousClock clock;
+  final void Function(TrustedConnection) onConnection;
+  final _pending = <WireChannel>{};
+  final _sessions = <TrustedConnection>{};
+  ServerSocket? _server;
+  PairingOffer? _offer;
+  int _generation = 0;
+  PairingOffer? get offer => _offer;
+  int? get port => _server?.port;
+
+  Future<void> open({InternetAddress? address}) async {
+    await stopAccepting();
+    final generation = _generation;
+    final now = await clock();
+    final server = await ServerSocket.bind(
+      address ?? InternetAddress.anyIPv4,
+      0,
+    );
+    if (generation != _generation) {
+      await server.close();
+      return;
+    }
+    _offer = PairingOffer(now);
+    _server = server;
+    server.listen((socket) {
+      if (_pending.length >= 4 || generation != _generation) {
+        socket.destroy();
+        return;
+      }
+      final wire = WireChannel(socket);
+      _pending.add(wire);
+      unawaited(_accept(wire, generation));
+    });
+  }
+
+  Future<void> _accept(WireChannel wire, int generation) async {
+    final timeout = Timer(handshakeTimeout, wire.close);
+    TrustedConnection? connection;
+    try {
+      final offer = _offer;
+      if (offer == null) throw const ConnectionFailure('offer_unavailable');
+      offer.reserve(await clock());
+      final hello = await wire.next();
+      _message(hello, 'hello');
+      final peer = encodeBytes(decodeBytes(hello['key'], 32));
+      final nonce = encodeBytes(decodeBytes(hello['nonce'], 32));
+      if (peer == identity.encodedKey) {
+        throw const ConnectionFailure('same_identity');
+      }
+      final salt = randomBytes(32);
+      final context = [
+        1,
+        offer.id,
+        identity.encodedKey,
+        peer,
+        nonce,
+        encodeBytes(randomBytes(32)),
+      ];
+      final account = _transcript(context);
+      final verifier =
+          SRP6VerifierGenerator(
+            group: _group,
+            digest: SHA256Digest(),
+          ).generateVerifier(
+            salt,
+            account,
+            Uint8List.fromList(utf8.encode(offer.code)),
+          );
+      final srp = SRP6Server(
+        group: _group,
+        v: verifier,
+        digest: SHA256Digest(),
+        random: _random(),
+      );
+      final b = _number(srp.generateServerCredentials(), 384);
+      wire.send({
+        'v': 1,
+        'type': 'challenge',
+        'context': context,
+        'salt': encodeBytes(salt),
+        'b': b,
+      });
+      final proof = await wire.next();
+      _message(proof, 'proof');
+      final a = _readNumber(proof['a'], 384, public: true);
+      final transcript = _transcript([
+        ...context,
+        encodeBytes(salt),
+        b,
+        proof['a'],
+      ]);
+      srp.calculateSecret(a);
+      if (!srp.verifyClientEvidenceMessage(_readNumber(proof['m1'], 32)) ||
+          !await DeviceIdentity.verify(peer, proof['signature'], transcript)) {
+        throw const ConnectionFailure('authentication_failed');
+      }
+      wire.send({
+        'v': 1,
+        'type': 'verified',
+        'm2': _number(srp.calculateServerEvidenceMessage(), 32),
+        'signature': await identity.sign(transcript),
+      });
+      final cipher = await CipherChannel.create(
+        wire,
+        _bytes(srp.calculateSessionKey()!, 32),
+        transcript,
+        host: true,
+      );
+      final ready = await cipher.next();
+      if (ready['type'] != 'ready') {
+        throw const ConnectionFailure('invalid_message');
+      }
+      final now = await clock();
+      if (generation != _generation || !identical(offer, _offer)) {
+        throw const ConnectionFailure('cancelled');
+      }
+      // Atomic consumption, with no await between generation check and consume.
+      offer.consume(now);
+      final lease = SessionLease(startedMicros: now);
+      connection = TrustedConnection(cipher, peer, lease, clock);
+      await cipher.send({
+        'type': 'connected',
+        'lifetimeSeconds': connectionLifetime.inSeconds,
+      });
+      if (generation != _generation) throw const ConnectionFailure('cancelled');
+      _sessions.add(connection);
+      connection.startMonitoring();
+      final established = connection;
+      unawaited(
+        established.whenClosed.then((_) => _sessions.remove(established)),
+      );
+      onConnection(established);
+    } catch (_) {
+      connection?.close('handshake_failed');
+      wire.close();
+    } finally {
+      timeout.cancel();
+      _pending.remove(wire);
+    }
+  }
+
+  Future<void> stopAccepting() async {
+    _generation++;
+    _offer?.revoke();
+    _offer = null;
+    for (final wire in _pending.toList()) {
+      wire.close();
+    }
+    final server = _server;
+    _server = null;
+    await server?.close();
+  }
+
+  Future<void> close() async {
+    for (final session in _sessions.toList()) {
+      session.close();
+    }
+    await stopAccepting();
+  }
+}
+
+/// Cancellation owns the socket, including a socket arriving after cancellation.
+/// Retrying constructs a new attempt and requires a fresh unconsumed code.
+class PairingAttempt {
+  PairingAttempt({required this.identity, required this.clock});
+  final DeviceIdentity identity;
+  final ContinuousClock clock;
+  bool _cancelled = false;
+  bool _started = false;
+  WireChannel? _wire;
+  TrustedConnection? _connection;
+  void cancel() {
+    _cancelled = true;
+    _connection?.close('cancelled');
+    _wire?.close();
+  }
+
+  void _check() {
+    if (_cancelled) throw const ConnectionFailure('cancelled');
+  }
+
+  Future<TrustedConnection> connect(
+    String address,
+    int port,
+    String code, {
+    String? expectedPeerKey,
+  }) async {
+    if (_started) throw StateError('An attempt cannot be reused.');
+    _started = true;
+    if (!RegExp(r'^[0-9]{6}$').hasMatch(code) || port < 1 || port > 65535) {
+      throw const ConnectionFailure('invalid_input');
+    }
+    final timeout = Timer(handshakeTimeout, cancel);
+    try {
+      _check();
+      final socket = await Socket.connect(
+        address,
+        port,
+        timeout: const Duration(seconds: 5),
+      );
+      final wire = _wire = WireChannel(socket);
+      _check();
+      final nonce = encodeBytes(randomBytes(32));
+      wire.send({
+        'v': 1,
+        'type': 'hello',
+        'key': identity.encodedKey,
+        'nonce': nonce,
+      });
+      final challenge = await wire.next();
+      _message(challenge, 'challenge');
+      final context = challenge['context'];
+      if (context is! List ||
+          context.length != 6 ||
+          context[0] != 1 ||
+          context[3] != identity.encodedKey ||
+          context[4] != nonce) {
+        throw const ConnectionFailure('authentication_failed');
+      }
+      decodeBytes(context[1], 16);
+      decodeBytes(context[5], 32);
+      final peer = encodeBytes(decodeBytes(context[2], 32));
+      if (peer == identity.encodedKey ||
+          (expectedPeerKey != null && peer != expectedPeerKey)) {
+        throw const ConnectionFailure('identity_mismatch');
+      }
+      final salt = decodeBytes(challenge['salt'], 32);
+      final srp = SRP6Client(
+        group: _group,
+        digest: SHA256Digest(),
+        random: _random(),
+      );
+      final a = _number(
+        srp.generateClientCredentials(
+          salt,
+          _transcript(context),
+          Uint8List.fromList(utf8.encode(code)),
+        ),
+        384,
+      );
+      srp.calculateSecret(_readNumber(challenge['b'], 384, public: true));
+      final transcript = _transcript([
+        ...context,
+        challenge['salt'],
+        challenge['b'],
+        a,
+      ]);
+      wire.send({
+        'v': 1,
+        'type': 'proof',
+        'a': a,
+        'm1': _number(srp.calculateClientEvidenceMessage(), 32),
+        'signature': await identity.sign(transcript),
+      });
+      final verified = await wire.next();
+      _message(verified, 'verified');
+      if (!srp.verifyServerEvidenceMessage(_readNumber(verified['m2'], 32)) ||
+          !await DeviceIdentity.verify(
+            peer,
+            verified['signature'],
+            transcript,
+          )) {
+        throw const ConnectionFailure('authentication_failed');
+      }
+      final cipher = await CipherChannel.create(
+        wire,
+        _bytes(srp.calculateSessionKey()!, 32),
+        transcript,
+        host: false,
+      );
+      _check();
+      // Conservative local deadline: the host commits only AFTER this message.
+      // No peer-supplied wall clock or latency can extend the host's eight hours.
+      final localStart = await clock();
+      await cipher.send({'type': 'ready'});
+      final grant = await cipher.next();
+      if (grant['type'] != 'connected' ||
+          grant['lifetimeSeconds'] != connectionLifetime.inSeconds) {
+        throw const ConnectionFailure('invalid_message');
+      }
+      _check();
+      final connection = _connection = TrustedConnection(
+        cipher,
+        peer,
+        SessionLease(startedMicros: localStart),
+        clock,
+      );
+      if (!connection.lease.check(await clock())) {
+        throw const ConnectionFailure('expired');
+      }
+      _check();
+      connection.startMonitoring();
+      return connection;
+    } catch (error) {
+      _connection?.close('handshake_failed');
+      _wire?.close();
+      if (_cancelled) throw const ConnectionFailure('cancelled');
+      if (error is ConnectionFailure) rethrow;
+      throw const ConnectionFailure('connection_failed');
+    } finally {
+      timeout.cancel();
+    }
+  }
+}

@@ -28,6 +28,13 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
         return
       }
       switch call.method {
+      case "connection.identity":
+        do { result(FlutterStandardTypedData(bytes: try ConnectionSecurity.identitySeed())) }
+        catch { result(FlutterError(code: "identity_unavailable", message: "无法读取设备身份，请检查钥匙串。", details: nil)) }
+      case "connection.clock": result(ConnectionSecurity.continuousMicros)
+      case "connection.advertise":
+        let arguments = call.arguments as? [String: Any]
+        result(self.discovery.advertiseConnection(port: arguments?["port"] as? Int, key: arguments?["key"] as? String))
       case "loadDevice":
         result(["id": self.preferences.discoveryID, "name": self.preferences.name])
       case "setDeviceName":

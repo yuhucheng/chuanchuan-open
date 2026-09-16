@@ -44,7 +44,8 @@ macOS 使用相同 `lib/main.dart`，运行 `flutter build macos --debug --no-pu
 | 界面、设备发现 | `lib/ui`、`lib/features/devices`；手动 DNS-SD / Bonjour 发现 |
 | 文件准备 | `lib/features/transfers`；macOS 已实现本地选文件和摘要，Windows 待实现 |
 | 平台宿主 | 全部在本仓库的 `windows`、`macos` |
-| 配对、网络传输、远控、Android | 尚未完成 |
+| 短接码连接 | `packages/share_hub_connection` 与 macOS 设备页已接入；协议测试通过，双机/休眠待验收 |
+| 网络传输、远控、Android | 尚未完成 |
 
 UI 必须显式获得媒体引擎，测试可以注入 fake，但 fake 只存在于测试工具，不用于产品入口。启动应用不会自动采集屏幕，仍需用户选择并开始预览。
 
@@ -52,4 +53,8 @@ SDK 依赖项、锁文件和原生插件注册随正常客户端维护；`.local
 
 应用身份沿用 `share_hub.exe` / `Software\ShareHub\Client` 和 `dev.sharehub.client`。Windows 真实预览首帧仍需修复，当前没有可信发行签名。
 
+macOS 反复调试可按[本机开发签名](docs/development/macos-local-signing.md)配置固定的个人证书，减少 ad-hoc 重建导致的授权身份变化；该配置不代表正式发行签名。
+
 验证见 [统一 SDK 构建记录](docs/validation.md) 和 [Mac 合并与主线收敛记录](docs/validation.md)。开源远程地址为 `git@github.com:yuhucheng/chuanchuan-open.git`。
+
+短接码使用、密码协议及验证边界见[本地连接 v1](docs/protocols/short-code-connection.md)。连接授权不等于媒体、输入或文件权限。

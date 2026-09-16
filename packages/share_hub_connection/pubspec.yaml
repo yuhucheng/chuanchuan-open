@@ -1,0 +1,13 @@
+name: share_hub_connection
+description: Public short-code authenticated connection protocol for chuanchuan.
+version: 0.1.0-dev.1
+publish_to: none
+environment:
+  sdk: '>=3.13.2 <4.0.0'
+dependencies:
+  crypto: 3.0.6
+  cryptography: 2.9.0
+  pointycastle: 4.0.0
+dev_dependencies:
+  test: ^1.26.0
+  lints: ^6.0.0
