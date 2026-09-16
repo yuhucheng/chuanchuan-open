@@ -75,6 +75,25 @@ void main() {
   });
 
   test(
+    'failed start invalidates frame and ended callbacks after cleanup',
+    () async {
+      await prepare();
+      engine.failStart = true;
+      await controller.start();
+      final failure = controller.error;
+      final stops = engine.stops;
+      engine.firstFrame!();
+      expect(controller.firstFrame, false);
+      engine.ended!();
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.firstFrame, false);
+      expect(controller.active, false);
+      expect(controller.error, failure);
+      expect(engine.stops, stops);
+    },
+  );
+
+  test(
     'late native capture is released and repeated starts are ignored',
     () async {
       await prepare();

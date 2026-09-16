@@ -122,6 +122,10 @@ class PreviewController extends ChangeNotifier {
         await action(token);
       } catch (failure) {
         if (_current(token)) {
+          // A failed start can still have queued callbacks. Invalidate them
+          // before awaiting cleanup, including when cleanup itself fails.
+          ++_generation;
+          firstFrame = false;
           error =
               failure is PlatformException &&
                   failure.code == 'source_unavailable'
