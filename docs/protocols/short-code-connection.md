@@ -40,3 +40,9 @@ dart test
 ```
 
 协议测试使用两个独立身份和真实 loopback TCP，覆盖错误/过期/消费/限次、并发、取消、身份签名伪造、消息篡改/重放、报文边界及撤销。八小时测试推进注入时钟，没有宣称连续实跑八小时或真实休眠验收。应用层另有取消后身份晚到测试。两台物理设备、断公网、Bonjour 互通、系统休眠和 Windows 实机须分别验收。
+
+## v2 客户端接入（2026-09-17）
+
+客户端显式使用协议版本 2，不向旧 v1 对端静默降级。配对协议包保留 v1 测试入口；上文 v1 帧格式仅描述该兼容模式。v2 在同一 PAKE/身份绑定基础上生成方向授权，字段及信任边界见 [Session API](../../packages/share_hub_session_api/README.md)。v2 已接入有界的认证操作请求与双向信令路由，未接入远端媒体或自动断线恢复。
+
+`ConnectionController` 在成功握手后将真实 grant 注册到进程内 `GrantRegistry`，SDK 使用该注册表核验收到的 permit；不根据 UI 布尔值或发现名称签发授权。关闭开关和退出先同步 `revokeAll()`，再等待套接字清理；单连接结束删除对应注册。重新开启生成新码及新上下文。客户端契约样例见 `test/connection_controller_test.dart`，覆盖两端身份、对端注册表隔离、关闭前同步撤销及关闭后主动出站；SDK 消费样例在 SDK 包的 `test/session_contract_test.dart`。这些测试不替代双机、Windows 或后台验收。

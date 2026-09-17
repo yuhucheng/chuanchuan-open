@@ -59,4 +59,4 @@ macOS 反复调试可按[本机开发签名](docs/development/macos-local-signin
 
 验证见 [统一 SDK 构建记录](docs/validation.md) 和 [Mac 合并与主线收敛记录](docs/validation.md)。开源远程地址为 `git@github.com:yuhucheng/chuanchuan-open.git`。
 
-短接码使用、密码协议及验证边界见[本地连接 v1](docs/protocols/short-code-connection.md)。连接授权不等于媒体、输入或文件权限。
+短接码使用、密码协议及验证边界见[本地连接协议与 v2 接入](docs/protocols/short-code-connection.md)。连接授权不等于媒体、输入或文件权限。

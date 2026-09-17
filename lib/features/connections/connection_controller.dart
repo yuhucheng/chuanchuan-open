@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:share_hub_connection/share_hub_connection.dart';
+import 'package:share_hub_media_api/share_hub_media_api.dart';
 
 abstract interface class ConnectionPlatform {
   Future<DeviceIdentity> identity();
@@ -34,11 +35,16 @@ class MacConnectionPlatform implements ConnectionPlatform {
 class ConnectionController extends ChangeNotifier {
   ConnectionController(this.platform);
   final ConnectionPlatform platform;
+
+  /// Process-local authority shared with SDK resource owners. Only completed
+  /// authenticated connections may register grants; never restore from storage.
+  final GrantRegistry grants = GrantRegistry();
   DeviceIdentity? _identity;
   PairingHost? _host;
   PairingAttempt? _attempt;
   Timer? _timer;
   bool _disposed = false;
+  bool _disconnecting = false;
   int _generation = 0;
   bool busy = false;
   String? code;
@@ -55,7 +61,7 @@ class ConnectionController extends ChangeNotifier {
       _identity ??= await platform.identity();
 
   Future<void> open() async {
-    if (busy || _disposed) return;
+    if (busy || _disposed || _disconnecting) return;
     if (_sessions.length >= 8) {
       message = '连接数量已达上限，请先断开一个连接。';
       _emit();
@@ -78,12 +84,13 @@ class ConnectionController extends ChangeNotifier {
       final host = opening = PairingHost(
         identity: identity,
         clock: platform.now,
+        protocolVersion: 2,
         onConnection: (connection) {
-          if (_disposed) {
+          if (_disposed || _disconnecting || !accepting) {
             connection.close();
             return;
           }
-          _track(connection);
+          if (!_track(connection)) return;
           code = null;
           message = '连接已建立，短接码已消费。授权有效 8 小时，可随时断开。';
           unawaited(_clearAdvertisement());
@@ -161,8 +168,24 @@ class ConnectionController extends ChangeNotifier {
     code = null;
     address = null;
     await _host?.stopAccepting();
-    if (generation == _generation) await _clearAdvertisement();
+    if (generation == _generation && _host != null) await _clearAdvertisement();
     _emit();
+  }
+
+  /// Admission and in-flight handshakes are invalidated before awaiting I/O.
+  Future<void> disconnectAll() async {
+    _disconnecting = true;
+    grants.revokeAll();
+    _timer?.cancel();
+    _timer = null;
+    for (final session in _sessions.toList()) {
+      session.close('revoked');
+    }
+    try {
+      await stopAccepting();
+    } finally {
+      _disconnecting = false;
+    }
   }
 
   Future<void> connect(
@@ -171,7 +194,7 @@ class ConnectionController extends ChangeNotifier {
     String shortCode, {
     String? expectedPeerKey,
   }) async {
-    if (busy || _disposed) return;
+    if (busy || _disposed || _disconnecting) return;
     if (_sessions.length >= 8) {
       message = '连接数量已达上限，请先断开一个连接。';
       _emit();
@@ -187,6 +210,7 @@ class ConnectionController extends ChangeNotifier {
       final attempt = _attempt = PairingAttempt(
         identity: identity,
         clock: platform.now,
+        protocolVersion: 2,
       );
       final connection = await attempt.connect(
         host,
@@ -199,7 +223,7 @@ class ConnectionController extends ChangeNotifier {
         return;
       }
       _attempt = null;
-      _track(connection);
+      if (!_track(connection)) return;
       message = '身份验证通过，已建立本地直连。授权有效 8 小时。';
     } catch (error) {
       if (!_disposed && generation == _generation) {
@@ -229,10 +253,19 @@ class ConnectionController extends ChangeNotifier {
     _emit();
   }
 
-  void _track(TrustedConnection connection) {
+  bool _track(TrustedConnection connection) {
+    final grant = connection.grant;
+    if (connection.isClosed || grant == null || _sessions.length >= 8) {
+      connection.close('admission_rejected');
+      message = '连接未接入：授权不可用或连接数量已达上限。';
+      _emit();
+      return false;
+    }
+    grants.register(grant);
     _sessions.add(connection);
     unawaited(
       connection.whenClosed.then((reason) {
+        grants.revoke(grant);
         _sessions.remove(connection);
         if (!_disposed) {
           message = reason == 'expired'
@@ -243,6 +276,7 @@ class ConnectionController extends ChangeNotifier {
       }),
     );
     _emit();
+    return true;
   }
 
   @override
@@ -251,6 +285,7 @@ class ConnectionController extends ChangeNotifier {
     _generation++;
     _attempt?.cancel();
     _timer?.cancel();
+    grants.revokeAll();
     for (final session in _sessions.toList()) {
       session.close();
     }

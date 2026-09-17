@@ -1,3 +1,5 @@
+import 'field_test_helpers.dart';
+
 import 'dart:async';
 import 'dart:ui' show AppExitResponse;
 
@@ -29,7 +31,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.text('预览本机屏幕'));
+      await openFieldTool(tester, '屏幕预览');
       await tester.pumpAndSettle();
       await tester.tap(find.text('读取屏幕与窗口'));
       await tester.pumpAndSettle();
@@ -58,7 +60,7 @@ void main() {
     },
   );
   testWidgets(
-    'Windows keeps discovery opt-in and exposes local file preparation',
+    'Windows automatically discovers and exposes local file preparation',
     (tester) async {
       tester.view.physicalSize = const Size(1180, 780);
       tester.view.devicePixelRatio = 1;
@@ -77,23 +79,21 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(platform.starts, 0);
-      await tester.tap(find.byType(Switch));
-      await tester.pumpAndSettle();
+      expect(find.byType(Switch), findsNothing);
       expect(platform.starts, 1);
-      await tester.tap(find.byTooltip('文件传送'));
+      await openFieldTool(tester, '文件准备');
       await tester.pumpAndSettle();
       expect(find.text('选择文件'), findsOneWidget);
       await tester.tap(find.text('选择文件'));
       await tester.pumpAndSettle();
       expect(files.picks, 1);
       expect(find.text('先加入想分享的文件'), findsOneWidget);
-      await tester.tap(find.byTooltip('设置'));
+      await openFieldTool(tester, '设置');
       await tester.pumpAndSettle();
       expect(find.text('辅助功能'), findsNothing);
       expect(find.text('已允许'), findsNothing);
-      expect(find.text('远程控制'), findsOneWidget);
-      await tester.tap(find.byTooltip('屏幕预览'));
+      expect(find.textContaining('远控提示、网络文件'), findsOneWidget);
+      await openFieldTool(tester, '屏幕预览');
       await tester.pumpAndSettle();
       expect(find.text('屏幕录制设置'), findsNothing);
       await tester.tap(find.text('读取屏幕与窗口'));
@@ -115,9 +115,10 @@ void main() {
       expect(platform.permissionRequests, 0);
       engine.firstFrame!();
       await tester.pumpAndSettle();
-      await tester.tap(find.byTooltip('设备'));
+      final stopsBeforeNavigation = engine.stops;
+      await closeFieldPanel(tester);
       await tester.pumpAndSettle();
-      expect(engine.released, true);
+      expect(engine.stops, stopsBeforeNavigation);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
       await tester.pumpAndSettle();
@@ -129,7 +130,7 @@ void main() {
     },
   );
 
-  testWidgets('honest empty state and opt-in discovery', (tester) async {
+  testWidgets('honest empty state and automatic discovery', (tester) async {
     tester.view.physicalSize = const Size(1180, 780);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -143,12 +144,11 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.text('从这台 Mac 开始'), findsOneWidget);
-    expect(find.textContaining('Windows、macOS 无需激活或激活码'), findsOneWidget);
-    expect(platform.starts, 0);
+    expect(find.byKey(const ValueKey('local-device')), findsOneWidget);
+
+    expect(platform.starts, 1);
     expect(platform.permissionRequests, 0);
-    await tester.tap(find.byType(Switch));
-    await tester.pumpAndSettle();
+    expect(find.text('你 · 允许连接已关闭'), findsOneWidget);
     expect(platform.starts, 1);
     expect(find.text('还没有发现其他设备'), findsOneWidget);
     expect(tester.takeException(), isNull);
@@ -158,7 +158,7 @@ void main() {
   });
 
   testWidgets(
-    'preview stops when navigating away; compact window has no overflow',
+    'preview survives navigation and hidden window without duplicate capture',
     (tester) async {
       tester.view.physicalSize = const Size(860, 640);
       tester.view.devicePixelRatio = 1;
@@ -175,7 +175,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.text('预览本机屏幕'));
+      await openFieldTool(tester, '屏幕预览');
       await tester.pumpAndSettle();
       await tester.tap(find.text('读取屏幕与窗口'));
       await tester.pumpAndSettle();
@@ -189,16 +189,27 @@ void main() {
       expect(engine.starts, 1);
       engine.firstFrame!();
       await tester.pumpAndSettle();
-      await tester.tap(find.byTooltip('设置'));
+      await openFieldTool(tester, '设置');
       await tester.pumpAndSettle();
-      expect(engine.released, true);
+      expect(engine.released, false);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      await tester.pump();
+      expect(engine.released, false);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pumpAndSettle();
+      expect(engine.starts, 1);
       expect(tester.takeException(), isNull);
-      await tester.enterText(find.byType(TextField), '客厅 Mac');
+      await tester.enterText(
+        find.byKey(const ValueKey('device-name')),
+        '客厅 Mac',
+      );
       await tester.ensureVisible(find.text('保存名称'));
       await tester.tap(find.text('保存名称'));
       await tester.pumpAndSettle();
       expect(platform.device.name, '客厅 Mac');
-      expect(find.text('设备名称已保存'), findsOneWidget);
+      expect(find.text('客厅 Mac'), findsWidgets);
       await tester.pumpWidget(const SizedBox());
       await tester.pumpAndSettle();
       await platform.events.close();
@@ -221,7 +232,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('屏幕预览'));
+    await openFieldTool(tester, '屏幕预览');
     await tester.pumpAndSettle();
     await tester.tap(find.text('读取屏幕与窗口'));
     await tester.pumpAndSettle();
@@ -243,8 +254,8 @@ void main() {
     expect(engine.stopEntered, 1);
     expect(answered, false);
     engine.stopGate!.complete();
-    expect(await exitRequest, AppExitResponse.exit);
-    expect(await repeatedExitRequest, AppExitResponse.exit);
+    expect(await finishExit(tester, exitRequest), AppExitResponse.exit);
+    expect(await finishExit(tester, repeatedExitRequest), AppExitResponse.exit);
     expect(engine.released, true);
 
     await tester.pumpWidget(const SizedBox());
@@ -270,7 +281,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.byTooltip('屏幕预览'));
+      await openFieldTool(tester, '屏幕预览');
       await tester.pumpAndSettle();
       await tester.tap(find.text('读取屏幕与窗口'));
       await tester.pumpAndSettle();
@@ -284,10 +295,9 @@ void main() {
       await tester.pump();
 
       engine.failStop = true;
-      expect(
-        await WidgetsBinding.instance.handleRequestAppExit(),
-        AppExitResponse.cancel,
-      );
+      final cancelledExit = WidgetsBinding.instance.handleRequestAppExit();
+      await tester.pumpAndSettle();
+      expect(await cancelledExit, AppExitResponse.cancel);
       await tester.pump();
       expect(find.textContaining('屏幕采集释放失败'), findsOneWidget);
       engine.failStop = false;
@@ -295,7 +305,10 @@ void main() {
       await tester.pump();
       expect(engine.released, true);
       expect(
-        await WidgetsBinding.instance.handleRequestAppExit(),
+        await finishExit(
+          tester,
+          WidgetsBinding.instance.handleRequestAppExit(),
+        ),
         AppExitResponse.exit,
       );
 
@@ -323,4 +336,20 @@ class _DelayedStopEngine extends FakePreviewEngine {
     await stopGate?.future;
     await super.stop();
   }
+}
+
+// Cancellation can await a shared Future created outside the widget fake clock.
+// Flush both queues and fail with a bounded assertion instead of hanging.
+Future<AppExitResponse> finishExit(
+  WidgetTester tester,
+  Future<AppExitResponse> request,
+) async {
+  AppExitResponse? response;
+  request.then((value) => response = value);
+  for (var i = 0; i < 20 && response == null; i++) {
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+    await tester.pump();
+  }
+  expect(response, isNotNull, reason: 'Exit cleanup must complete');
+  return response!;
 }

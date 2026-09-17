@@ -231,6 +231,10 @@ bool PlatformBridge::HandleMessage(UINT message, WPARAM wparam) {
   if (message == WM_TIMER && wparam == impl_->timer) { impl_->discovery.Pump(); impl_->discovery.Tick(); return true; }
   return false;
 }
+void PlatformBridge::CancelFilePicker() {
+  if (impl_->picker) impl_->picker->Close(HRESULT_FROM_WIN32(ERROR_CANCELLED));
+}
+
 void PlatformBridge::Close() {
   if (impl_->closed) return;
   impl_->closed = true;

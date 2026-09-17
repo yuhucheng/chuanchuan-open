@@ -5,6 +5,9 @@
 #include <flutter/flutter_view_controller.h>
 
 #include <memory>
+#include <flutter/method_channel.h>
+#include <flutter/encodable_value.h>
+#include <shellapi.h>
 
 #include "win32_window.h"
 
@@ -25,6 +28,16 @@ class FlutterWindow : public Win32Window {
                          LPARAM const lparam) noexcept override;
 
  private:
+  void InstallTray();
+  void ShowMainWindow();
+  void RequestQuit();
+  void TrayMenu();
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> desktop_;
+  NOTIFYICONDATAW tray_{};
+  bool desktop_ready_ = false, tray_installed_ = false, quit_pending_ = false;
+  bool allow_connections_ = false, connection_supported_ = false;
+  UINT taskbar_created_ = 0;
+  std::shared_ptr<int> alive_ = std::make_shared<int>(0);
   // The project to run.
   flutter::DartProject project_;
 

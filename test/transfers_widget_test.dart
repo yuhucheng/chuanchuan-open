@@ -1,3 +1,5 @@
+import 'field_test_helpers.dart';
+
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -31,7 +33,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.byTooltip('文件传送'));
+      await openFieldTool(tester, '文件准备');
       await tester.pumpAndSettle();
       expect(files.reads, isEmpty);
       await tester.tap(find.text('选择文件'));
@@ -78,7 +80,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.byTooltip('文件传送'));
+      await openFieldTool(tester, '文件准备');
       await tester.pumpAndSettle();
       await tester.tap(find.text('选择文件'));
       await tester.pumpAndSettle();

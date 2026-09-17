@@ -6,6 +6,8 @@ import 'package:share_hub_open/platform/mac_platform.dart';
 
 import 'fakes.dart';
 
+import 'package:share_hub_media_api/share_hub_media_api.dart';
+
 void main() {
   late FakePlatform platform;
   late FakePreviewEngine engine;
@@ -26,17 +28,48 @@ void main() {
     controller.select(controller.sources.first);
   }
 
-  test('source refresh requires an explicit choice and never starts a default screen', () async {
+  test('start resolves primary only after explicit action and preserves a chosen source', () async {
     platform.status = const PermissionStatus(screenRecording: true);
+    await controller.loadSources();
+    expect(controller.selected, isNull);
+    expect(engine.starts, 0);
+    await controller.start();
+    expect(engine.startedSource?.id, 'screen:1');
+    await controller.stop();
+    controller.select(controller.sources.first);
+    await controller.loadSources();
+    expect(controller.selected?.id, 'screen:1');
+  });
+
+  test('lost explicit source never falls back to a primary display', () async {
+    await prepare();
+    engine.availableSources = [
+      const CaptureSource('screen:2', '另一主屏', isPrimary: true),
+    ];
     await controller.loadSources();
     expect(controller.selected, isNull);
     await controller.start();
     expect(engine.starts, 0);
-    controller.select(controller.sources.first);
-    await controller.loadSources();
-    expect(controller.selected, isNull);
-    expect(engine.starts, 0);
+    expect(controller.error, contains('不会自动切换'));
   });
+
+  test(
+    'primary is resolved anew at start; legacy metadata is not guessed',
+    () async {
+      platform.status = const PermissionStatus(screenRecording: true);
+      await controller.loadSources();
+      engine.availableSources = [
+        const CaptureSource('screen:2', '新主屏', isPrimary: true),
+      ];
+      await controller.start();
+      expect(engine.startedSource?.id, 'screen:2');
+      await controller.stop();
+      engine.availableSources = [const CaptureSource('legacy', '旧引擎首项')];
+      await controller.start();
+      expect(engine.starts, 1);
+      expect(controller.error, contains('无法确认主屏幕'));
+    },
+  );
 
   test('permission denial never enumerates or starts capture', () async {
     await controller.loadSources();

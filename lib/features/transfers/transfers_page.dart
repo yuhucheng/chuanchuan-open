@@ -12,7 +12,7 @@ class TransfersPage extends StatelessWidget {
     builder: (context, _) => Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const Text(
+        Text(
           '把文件，准备好',
           style: TextStyle(
             fontSize: 28,
@@ -20,18 +20,23 @@ class TransfersPage extends StatelessWidget {
             letterSpacing: -0.6,
           ),
         ),
-        const SizedBox(height: 10),
-        const Text(
+        SizedBox(height: 10),
+        Text(
           '选好文件，检查内容，等待与你的另一台设备连接。',
-          style: TextStyle(color: Color(0xFF697A74), height: 1.5),
+          style: TextStyle(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+            height: 1.5,
+          ),
         ),
-        const SizedBox(height: 26),
+        SizedBox(height: 26),
         Container(
-          padding: const EdgeInsets.all(24),
+          padding: EdgeInsets.all(24),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: Theme.of(context).colorScheme.surface,
             borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: const Color(0xFFE3E8DF)),
+            border: Border.all(
+              color: Theme.of(context).colorScheme.outlineVariant,
+            ),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -44,10 +49,7 @@ class TransfersPage extends StatelessWidget {
                 children: [
                   Text(
                     '文件队列 · ${queue.items.length}',
-                    style: const TextStyle(
-                      fontSize: 17,
-                      fontWeight: FontWeight.w600,
-                    ),
+                    style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
                   ),
                   Row(
                     mainAxisSize: MainAxisSize.min,
@@ -56,26 +58,29 @@ class TransfersPage extends StatelessWidget {
                         onPressed: queue.items.isEmpty && !queue.selecting
                             ? null
                             : queue.clear,
-                        child: const Text('清空队列'),
+                        child: Text('清空队列'),
                       ),
-                      const SizedBox(width: 12),
+                      SizedBox(width: 12),
                       FilledButton.icon(
                         onPressed:
                             queue.selecting ||
                                 queue.items.length >= TransferQueue.maxFiles
                             ? null
                             : queue.selectFiles,
-                        icon: const Icon(Icons.add_rounded, size: 20),
+                        icon: Icon(Icons.add_rounded, size: 20),
                         label: Text(queue.selecting ? '正在选择' : '选择文件'),
                       ),
                     ],
                   ),
                 ],
               ),
-              const SizedBox(height: 22),
-              const Divider(height: 1, color: Color(0xFFEBEEE7)),
+              SizedBox(height: 22),
+              Divider(
+                height: 1,
+                color: Theme.of(context).colorScheme.outlineVariant,
+              ),
               if (queue.items.isEmpty)
-                const Padding(
+                Padding(
                   padding: EdgeInsets.symmetric(vertical: 52),
                   child: Column(
                     children: [
@@ -97,7 +102,7 @@ class TransfersPage extends StatelessWidget {
                         '支持一次选择多个文件；准备过程不会修改原文件。',
                         textAlign: TextAlign.center,
                         style: TextStyle(
-                          color: Color(0xFF697A74),
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
                           fontSize: 13,
                         ),
                       ),
@@ -114,32 +119,38 @@ class TransfersPage extends StatelessWidget {
                 ),
               if (queue.error != null)
                 Padding(
-                  padding: const EdgeInsets.only(top: 14),
+                  padding: EdgeInsets.only(top: 14),
                   child: Text(
                     queue.error!,
-                    style: const TextStyle(color: Color(0xFF96512F)),
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
                   ),
                 ),
             ],
           ),
         ),
-        const SizedBox(height: 20),
+        SizedBox(height: 20),
         Container(
-          padding: const EdgeInsets.all(18),
+          padding: EdgeInsets.all(18),
           decoration: BoxDecoration(
-            color: const Color(0xFFEBEFE7),
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
             borderRadius: BorderRadius.circular(12),
           ),
-          child: const Row(
+          child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(Icons.link_off_rounded, size: 20, color: Color(0xFF697A74)),
+              Icon(
+                Icons.link_off_rounded,
+                size: 20,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
               SizedBox(width: 12),
               Expanded(
                 child: Text(
                   '设备连接开发中，当前仅在本机准备文件，尚未发送。队列在退出应用后清空；接入传送前会再次检查文件是否变化。',
                   style: TextStyle(
-                    color: Color(0xFF697A74),
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
                     fontSize: 12,
                     height: 1.7,
                   ),
@@ -160,25 +171,25 @@ class _FileRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(top: 20),
+    padding: EdgeInsets.only(top: 20),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Row(
           children: [
             Container(
-              padding: const EdgeInsets.all(12),
+              padding: EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: const Color(0xFFF0F4EC),
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: const Icon(
+              child: Icon(
                 Icons.insert_drive_file_outlined,
-                color: Color(0xFF247A68),
+                color: Theme.of(context).colorScheme.primary,
                 size: 24,
               ),
             ),
-            const SizedBox(width: 14),
+            SizedBox(width: 14),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -187,9 +198,9 @@ class _FileRow extends StatelessWidget {
                     item.file.name,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w600),
+                    style: TextStyle(fontWeight: FontWeight.w600),
                   ),
-                  const SizedBox(height: 5),
+                  SizedBox(height: 5),
                   Text(
                     '${formatFileSize(item.file.size)} · ${switch (item.state) {
                       PreparationState.queued => '等待准备',
@@ -198,8 +209,8 @@ class _FileRow extends StatelessWidget {
                       PreparationState.cancelled => '已取消准备',
                       PreparationState.failed => '准备失败',
                     }}',
-                    style: const TextStyle(
-                      color: Color(0xFF697A74),
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
                       fontSize: 12,
                     ),
                   ),
@@ -209,43 +220,46 @@ class _FileRow extends StatelessWidget {
             if (item.canCancel)
               TextButton(
                 onPressed: () => queue.cancel(item),
-                child: const Text('取消准备'),
+                child: Text('取消准备'),
               ),
             IconButton(
               tooltip: '移除 ${item.file.name}',
               onPressed: () => queue.remove(item),
-              icon: const Icon(Icons.close_rounded, size: 19),
+              icon: Icon(Icons.close_rounded, size: 19),
             ),
           ],
         ),
         if (item.state == PreparationState.preparing) ...[
-          const SizedBox(height: 14),
+          SizedBox(height: 14),
           LinearProgressIndicator(
             value: item.file.size == 0 ? 0 : item.checkedBytes / item.file.size,
             minHeight: 4,
             borderRadius: BorderRadius.circular(4),
           ),
-          const SizedBox(height: 6),
+          SizedBox(height: 6),
           Text(
             '已检查 ${formatFileSize(item.checkedBytes)} / ${formatFileSize(item.file.size)}',
-            style: const TextStyle(color: Color(0xFF697A74), fontSize: 11),
+            style: TextStyle(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+              fontSize: 11,
+            ),
           ),
         ],
         if (item.sha256 != null)
           Material(
             type: MaterialType.transparency,
             child: ExpansionTile(
-              tilePadding: const EdgeInsets.only(left: 62),
+              tilePadding: EdgeInsets.only(left: 62),
               dense: true,
-              title: const Text('查看文件校验值', style: TextStyle(fontSize: 12)),
+              title: Text('查看文件校验值', style: TextStyle(fontSize: 12)),
               children: [
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(62, 0, 12, 12),
+                  padding: EdgeInsets.fromLTRB(62, 0, 12, 12),
                   child: SelectableText(
                     'SHA-256\n${item.sha256}',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 11,
-                      color: Color(0xFF697A74),
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
                       height: 1.6,
                     ),
                   ),
@@ -255,14 +269,17 @@ class _FileRow extends StatelessWidget {
           ),
         if (item.error != null)
           Padding(
-            padding: const EdgeInsets.only(top: 10, left: 62),
+            padding: EdgeInsets.only(top: 10, left: 62),
             child: Text(
               item.error!,
-              style: const TextStyle(color: Color(0xFF96512F), fontSize: 12),
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.error,
+                fontSize: 12,
+              ),
             ),
           ),
-        const SizedBox(height: 18),
-        const Divider(height: 1, color: Color(0xFFEBEEE7)),
+        SizedBox(height: 18),
+        Divider(height: 1, color: Theme.of(context).colorScheme.outlineVariant),
       ],
     ),
   );

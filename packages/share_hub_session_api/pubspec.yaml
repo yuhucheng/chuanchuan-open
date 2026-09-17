@@ -1,0 +1,11 @@
+name: share_hub_session_api
+description: Public in-process directional grant and authenticated recovery contracts.
+version: 0.1.0
+publish_to: none
+environment:
+  sdk: '>=3.13.2 <4.0.0'
+dependencies:
+  cryptography: 2.9.0
+dev_dependencies:
+  test: ^1.26.0
+  lints: ^6.0.0

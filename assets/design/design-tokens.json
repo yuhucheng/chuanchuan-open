@@ -1,0 +1,351 @@
+{
+  "$meta": {
+    "name": "串串 chuanchuan · Design Tokens",
+    "version": "2.0.0",
+    "source": "references/original-2026-09-16/串串-标志系统/design-tokens.json",
+    "contrastStandard": "WCAG 2.2 AA",
+    "canonicalWith": "本文件是唯一参数来源；interaction-design.md 与当前界面稿只引用本文件",
+    "note": "默认跟随系统；浅底文字和承担信息的图形使用深阶。浅色发丝线仅作装饰。品牌字标与 UI 字体分开。",
+    "reconciled": [
+      "1.2.0 · ink-400 定名冲突已裁决：#8A949B 归 ink-400（禁用/装饰，不承载文字），原 #68737A 提为新增阶 ink-500（次级文字 · 浅色底）。决策日期 2026-09-16。",
+      "1.2.0 · 补齐交互方案 §4.1 已有、本文件缺失的阶：ink-700 / ink-400 / paper-0 / paper-100 / line-light。两文件现已同源，代码按任一文件取 token 结果一致。",
+      "2.0.0 · 依据用户逐项确认，补齐主题、排版、语义色、尺寸、动效；节点圆角12与卡片16、面板20分开；桌面节点150为基准而非固定缩放下限。"
+    ]
+  },
+  "color": {
+    "ink": {
+      "value": "#12161A",
+      "ramp": "ink-900",
+      "role": "冷墨 · 标志主体 / 深色模式底色 / 正文",
+      "contrastOnPaper": 16.9
+    },
+    "inkSecondary": {
+      "value": "#3A4249",
+      "ramp": "ink-700",
+      "role": "冷墨浅阶 · 次级文字（标准）与图标",
+      "contrastOnPaper": 9.5
+    },
+    "inkDisabled": {
+      "value": "#8A949B",
+      "ramp": "ink-400",
+      "role": "冷墨灰 · 禁用态与装饰，不作正文（对冷白 2.88:1，不承载文字）",
+      "contrastOnPaper": 2.88
+    },
+    "paper": {
+      "value": "#F5F7F7",
+      "ramp": "paper-50",
+      "role": "冷白 · 浅色模式底色（取代原奶油纸底）",
+      "contrastOnInk": 16.9
+    },
+    "paperRaised": {
+      "value": "#FFFFFF",
+      "ramp": "paper-0",
+      "role": "纸白 · 卡片 / 弹窗 / 浮层底"
+    },
+    "paperGroup": {
+      "value": "#E8ECEC",
+      "ramp": "paper-100",
+      "role": "分隔层 · 分组背景 / 输入框底（填充色，不是描边色）"
+    },
+    "amber": {
+      "value": "#F26A2E",
+      "ramp": "amber-500",
+      "role": "琥珀 · 只标「你」与人的动作（连接 / 发送 / 确认）。全局占比 ≤2%，禁作大面积背景与装饰",
+      "contrastOnInk": 6.0,
+      "contrastOnPaper": 2.84,
+      "allowedOnPaper": false
+    },
+    "amberText": {
+      "value": "#B4471A",
+      "ramp": "amber-700",
+      "role": "琥珀文本阶 · 浅色底上的文字与图标",
+      "contrastOnPaper": 5.06,
+      "allowedOnPaper": true
+    },
+    "cyan": {
+      "value": "#29D3C4",
+      "ramp": "cyan-400",
+      "role": "电光青 · 链路 / 速率 / 延迟 / 数据状态。深色底专用，不得与琥珀大面积并置",
+      "contrastOnInk": 9.7,
+      "contrastOnPaper": 1.74,
+      "allowedOnPaper": false
+    },
+    "cyanText": {
+      "value": "#0F766E",
+      "ramp": "cyan-700",
+      "role": "青文本阶 · 浅色底上的文字与图标",
+      "contrastOnPaper": 5.09,
+      "allowedOnPaper": true
+    },
+    "muted": {
+      "value": "#68737A",
+      "ramp": "ink-500",
+      "role": "次级文字 · 浅色底（弱于 ink-700，用于辅助信息 / 时间戳 / 占位）",
+      "contrastOnPaper": 4.52
+    },
+    "mutedDark": {
+      "value": "#8A9494",
+      "ramp": "ink-300",
+      "role": "次级文字 · 深色底",
+      "contrastOnInk": 5.8
+    },
+    "line": {
+      "value": "#E3E9E9",
+      "ramp": "line-light",
+      "role": "分割线 / 卡片描边 · 浅色模式（对冷白 1.14:1，仅发丝装饰线、不承载信息；与填充层 paper-100 分开使用）"
+    },
+    "surfaceDark": {
+      "value": "#191E23",
+      "ramp": "surface-800",
+      "role": "深色模式一级面（由冷墨上浮，不引入第二个黑）"
+    },
+    "surfaceDarkHigh": {
+      "value": "#20262C",
+      "ramp": "surface-700",
+      "role": "深色模式二级面 / 悬浮态"
+    },
+    "lineDark": {
+      "value": "#2A3138",
+      "ramp": "line-dark",
+      "role": "分割线 · 深色模式"
+    },
+    "success": {
+      "value": "#2E9E63",
+      "role": "在线图形"
+    },
+    "successText": {
+      "value": "#1E6B43",
+      "role": "浅底成功文字"
+    },
+    "warning": {
+      "value": "#D97706",
+      "role": "警告图形"
+    },
+    "warningText": {
+      "value": "#8A4B00",
+      "role": "浅底警告文字"
+    },
+    "danger": {
+      "value": "#C8352B",
+      "role": "错误图形"
+    },
+    "dangerText": {
+      "value": "#A3271F",
+      "role": "浅底错误文字"
+    }
+  },
+  "font": {
+    "displayCn": {
+      "family": "Source Han Sans CN",
+      "style": "Heavy",
+      "role": "中文标准字「串串」"
+    },
+    "displayLatin": {
+      "family": "Inter Tight",
+      "style": "Medium",
+      "role": "拉丁字标 chuanchuan"
+    },
+    "body": {
+      "family": "Source Han Sans CN",
+      "style": "Regular",
+      "role": "界面正文",
+      "fallback": [
+        "Noto Sans SC",
+        "PingFang SC",
+        "Microsoft YaHei UI",
+        "sans-serif"
+      ],
+      "weights": [
+        400,
+        500
+      ]
+    },
+    "mono": {
+      "family": "Noto Sans Mono",
+      "style": "Medium",
+      "role": "延迟 / 速率 / IP 等数据数字，带仪表感",
+      "fallback": [
+        "SF Mono",
+        "Cascadia Code",
+        "monospace"
+      ],
+      "weights": [
+        500
+      ]
+    }
+  },
+  "space": {
+    "unit": 8,
+    "scale": [
+      4,
+      8,
+      12,
+      16,
+      24,
+      32,
+      40,
+      48,
+      64
+    ]
+  },
+  "radius": {
+    "chip": 8,
+    "card": 16,
+    "panel": 20,
+    "appicon": 40,
+    "node": 12
+  },
+  "logo": {
+    "viewBox": "-10 -10 120 120",
+    "strokeWidth": 7,
+    "nodeSize": 24,
+    "nodeRadius": 5,
+    "youSize": 14,
+    "youRadius": 3,
+    "chamfer": 45,
+    "clearSpace": "标志高度的 1/8",
+    "minSize": {
+      "tray": 16,
+      "ui": 24,
+      "list": 32,
+      "print": "8mm"
+    },
+    "rule": "低于最小尺寸改用单色态，不要硬缩；标志不得改色、拉伸、加投影、旋转、装入圆形底板"
+  },
+  "typography": {
+    "display": {
+      "size": 36,
+      "lineHeight": 44,
+      "weight": 500
+    },
+    "h1": {
+      "size": 30,
+      "lineHeight": 38,
+      "weight": 500
+    },
+    "h2": {
+      "size": 24,
+      "lineHeight": 32,
+      "weight": 500
+    },
+    "h3": {
+      "size": 20,
+      "lineHeight": 28,
+      "weight": 500
+    },
+    "bodyLarge": {
+      "size": 16,
+      "lineHeight": 24,
+      "weight": 400
+    },
+    "body": {
+      "size": 14,
+      "lineHeight": 22,
+      "weight": 400
+    },
+    "caption": {
+      "size": 12,
+      "lineHeight": 18,
+      "weight": 400
+    },
+    "code": {
+      "size": 18,
+      "lineHeight": 24,
+      "weight": 500
+    }
+  },
+  "theme": {
+    "default": "system",
+    "choices": [
+      "system",
+      "light",
+      "dark"
+    ],
+    "light": {
+      "background": "paper",
+      "surface": "paperRaised",
+      "raised": "paperGroup",
+      "text": "ink",
+      "secondaryText": "inkSecondary",
+      "weakText": "muted",
+      "decoration": "line",
+      "link": "cyanText",
+      "self": "amberText",
+      "focus": "cyanText"
+    },
+    "dark": {
+      "background": "ink",
+      "surface": "surfaceDark",
+      "raised": "surfaceDarkHigh",
+      "text": "paper",
+      "secondaryText": "mutedDark",
+      "decoration": "lineDark",
+      "link": "cyan",
+      "self": "amber",
+      "focus": "cyan"
+    },
+    "highContrast": "响应系统高对比偏好，必要边界与状态不得依靠装饰线色；逐组件实测"
+  },
+  "component": {
+    "desktopNode": {
+      "baseWidth": 150,
+      "baseHeight": 150,
+      "minHitSize": 96,
+      "padding": 16,
+      "radius": "node"
+    },
+    "touchTargetMin": 48,
+    "toolbarTarget": 40,
+    "nodeGapMin": 48,
+    "fieldMaxWidth": 1440,
+    "zoomMin": 0.6,
+    "zoomMax": 2.0,
+    "focusWidth": 2,
+    "focusOffset": 2,
+    "selfBorder": 2,
+    "linkWidth": {
+      "unknown": 1.5,
+      "good": 2.5,
+      "excellent": 3.5
+    }
+  },
+  "motion": {
+    "hover": {
+      "durationMs": 160,
+      "scale": 1.05
+    },
+    "press": {
+      "durationMs": 120,
+      "scale": 0.95
+    },
+    "enter": {
+      "durationMs": 320,
+      "staggerMs": 40
+    },
+    "link": {
+      "durationMs": 180
+    },
+    "pulse": {
+      "durationMs": 1600,
+      "minOpacity": 0.45
+    },
+    "holdShortcut": {
+      "durationMs": 600
+    },
+    "peek": {
+      "durationMs": 200
+    },
+    "curve": [
+      0.2,
+      0,
+      0,
+      1
+    ],
+    "reducedMotion": "关闭循环脉冲和阶梯入场；保留状态文字；涉及必要信息的线条不得低于对比阈值"
+  },
+  "shadow": {
+    "sm": "0 1px 2px rgba(18,22,26,.06)",
+    "md": "0 4px 12px rgba(18,22,26,.10)",
+    "lg": "0 12px 32px rgba(18,22,26,.16)"
+  }
+}

@@ -14,6 +14,9 @@ import 'channel.dart';
 import 'identity.dart';
 import 'session.dart';
 
+import 'package:cryptography/cryptography.dart' as crypto;
+import 'package:share_hub_session_api/share_hub_session_api.dart';
+
 const offerLifetime = Duration(minutes: 5);
 const handshakeTimeout = Duration(seconds: 30);
 final _group = SRP6StandardGroups.rfc5054_3072;
@@ -43,8 +46,8 @@ BigInt _readNumber(Object? value, int length, {bool public = false}) {
 
 Uint8List _transcript(List<Object?> fields) =>
     Uint8List.fromList(utf8.encode(jsonEncode(fields)));
-void _message(Map<String, dynamic> message, String type) {
-  if (message['v'] != 1 || message['type'] != type) {
+void _message(Map<String, dynamic> message, String type, int version) {
+  if (message['v'] != version || message['type'] != type) {
     throw const ConnectionFailure('protocol_mismatch');
   }
 }
@@ -89,7 +92,13 @@ class PairingHost {
     required this.identity,
     required this.clock,
     required this.onConnection,
-  });
+    this.protocolVersion = 1,
+  }) {
+    if (protocolVersion != 1 && protocolVersion != 2) {
+      throw ArgumentError.value(protocolVersion);
+    }
+  }
+  final int protocolVersion;
   final DeviceIdentity identity;
   final ContinuousClock clock;
   final void Function(TrustedConnection) onConnection;
@@ -134,7 +143,7 @@ class PairingHost {
       if (offer == null) throw const ConnectionFailure('offer_unavailable');
       offer.reserve(await clock());
       final hello = await wire.next();
-      _message(hello, 'hello');
+      _message(hello, 'hello', protocolVersion);
       final peer = encodeBytes(decodeBytes(hello['key'], 32));
       final nonce = encodeBytes(decodeBytes(hello['nonce'], 32));
       if (peer == identity.encodedKey) {
@@ -142,7 +151,7 @@ class PairingHost {
       }
       final salt = randomBytes(32);
       final context = [
-        1,
+        protocolVersion,
         offer.id,
         identity.encodedKey,
         peer,
@@ -167,14 +176,14 @@ class PairingHost {
       );
       final b = _number(srp.generateServerCredentials(), 384);
       wire.send({
-        'v': 1,
+        'v': protocolVersion,
         'type': 'challenge',
         'context': context,
         'salt': encodeBytes(salt),
         'b': b,
       });
       final proof = await wire.next();
-      _message(proof, 'proof');
+      _message(proof, 'proof', protocolVersion);
       final a = _readNumber(proof['a'], 384, public: true);
       final transcript = _transcript([
         ...context,
@@ -188,7 +197,7 @@ class PairingHost {
         throw const ConnectionFailure('authentication_failed');
       }
       wire.send({
-        'v': 1,
+        'v': protocolVersion,
         'type': 'verified',
         'm2': _number(srp.calculateServerEvidenceMessage(), 32),
         'signature': await identity.sign(transcript),
@@ -210,11 +219,34 @@ class PairingHost {
       // Atomic consumption, with no await between generation check and consume.
       offer.consume(now);
       final lease = SessionLease(startedMicros: now);
-      connection = TrustedConnection(cipher, peer, lease, clock);
+      connection = TrustedConnection(
+        cipher,
+        peer,
+        lease,
+        clock,
+        grant: protocolVersion == 2
+            ? await _grant(
+                cipher,
+                peer,
+                identity,
+                _bytes(srp.calculateSessionKey()!, 32),
+                transcript,
+                now,
+                clock,
+                GrantRole.receiver,
+              )
+            : null,
+      );
+      if (generation != _generation || !identical(offer, _offer)) {
+        throw const ConnectionFailure('cancelled');
+      }
       await cipher.send({
         'type': 'connected',
         'lifetimeSeconds': connectionLifetime.inSeconds,
       });
+      if (connection.grant case final endpoint?) {
+        await _activateGrant(cipher, endpoint);
+      }
       if (generation != _generation) throw const ConnectionFailure('cancelled');
       _sessions.add(connection);
       connection.startMonitoring();
@@ -255,7 +287,16 @@ class PairingHost {
 /// Cancellation owns the socket, including a socket arriving after cancellation.
 /// Retrying constructs a new attempt and requires a fresh unconsumed code.
 class PairingAttempt {
-  PairingAttempt({required this.identity, required this.clock});
+  PairingAttempt({
+    required this.identity,
+    required this.clock,
+    this.protocolVersion = 1,
+  }) {
+    if (protocolVersion != 1 && protocolVersion != 2) {
+      throw ArgumentError.value(protocolVersion);
+    }
+  }
+  final int protocolVersion;
   final DeviceIdentity identity;
   final ContinuousClock clock;
   bool _cancelled = false;
@@ -295,17 +336,17 @@ class PairingAttempt {
       _check();
       final nonce = encodeBytes(randomBytes(32));
       wire.send({
-        'v': 1,
+        'v': protocolVersion,
         'type': 'hello',
         'key': identity.encodedKey,
         'nonce': nonce,
       });
       final challenge = await wire.next();
-      _message(challenge, 'challenge');
+      _message(challenge, 'challenge', protocolVersion);
       final context = challenge['context'];
       if (context is! List ||
           context.length != 6 ||
-          context[0] != 1 ||
+          context[0] != protocolVersion ||
           context[3] != identity.encodedKey ||
           context[4] != nonce) {
         throw const ConnectionFailure('authentication_failed');
@@ -339,14 +380,14 @@ class PairingAttempt {
         a,
       ]);
       wire.send({
-        'v': 1,
+        'v': protocolVersion,
         'type': 'proof',
         'a': a,
         'm1': _number(srp.calculateClientEvidenceMessage(), 32),
         'signature': await identity.sign(transcript),
       });
       final verified = await wire.next();
-      _message(verified, 'verified');
+      _message(verified, 'verified', protocolVersion);
       if (!srp.verifyServerEvidenceMessage(_readNumber(verified['m2'], 32)) ||
           !await DeviceIdentity.verify(
             peer,
@@ -377,7 +418,22 @@ class PairingAttempt {
         peer,
         SessionLease(startedMicros: localStart),
         clock,
+        grant: protocolVersion == 2
+            ? await _grant(
+                cipher,
+                peer,
+                identity,
+                _bytes(srp.calculateSessionKey()!, 32),
+                transcript,
+                localStart,
+                clock,
+                GrantRole.initiator,
+              )
+            : null,
       );
+      if (connection.grant case final endpoint?) {
+        await _activateGrant(cipher, endpoint);
+      }
       if (!connection.lease.check(await clock())) {
         throw const ConnectionFailure('expired');
       }
@@ -394,4 +450,104 @@ class PairingAttempt {
       timeout.cancel();
     }
   }
+}
+
+// Initial transport activation uses the already authenticated pairing channel.
+// Final acknowledgement prevents the initiator publishing a usable connection
+// before the receiver verifies its proof. Pairing owns the timeout/cancellation.
+Future<void> _activateGrant(
+  CipherChannel cipher,
+  GrantEndpoint endpoint,
+) async {
+  if (endpoint.role == GrantRole.initiator) {
+    final hello = await endpoint.beginResume();
+    await cipher.send({
+      'type': 'grant-hello',
+      'generation': hello.generation,
+      'challenge': encodeBytes(hello.challenge),
+    });
+    final response = await cipher.next();
+    if (response['type'] != 'grant-response' ||
+        response['generation'] != hello.generation) {
+      throw const ConnectionFailure('invalid_message');
+    }
+    final finish = await endpoint.finishResume(
+      ResumeResponse(
+        hello,
+        decodeBytes(response['challenge'], 32),
+        decodeBytes(response['proof'], 32),
+      ),
+    );
+    cipher.enableSessionFrames();
+    await cipher.send({
+      'type': 'grant-finish',
+      'proof': encodeBytes(finish.proof),
+    });
+    final acknowledgement = await cipher.next();
+    if (acknowledgement['type'] != 'grant-active' ||
+        acknowledgement['generation'] != hello.generation) {
+      throw const ConnectionFailure('invalid_message');
+    }
+    await endpoint.checkValidity();
+  } else {
+    final message = await cipher.next();
+    if (message['type'] != 'grant-hello' || message['generation'] != 1) {
+      throw const ConnectionFailure('invalid_message');
+    }
+    final response = await endpoint.answerResume(
+      ResumeHello(1, decodeBytes(message['challenge'], 32)),
+    );
+    await cipher.send({
+      'type': 'grant-response',
+      'generation': response.hello.generation,
+      'challenge': encodeBytes(response.challenge),
+      'proof': encodeBytes(response.proof),
+    });
+    final finish = await cipher.next();
+    if (finish['type'] != 'grant-finish') {
+      throw const ConnectionFailure('invalid_message');
+    }
+    await endpoint.acceptResume(ResumeFinish(decodeBytes(finish['proof'], 32)));
+    cipher.enableSessionFrames();
+    await cipher.send({
+      'type': 'grant-active',
+      'generation': endpoint.generation,
+    });
+  }
+}
+
+// Pairing owns bootstrap: caller/UI input cannot mint a remote grant. The
+// exporter is domain separated from transport keys and never sent on the wire.
+Future<GrantEndpoint> _grant(
+  CipherChannel cipher,
+  String peer,
+  DeviceIdentity identity,
+  List<int> srpKey,
+  List<int> transcript,
+  int started,
+  ContinuousClock clock,
+  GrantRole role,
+) async {
+  final exporter =
+      await crypto.Hkdf(hmac: crypto.Hmac.sha256(), outputLength: 32).deriveKey(
+        secretKey: crypto.SecretKey(srpKey),
+        nonce: transcript,
+        info: utf8.encode('chuanchuan.grant.v2/recovery'),
+      );
+  final local = identity.publicKey.bytes;
+  final remote = decodeBytes(peer, 32);
+  return GrantEndpoint.fromAuthenticatedPairing(
+    binding: GrantBinding(
+      id: decodeBytes(cipher.sessionId, 32),
+      initiatorKey: role == GrantRole.initiator ? local : remote,
+      receiverKey: role == GrantRole.receiver ? local : remote,
+    ),
+    role: role,
+    establishedMicros: started,
+    recoverySecret: await exporter.extractBytes(),
+    clock: clock,
+    // Resource owners subscribe through the public invalidation stream.
+    // There are no media/input/file resources in this heartbeat owner.
+    onInvalidated: () {},
+  );
 }

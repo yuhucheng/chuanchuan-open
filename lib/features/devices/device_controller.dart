@@ -14,6 +14,7 @@ class DeviceController extends ChangeNotifier {
   String? error;
   bool busy = false;
   bool _disposed = false;
+  Future<void>? _pending;
   StreamSubscription<DiscoverySnapshot>? _subscription;
 
   Future<void> initialize() => _perform(() async {
@@ -22,15 +23,18 @@ class DeviceController extends ChangeNotifier {
     if (_disposed) return;
     _subscription ??= platform.discoveryEvents.listen(
       (event) {
+        if (_disposed) return;
         discovery = event;
         _notify();
       },
       onError: (Object _) {
+        if (_disposed) return;
         discovery = const DiscoverySnapshot(state: 'failed');
         error = '无法读取局域网发现状态，请重新启动客户端。';
         _notify();
       },
     );
+    await _startDiscovery();
   });
 
   Future<void> refreshPermissions() => _perform(() async {
@@ -42,19 +46,27 @@ class DeviceController extends ChangeNotifier {
     if (!_disposed && discovery.enabled) await platform.startDiscovery();
   });
 
-  Future<void> setDiscovery(bool enabled) => _perform(() async {
-    if (enabled) {
+  Future<void> retryDiscovery() => _perform(_startDiscovery);
+
+  Future<void> _startDiscovery() async {
+    if (_disposed) return;
+    try {
       await platform.startDiscovery();
-    } else {
-      await platform.stopDiscovery();
+    } catch (_) {
+      if (!_disposed) discovery = const DiscoverySnapshot(state: 'failed');
+      rethrow;
     }
-  });
+  }
 
   Future<void> openSettings(String permission) =>
       _perform(() => platform.openSettings(permission));
 
-  Future<void> _perform(Future<void> Function() action) async {
-    if (busy || _disposed) return;
+  Future<void> _perform(Future<void> Function() action) {
+    if (busy || _disposed) return Future.value();
+    return _pending = _execute(action);
+  }
+
+  Future<void> _execute(Future<void> Function() action) async {
     busy = true;
     error = null;
     _notify();
@@ -76,12 +88,19 @@ class DeviceController extends ChangeNotifier {
     if (!_disposed) notifyListeners();
   }
 
+  Future<void> stopForExit() async {
+    _disposed = true;
+    await _pending;
+    await _subscription?.cancel();
+    _subscription = null;
+    await platform.stopDiscovery();
+    discovery = const DiscoverySnapshot();
+  }
+
   @override
   void dispose() {
     _disposed = true;
-    unawaited(_subscription?.cancel());
-    // The native event channel also stops discovery on cancel.
-    unawaited(platform.stopDiscovery().catchError((Object _) {}));
+    unawaited(stopForExit().catchError((Object _) {}));
     super.dispose();
   }
 }

@@ -27,10 +27,12 @@ class WireChannel {
   Completer<Map<String, dynamic>>? _waiting;
   bool _closed = false;
   static const maximumFrameBytes = 8192;
+  int _frameLimit = maximumFrameBytes;
+  void enableSessionFrames() => _frameLimit = 131072;
 
   void _receive(Uint8List bytes) {
     if (_closed) return;
-    if (_buffer.length + bytes.length > 65536) {
+    if (_buffer.length + bytes.length > _frameLimit * 8) {
       close();
       return;
     }
@@ -42,7 +44,7 @@ class WireChannel {
             (_buffer[1] << 16) |
             (_buffer[2] << 8) |
             _buffer[3];
-        if (size <= 0 || size > maximumFrameBytes) {
+        if (size <= 0 || size > _frameLimit) {
           throw const ConnectionFailure('invalid_message');
         }
         if (_buffer.length < size + 4) return;
@@ -77,7 +79,7 @@ class WireChannel {
   void send(Map<String, dynamic> message) {
     if (_closed) throw const ConnectionFailure('disconnected');
     final bytes = utf8.encode(jsonEncode(message));
-    if (bytes.length > maximumFrameBytes) {
+    if (bytes.length > _frameLimit) {
       throw const ConnectionFailure('invalid_message');
     }
     final header = ByteData(4)..setUint32(0, bytes.length);

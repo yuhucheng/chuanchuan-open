@@ -12,6 +12,7 @@ class PreviewController extends ChangeNotifier {
   final PreviewEngine engine;
   List<CaptureSource> sources = [];
   CaptureSource? selected;
+  bool _explicitSource = false;
   bool busy = false;
   bool stopping = false;
   bool active = false;
@@ -28,6 +29,7 @@ class PreviewController extends ChangeNotifier {
 
   void select(CaptureSource? source) {
     if (busy || active || stopping || cleanupFailed) return;
+    _explicitSource = true;
     selected = source;
     _notify();
   }
@@ -42,21 +44,47 @@ class PreviewController extends ChangeNotifier {
     final found = await engine.sources();
     if (!_current(token)) return;
     sources = found;
-    // A refreshed list can contain different windows; require a fresh choice.
-    selected = null;
+    if (!_explicitSource) selected = null;
+    if (_explicitSource && selected != null) {
+      final previous = selected!;
+      selected = found
+          .where((item) => item.id == previous.id && item.type == previous.type)
+          .firstOrNull;
+      if (selected == null) error = '所选来源已失效，请重新选择；不会自动切换到整屏。';
+    }
     if (found.isEmpty) error = '没有可预览的屏幕或窗口，请检查权限后刷新。';
   });
 
   Future<void> start() {
     if (_unavailable()) return Future.value();
-    final source = selected;
-    if (source == null) return Future.value();
+
     return _run((token) async {
       if (!await _hasPermission()) {
         error = '屏幕录制权限不可用，请检查系统设置。';
         return;
       }
       if (!_current(token)) return;
+      CaptureSource? source = selected;
+      if (!_explicitSource) {
+        final found = await engine.sources();
+        if (!_current(token)) return;
+        sources = found;
+        selected = null;
+        final primary = found
+            .where(
+              (item) => item.type == CaptureSourceType.screen && item.isPrimary,
+            )
+            .toList();
+        if (primary.length != 1) {
+          error = '当前引擎无法确认主屏幕，请明确选择画面来源。';
+          return;
+        }
+        source = selected = primary.single;
+      }
+      if (source == null) {
+        error = '请重新选择画面来源；不会自动切换到整屏。';
+        return;
+      }
       await engine.start(
         source,
         onEnded: () {

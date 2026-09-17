@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:share_hub_open/features/devices/device_controller.dart';
@@ -19,36 +21,73 @@ void main() {
   });
 
   test(
-    'initialization loads local data without discovery or permission prompts',
+    'initialization automatically discovers without screen permission prompts',
     () async {
       await controller.initialize();
       expect(controller.device?.name, '书房 Mac');
-      expect(platform.starts, 0);
+      expect(platform.starts, 1);
       expect(platform.permissionRequests, 0);
+      expect(controller.discovery.enabled, true);
+    },
+  );
+
+  test(
+    'auto discovery, rename live advertisement, device removal, and exit',
+    () async {
+      await controller.initialize();
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.discovery.enabled, true);
+      await controller.rename('客厅 Mac');
+      expect(platform.starts, 2);
+      expect(controller.device?.name, '客厅 Mac');
+      platform.events.add(
+        const DiscoverySnapshot(
+          state: 'searching',
+          devices: [NearbyDevice('remote', '平板', 'android')],
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.discovery.devices.single.name, '平板');
+      await controller.stopForExit();
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.discovery.devices, isEmpty);
       expect(controller.discovery.enabled, false);
     },
   );
 
-  test('opt in, rename live advertisement, device removal, and stop', () async {
-    await controller.initialize();
-    await controller.setDiscovery(true);
+  test(
+    'discovery failure is visible and retry does not request capture',
+    () async {
+      platform.discoveryError = PlatformException(code: 'discovery_failed');
+      await controller.initialize();
+      expect(controller.discovery.state, 'failed');
+      expect(controller.error, isNotNull);
+      platform.discoveryError = null;
+      await controller.retryDiscovery();
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.discovery.enabled, true);
+      expect(platform.permissionRequests, 0);
+    },
+  );
+
+  test('exit during discovery start waits and ignores late results', () async {
+    platform.discoveryGate = Completer<void>();
+    final initializing = controller.initialize();
     await Future<void>.delayed(Duration.zero);
-    expect(controller.discovery.enabled, true);
-    await controller.rename('客厅 Mac');
-    expect(platform.starts, 2);
-    expect(controller.device?.name, '客厅 Mac');
+    final exiting = controller.stopForExit();
+    platform.discoveryGate!.complete();
+    await initializing;
+    await exiting;
     platform.events.add(
       const DiscoverySnapshot(
         state: 'searching',
-        devices: [NearbyDevice('remote', '平板', 'android')],
+        devices: [NearbyDevice('late', '迟到设备', 'macos')],
       ),
     );
     await Future<void>.delayed(Duration.zero);
-    expect(controller.discovery.devices.single.name, '平板');
-    await controller.setDiscovery(false);
-    await Future<void>.delayed(Duration.zero);
-    expect(controller.discovery.devices, isEmpty);
     expect(controller.discovery.enabled, false);
+    expect(controller.discovery.devices, isEmpty);
+    expect(platform.stops, 1);
   });
 
   test(

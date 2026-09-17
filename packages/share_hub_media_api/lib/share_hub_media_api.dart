@@ -1,3 +1,12 @@
+export 'package:share_hub_session_api/share_hub_session_api.dart';
+
+export 'src/remote_session.dart';
+export 'src/video_description.dart';
+export 'src/video_ice_candidate.dart';
+export 'src/video_presentation_receipt.dart';
+export 'src/video_session_messages.dart';
+export 'src/video_playback.dart';
+
 import 'package:flutter/widgets.dart';
 
 enum CaptureSourceType { screen, window }
@@ -7,10 +16,15 @@ class CaptureSource {
     this.id,
     this.name, {
     this.type = CaptureSourceType.screen,
+    this.isPrimary = false,
   });
   final String id;
   final String name;
   final CaptureSourceType type;
+
+  /// True only for a screen positively identified as primary by the platform.
+  /// False also covers legacy engines without primary-display metadata.
+  final bool isPrimary;
 }
 
 abstract interface class PreviewEngine {

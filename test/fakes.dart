@@ -13,6 +13,8 @@ class FakePlatform implements MacPlatform {
   int permissionRequests = 0;
   bool grantPermission = false;
   Object? loadError;
+  Object? discoveryError;
+  Completer<void>? discoveryGate;
   Object? renameError;
   Completer<bool>? permissionCompleter;
   final openedSettings = <String>[];
@@ -47,6 +49,8 @@ class FakePlatform implements MacPlatform {
   @override
   Future<void> startDiscovery() async {
     starts++;
+    if (discoveryGate != null) await discoveryGate!.future;
+    if (discoveryError != null) throw discoveryError!;
     events.add(const DiscoverySnapshot(state: 'searching'));
   }
 
@@ -61,6 +65,10 @@ class FakePreviewEngine implements PreviewEngine {
   @override
   String? get unavailableReason => null;
   int sourceCalls = 0;
+  List<CaptureSource> availableSources = [
+    const CaptureSource('screen:1', '内建显示器', isPrimary: true),
+  ];
+  CaptureSource? startedSource;
   int starts = 0;
   int stops = 0;
   bool released = false;
@@ -74,7 +82,7 @@ class FakePreviewEngine implements PreviewEngine {
   @override
   Future<List<CaptureSource>> sources() async {
     sourceCalls++;
-    return [const CaptureSource('screen:1', '内建显示器')];
+    return availableSources;
   }
 
   @override
@@ -84,6 +92,7 @@ class FakePreviewEngine implements PreviewEngine {
     required VoidCallback onFirstFrame,
   }) async {
     starts++;
+    startedSource = source;
     ended = onEnded;
     firstFrame = onFirstFrame;
     await startCompleter?.future;

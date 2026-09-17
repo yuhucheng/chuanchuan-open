@@ -57,4 +57,54 @@ void main() {
     left.socket.add([0x7f, 0xff, 0xff, 0xff]);
     await expectLater(right.next(), throwsA(isA<ConnectionFailure>()));
   });
+  test(
+    'concurrent sends remain ordered and snapshot mutable caller data',
+    () async {
+      final sender = await CipherChannel.create(left, List.filled(32, 1), [
+        9,
+      ], host: true);
+      final receiver = await CipherChannel.create(right, List.filled(32, 1), [
+        9,
+      ], host: false);
+      final data = <String, dynamic>{'index': 0};
+      final writes = <Future<void>>[];
+      for (var i = 0; i < 8; i++) {
+        data['index'] = i;
+        writes.add(sender.send(data));
+      }
+      data['index'] = 99;
+      final read = Future(() async {
+        for (var i = 0; i < 8; i++) {
+          expect((await receiver.next())['index'], i);
+        }
+      });
+      await Future.wait([...writes, read]);
+    },
+  );
+  test(
+    'send queue and payload bounds reject without consuming sequence',
+    () async {
+      final sender = await CipherChannel.create(left, List.filled(32, 1), [
+        10,
+      ], host: true);
+      final receiver = await CipherChannel.create(right, List.filled(32, 1), [
+        10,
+      ], host: false);
+      await expectLater(
+        sender.send({'data': 'x' * 4096}),
+        throwsA(isA<ConnectionFailure>()),
+      );
+      final writes = List.generate(8, (i) => sender.send({'index': i}));
+      final excess = sender.send({'index': 8});
+      final read = Future(() async {
+        for (var i = 0; i < 8; i++) {
+          expect((await receiver.next())['index'], i);
+        }
+      });
+      await expectLater(excess, throwsA(isA<ConnectionFailure>()));
+      await Future.wait([...writes, read]);
+      await sender.send({'index': 9});
+      expect((await receiver.next())['index'], 9);
+    },
+  );
 }

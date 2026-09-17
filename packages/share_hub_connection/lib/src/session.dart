@@ -4,6 +4,8 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart' as hashes;
 import 'package:cryptography/cryptography.dart';
 
+import 'package:share_hub_session_api/share_hub_session_api.dart';
+
 import 'channel.dart';
 import 'identity.dart';
 
@@ -38,6 +40,13 @@ class CipherChannel {
   int _sent = 0;
   int _received = 0;
   final _cipher = AesGcm.with256bits();
+  Future<void> _sendTail = Future.value();
+  int _queuedSends = 0;
+  int _clearLimit = 4096;
+  void enableSessionFrames() {
+    _clearLimit = 98304;
+    wire.enableSessionFrames();
+  }
 
   static Future<CipherChannel> create(
     WireChannel wire,
@@ -69,11 +78,32 @@ class CipherChannel {
   List<int> _aad(int sequence) =>
       utf8.encode(jsonEncode([1, sessionId, sequence]));
 
-  Future<void> send(Map<String, dynamic> body) async {
+  Future<void> send(Map<String, dynamic> body) {
+    // Capture the caller's data now; serialize encryption and writes so an
+    // asynchronous cipher cannot put sequence N+1 on the wire before N.
+    final clear = utf8.encode(jsonEncode(body));
+    if (clear.length > _clearLimit || _queuedSends >= 8) {
+      return Future.error(const ConnectionFailure('message_limit'));
+    }
+    _queuedSends++;
+    final pending = _sendTail.then((_) => _sendEncoded(clear));
+    _sendTail = pending.then<void>(
+      (_) {
+        _queuedSends--;
+      },
+      onError: (Object _, StackTrace _) {
+        _queuedSends--;
+        wire.close();
+      },
+    );
+    return pending;
+  }
+
+  Future<void> _sendEncoded(List<int> clear) async {
     if (_sent >= 0x100000000) throw const ConnectionFailure('session_limit');
     final sequence = _sent++;
     final box = await _cipher.encrypt(
-      utf8.encode(jsonEncode(body)),
+      clear,
       secretKey: _sendKey,
       nonce: _nonce(sequence),
       aad: _aad(sequence),
@@ -121,8 +151,17 @@ class CipherChannel {
 
 /// A live authenticated control connection, not a media or input permission.
 /// Grants are never serialized or restored. There is no renewal operation.
-class TrustedConnection {
-  TrustedConnection(this._channel, this.peerKey, this.lease, this._clock);
+class TrustedConnection implements SessionTransport {
+  TrustedConnection(
+    this._channel,
+    this.peerKey,
+    this.lease,
+    this._clock, {
+    this.grant,
+  });
+
+  /// Opt-in v2 contract material. No remote media capabilities are implied.
+  final GrantEndpoint? grant;
   final CipherChannel _channel;
   final String peerKey;
   final SessionLease lease;
@@ -141,6 +180,164 @@ class TrustedConnection {
   bool get isClosed => _reason != null;
   // No remote media/input/file implementation has been accepted yet.
   Set<String> get capabilities => const {};
+
+  void Function(VerifiedSessionMessage)? _onRequest;
+  SessionAuthorization? Function(String)? _resolveSession;
+  void Function(VerifiedSessionSignal)? _onSignal;
+  int _receiverGeneration = 0, _queuedOperations = 0;
+  Future<void> _operationTail = Future.value();
+
+  GrantEndpoint get _endpoint {
+    final endpoint = grant;
+    if (isClosed || endpoint == null) {
+      throw const ConnectionFailure('session_unavailable');
+    }
+    return endpoint;
+  }
+
+  @override
+  Future<LocalSessionRequest> createRequest(
+    SessionOperation operation,
+    String sessionId,
+    String body,
+  ) => _endpoint.authorizeLocal(operation, sessionId, body);
+
+  @override
+  void attachReceiver({
+    required void Function(VerifiedSessionMessage) onRequest,
+    required SessionAuthorization? Function(String) resolveSession,
+    required void Function(VerifiedSessionSignal) onSignal,
+  }) {
+    _endpoint;
+    if (_onRequest != null) throw StateError('Receiver already attached');
+    _receiverGeneration++;
+    _onRequest = onRequest;
+    _resolveSession = resolveSession;
+    _onSignal = onSignal;
+  }
+
+  @override
+  void detachReceiver() {
+    _receiverGeneration++;
+    _onRequest = null;
+    _resolveSession = null;
+    _onSignal = null;
+  }
+
+  Future<void> _enqueueOperation(Future<void> Function() write) {
+    if (isClosed || _queuedOperations >= 8) {
+      return Future.error(
+        const ConnectionFailure('session_unavailable_or_busy'),
+      );
+    }
+    _queuedOperations++;
+    final pending = _operationTail.then((_) async {
+      if (isClosed) throw const ConnectionFailure('disconnected');
+      await write();
+    });
+    _operationTail = pending.then<void>(
+      (_) {
+        _queuedOperations--;
+      },
+      onError: (Object _, StackTrace _) {
+        _queuedOperations--;
+      },
+    );
+    return pending;
+  }
+
+  @override
+  Future<void> sendRequest(LocalSessionRequest request) =>
+      _enqueueOperation(() async {
+        final packet = await _endpoint.sealRequest(request);
+        if (isClosed) throw const ConnectionFailure('disconnected');
+        await _sendOperationPacket({
+          'type': 'operation-request',
+          'packet': _packetMap(packet),
+        });
+      });
+
+  @override
+  Future<void> sendSignal(SessionAuthorization authorization, String body) {
+    if (utf8.encode(body).length > 65536) {
+      return Future.error(const ConnectionFailure('message_limit'));
+    }
+    return _enqueueOperation(() async {
+      final packet = await _endpoint.sealSignal(authorization, body);
+      if (isClosed) throw const ConnectionFailure('disconnected');
+      await _sendOperationPacket({
+        'type': 'operation-signal',
+        'sessionId': authorization.sessionId,
+        'packet': _packetMap(packet),
+      });
+    });
+  }
+
+  Future<void> _sendOperationPacket(Map<String, dynamic> packet) async {
+    try {
+      await _channel.send(packet);
+    } catch (_) {
+      // An inner sequence was already reserved. Never continue with a gap.
+      close('operation_transport_failed');
+      rethrow;
+    }
+  }
+
+  static Map<String, dynamic> _packetMap(SessionEnvelope packet) => {
+    'generation': packet.generation,
+    'sequence': packet.sequence,
+    'ciphertext': encodeBytes(packet.ciphertext),
+    'mac': encodeBytes(packet.mac),
+  };
+
+  static SessionEnvelope _parsePacket(Object? value) {
+    if (value is! Map ||
+        value['generation'] is! int ||
+        value['sequence'] is! int ||
+        value['ciphertext'] is! String) {
+      throw const ConnectionFailure('invalid_message');
+    }
+    final encoded = value['ciphertext'] as String;
+    if (encoded.length > 87384) throw const ConnectionFailure('message_limit');
+    final bytes = base64Url.decode(encoded);
+    if (encodeBytes(bytes) != encoded) {
+      throw const ConnectionFailure('invalid_message');
+    }
+    return SessionEnvelope(
+      generation: value['generation'],
+      sequence: value['sequence'],
+      ciphertext: bytes,
+      mac: decodeBytes(value['mac'], 16),
+    );
+  }
+
+  Future<void> _receiveOperation(Map<String, dynamic> message) async {
+    final generation = _receiverGeneration;
+    final endpoint = _endpoint;
+    final packet = _parsePacket(message['packet']);
+    if (message['type'] == 'operation-request') {
+      final request = await endpoint.open(packet);
+      if (!isClosed && generation == _receiverGeneration) {
+        request.requireCurrent();
+        _onRequest?.call(request);
+      }
+    } else {
+      final id = message['sessionId'];
+      if (id is! String || id.isEmpty || id.length > 128) {
+        throw const ConnectionFailure('invalid_message');
+      }
+      final authorization = _resolveSession?.call(id);
+      if (authorization == null) {
+        await endpoint.discardSignal(packet);
+        return;
+      }
+      final signal = await endpoint.openSignal(authorization, packet);
+      if (!isClosed && generation == _receiverGeneration) {
+        signal.requireCurrent();
+        _onSignal?.call(signal);
+      }
+    }
+  }
 
   void startMonitoring() {
     if (_monitoring || isClosed) return;
@@ -207,7 +404,11 @@ class TrustedConnection {
           close('expired');
           return;
         }
-        if (message['type'] != 'heartbeat') {
+        if (grant != null &&
+            (message['type'] == 'operation-request' ||
+                message['type'] == 'operation-signal')) {
+          await _receiveOperation(message);
+        } else if (message['type'] != 'heartbeat') {
           // A paired device has no implicit input/file/media permission.
           close('unsupported_operation');
           return;
@@ -221,6 +422,8 @@ class TrustedConnection {
   void close([String reason = 'revoked']) {
     if (isClosed) return;
     _reason = reason;
+    detachReceiver();
+    grant?.revoke();
     lease.revoke();
     _timer?.cancel();
     _deadline?.cancel();

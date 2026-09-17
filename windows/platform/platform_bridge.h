@@ -14,6 +14,7 @@ class PlatformBridge {
   ~PlatformBridge();
   bool HandleMessage(UINT message, WPARAM wparam);
   void Close();
+  void CancelFilePicker();
  private:
   struct Impl;
   std::shared_ptr<Impl> impl_;

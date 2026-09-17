@@ -1,3 +1,5 @@
+import 'field_test_helpers.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -41,7 +43,7 @@ void main() {
     final app = tester.widget<ShareHubApp>(find.byType(ShareHubApp));
     expect(app.previewEngine, isNotNull);
     expect(app.previewEngine.unavailableReason, isNull);
-    await tester.tap(find.byTooltip('屏幕预览'));
+    await openFieldTool(tester, '屏幕预览');
     await tester.pumpAndSettle();
     expect(find.text('读取屏幕与窗口'), findsOneWidget);
     expect(calls, isNot(contains('requestScreenRecording')));

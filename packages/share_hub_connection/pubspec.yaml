@@ -5,6 +5,8 @@ publish_to: none
 environment:
   sdk: '>=3.13.2 <4.0.0'
 dependencies:
+  share_hub_session_api:
+    path: ../share_hub_session_api
   crypto: 3.0.6
   cryptography: 2.9.0
   pointycastle: 4.0.0

@@ -43,6 +43,8 @@ final class FileAccessBridge {
         }
     }
 
+    func cancelPicker() { panel?.cancel(nil) }
+
     func close() {
         closed = true
         panel?.cancel(nil)
