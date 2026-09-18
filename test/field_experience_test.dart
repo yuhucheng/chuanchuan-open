@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:share_hub_open/platform/client_platform.dart';
 import 'package:share_hub_open/ui/client_app.dart';
+import 'package:share_hub_open/features/devices/device_directory.dart';
 import 'package:share_hub_open/ui/field/device_field.dart';
 import 'package:share_hub_open/ui/field/appearance.dart';
 
@@ -40,13 +41,15 @@ void main() {
                 refresh = setState;
                 return SingleChildScrollView(
                   child: DeviceField(
-                    devices: devices,
+                    entries: devices
+                        .map(DirectoryDevice.fromDiscovered)
+                        .toList(),
                     localName: '本机',
                     allowConnections: false,
                     query: query,
                     onLocal: () {},
                     onDevice: (d) async {
-                      opened = d.id;
+                      opened = d.identityId;
                     },
                   ),
                 );
@@ -104,8 +107,14 @@ void main() {
         home: Scaffold(
           body: SingleChildScrollView(
             child: DeviceField(
-              devices: const [
-                NearbyDevice('long', '办公室里名称非常长的中文电脑设备用于布局验收', 'macos'),
+              entries: [
+                DirectoryDevice.fromDiscovered(
+                  const NearbyDevice(
+                    'long',
+                    '办公室里名称非常长的中文电脑设备用于布局验收',
+                    'macos',
+                  ),
+                ),
               ],
               localName: '本机名称也很长但依然应保持可读和可操作',
               allowConnections: false,
@@ -157,7 +166,8 @@ void main() {
       expect(find.byTooltip('屏幕预览'), findsNothing);
       expect(find.byTooltip('文件传送'), findsNothing);
       expect(find.byType(NavigationRail), findsNothing);
-      final node = find.byKey(const ValueKey('device-other'));
+      // The field keys a node by identity, not by the display name.
+      final node = find.byKey(const ValueKey('device-key'));
       await tester.tap(node);
       await tester.pumpAndSettle();
       expect(find.text('远控 · 尚未交付'), findsNothing);
@@ -243,7 +253,7 @@ void main() {
       MaterialApp(
         home: Scaffold(
           body: DeviceField(
-            devices: const [],
+            entries: const [],
             localName: '本机',
             allowConnections: false,
             onLocal: () => calls++,

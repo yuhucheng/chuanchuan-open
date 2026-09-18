@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:share_hub_connection/share_hub_connection.dart';
 
 import '../../features/connections/connection_controller.dart';
 import '../../features/connections/connection_panel.dart';
 import '../../features/desktop/desktop_lifecycle.dart';
 import '../../features/devices/device_controller.dart';
+import '../../features/devices/device_directory.dart';
 import '../../features/preview/preview_controller.dart';
 import '../../features/preview/preview_engine.dart';
 import '../../features/transfers/transfer_queue.dart';
@@ -38,6 +40,45 @@ class FieldShell extends StatefulWidget {
 class _FieldShellState extends State<FieldShell> {
   final search = TextEditingController();
   final name = TextEditingController();
+
+  /// Display material for identities verified during this run. It is never
+  /// persisted and authorizes nothing: a saved entry must re-prove its identity
+  /// with a new short code.
+  final _verifiedNames = <String, String>{};
+
+  /// Connection is shipped for macOS only; other hosts keep discovery read-only.
+  bool get _connectionSupported =>
+      widget.targetPlatform == TargetPlatform.macOS;
+
+  /// Discovery, trust, reachability and capability are projected from the
+  /// current snapshot and the live authenticated sessions only.
+  List<DirectoryDevice> _directory() {
+    final connected = <String, TrustedConnection>{};
+    for (final session in widget.connections.sessions) {
+      if (!session.isClosed) connected[session.peerKey] = session;
+    }
+    final advertised = <String, String>{};
+    for (final device in widget.devices.discovery.devices) {
+      if (device.publicKey != null) advertised[device.publicKey!] = device.name;
+    }
+    for (final key in connected.keys) {
+      _verifiedNames[key] = advertised[key] ?? _verifiedNames[key] ?? '已保存设备';
+    }
+    final peers = <VerifiedPeer>[
+      for (final key in {...connected.keys, ..._verifiedNames.keys})
+        VerifiedPeer(
+          publicKey: key,
+          name: _verifiedNames[key],
+          connected: connected.containsKey(key),
+          capabilities: connected[key]?.capabilities ?? const {},
+        ),
+    ];
+    return buildDeviceDirectory(
+      discovery: widget.devices.discovery,
+      verified: peers,
+    );
+  }
+
   @override
   void dispose() {
     search.dispose();
@@ -176,11 +217,7 @@ class _FieldShellState extends State<FieldShell> {
                               child: const Text('重试发现'),
                             ),
                           DeviceField(
-                            devices: widget.devices.discovery.devices,
-                            verifiedPeers: widget.connections.sessions
-                                .where((s) => !s.isClosed)
-                                .map((s) => s.peerKey)
-                                .toSet(),
+                            entries: _directory(),
                             localName: widget.devices.device?.name ?? '正在读取本机',
                             allowConnections: widget.connections.accepting,
                             query: search.text,
@@ -245,50 +282,58 @@ class _FieldShellState extends State<FieldShell> {
       ],
     ),
   );
-  Future<void> deviceActions(NearbyDevice device) async {
-    final available = widget.devices.discovery.devices.any(
-      (d) => d.id == device.id && d.publicKey == device.publicKey,
-    );
-    if (!available) return;
+  Future<void> deviceActions(DirectoryDevice entry) async {
+    // Actions bind to the identity of the selected entry and are re-derived
+    // before anything is attempted.
+    final selected = _directory()
+        .where((item) => item.identityId == entry.identityId)
+        .firstOrNull;
+    if (selected == null || !selected.online) return;
     final action = await showDialog<bool>(
       context: context,
       builder: (context) => AnimatedBuilder(
         animation: widget.connections,
         builder: (_, _) {
-          final connected = widget.connections.sessions.any(
-            (s) => !s.isClosed && s.peerKey == device.publicKey,
-          );
-          final canConnect =
-              widget.targetPlatform == TargetPlatform.macOS &&
-              device.host != null &&
-              device.port != null &&
-              device.publicKey != null;
+          final live = _directory()
+              .where((item) => item.identityId == entry.identityId)
+              .firstOrNull;
+          if (live == null) return const SizedBox.shrink();
           return AlertDialog(
-            title: Text(device.name),
+            title: Text(live.name),
             content: SingleChildScrollView(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text(connected ? '身份已验证 · 本次连接有效' : '发现设备 · 尚未验证身份'),
-                  const Text('时延未测。当前可建立可信连接。'),
+                  Text(
+                    live.connected
+                        ? '身份已验证 · 本次连接有效'
+                        : live.verified
+                        ? '身份已验证 · 当前未连接'
+                        : '发现设备 · 尚未验证身份',
+                  ),
+                  const Text('设备名称与网络可见性都不是身份凭证，连接始终需要 6 位短接码。'),
+                  const Text('时延未测。'),
+                  if (live.connected && live.capabilities.isEmpty)
+                    const Text('对端未协商任何操作能力，暂不提供观看、控制与文件入口。'),
                   const SizedBox(height: 16),
-                  if (!connected && canConnect)
+                  if (live.connected)
+                    for (final session in widget.connections.sessions.where(
+                      (s) => !s.isClosed && s.peerKey == live.publicKey,
+                    ))
+                      TextButton(
+                        onPressed: session.close,
+                        child: const Text('断开并撤销授权'),
+                      )
+                  else if (live.connectable && _connectionSupported)
                     FilledButton(
                       onPressed: widget.connections.busy
                           ? null
                           : () => Navigator.pop(context, true),
                       child: const Text('连接设备'),
-                    ),
-                  if (!connected && !canConnect)
+                    )
+                  else
                     const Text('对端未提供可验证的连接入口，或本平台尚未支持连接。'),
-                  for (final session in widget.connections.sessions.where(
-                    (s) => s.peerKey == device.publicKey,
-                  ))
-                    TextButton(
-                      onPressed: session.close,
-                      child: const Text('断开并撤销授权'),
-                    ),
                 ],
               ),
             ),
@@ -303,14 +348,21 @@ class _FieldShellState extends State<FieldShell> {
       ),
     );
     if (action == true && mounted) {
-      final current = widget.devices.discovery.devices
-          .where((d) => d.id == device.id && d.publicKey == device.publicKey)
+      final latest = _directory()
+          .where((item) => item.identityId == entry.identityId)
           .firstOrNull;
-      if (current != null) {
+      if (latest != null && latest.connectable) {
         await showConnectionDialog(
           context,
           widget.connections,
-          device: current,
+          device: NearbyDevice(
+            latest.identityId,
+            latest.name,
+            latest.platform,
+            host: latest.host,
+            port: latest.port,
+            publicKey: latest.publicKey,
+          ),
         );
       }
     }

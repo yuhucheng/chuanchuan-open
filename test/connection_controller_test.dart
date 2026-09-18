@@ -73,6 +73,33 @@ void main() {
     expect(b.code, matches(RegExp(r'^\d{6}$')));
   });
 
+  test('closing admission refuses new inbound even with the old code', () async {
+    final bPlatform = FakeConnectionPlatform();
+    final b = ConnectionController(bPlatform);
+    final bIdentity = await DeviceIdentity.fromSeed(List.filled(32, 41));
+    bPlatform.seed.complete(bIdentity);
+    await b.open();
+    final port = bPlatform.advertisements.whereType<int>().last;
+    final code = b.code!;
+    await b.disconnectAll();
+    expect(b.accepting, isFalse);
+    expect(b.code, isNull);
+    final cPlatform = FakeConnectionPlatform();
+    final c = ConnectionController(cPlatform);
+    addTearDown(() {
+      c.dispose();
+      b.dispose();
+    });
+    cPlatform.seed.complete(await DeviceIdentity.fromSeed(List.filled(32, 42)));
+    await c.connect(
+      '127.0.0.1',
+      port,
+      code,
+      expectedPeerKey: bIdentity.encodedKey,
+    );
+    expect(c.sessions, isEmpty);
+    expect(c.message, contains('连接未建立'));
+  });
   test(
     'cancel while loading identity cannot start listener from late result',
     () async {

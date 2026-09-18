@@ -18,7 +18,9 @@ import 'package:cryptography/cryptography.dart' as crypto;
 import 'package:share_hub_session_api/share_hub_session_api.dart';
 
 const offerLifetime = Duration(minutes: 5);
-const handshakeTimeout = Duration(seconds: 30);
+/// Default budget for one handshake attempt. Hosts and tests may shorten it;
+/// an expired attempt is cancelled, never completed late.
+const defaultHandshakeTimeout = Duration(seconds: 30);
 final _group = SRP6StandardGroups.rfc5054_3072;
 FortunaRandom _random() => FortunaRandom()..seed(KeyParameter(randomBytes(32)));
 Uint8List _bytes(BigInt value, int length) {
@@ -93,12 +95,14 @@ class PairingHost {
     required this.clock,
     required this.onConnection,
     this.protocolVersion = 1,
+    this.handshakeTimeout = defaultHandshakeTimeout,
   }) {
     if (protocolVersion != 1 && protocolVersion != 2) {
       throw ArgumentError.value(protocolVersion);
     }
   }
   final int protocolVersion;
+  final Duration handshakeTimeout;
   final DeviceIdentity identity;
   final ContinuousClock clock;
   final void Function(TrustedConnection) onConnection;
@@ -291,12 +295,14 @@ class PairingAttempt {
     required this.identity,
     required this.clock,
     this.protocolVersion = 1,
+    this.handshakeTimeout = defaultHandshakeTimeout,
   }) {
     if (protocolVersion != 1 && protocolVersion != 2) {
       throw ArgumentError.value(protocolVersion);
     }
   }
   final int protocolVersion;
+  final Duration handshakeTimeout;
   final DeviceIdentity identity;
   final ContinuousClock clock;
   bool _cancelled = false;

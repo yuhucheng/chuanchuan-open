@@ -284,4 +284,67 @@ void main() {
       });
     });
   }
+
+  group('handshake timeout', () {
+    const budget = Duration(milliseconds: 150);
+
+    test('a stalled attempt is cancelled, never completed late', () async {
+      final stalled = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      final sockets = <Socket>[];
+      stalled.listen(sockets.add);
+      addTearDown(() async {
+        for (final socket in sockets) {
+          socket.destroy();
+        }
+        await stalled.close();
+      });
+      final identity = await DeviceIdentity.fromSeed(List.filled(32, 9));
+      await expectLater(
+        PairingAttempt(
+          identity: identity,
+          clock: () async => 1000,
+          handshakeTimeout: budget,
+        ).connect('127.0.0.1', stalled.port, '123456'),
+        throwsA(
+          isA<ConnectionFailure>().having(
+            (error) => error.code,
+            'code',
+            'cancelled',
+          ),
+        ),
+      );
+      expect(sockets, isNotEmpty);
+    });
+
+    test('host budget drops a stalled handshake without authorizing it', () async {
+      final hostIdentity = await DeviceIdentity.fromSeed(List.filled(32, 11));
+      final clientIdentity = await DeviceIdentity.fromSeed(List.filled(32, 12));
+      final accepted = <TrustedConnection>[];
+      final host = PairingHost(
+        identity: hostIdentity,
+        clock: () async => 1000,
+        onConnection: accepted.add,
+        handshakeTimeout: budget,
+      );
+      addTearDown(host.close);
+      await host.open(address: InternetAddress.loopbackIPv4);
+      final wire = WireChannel(
+        await Socket.connect('127.0.0.1', host.port!),
+      );
+      wire.send({
+        'v': 1,
+        'type': 'hello',
+        'key': clientIdentity.encodedKey,
+        'nonce': base64Url.encode(List.filled(32, 3)),
+      });
+      expect((await wire.next())['type'], 'challenge');
+      await expectLater(wire.next(), throwsA(isA<ConnectionFailure>()));
+      expect(accepted, isEmpty);
+      // The abandoned attempt consumed no authorization: the code stays usable
+      // for the caller's remaining reservations.
+      expect(host.offer!.code, matches(RegExp(r'^[0-9]{6}$')));
+      expect(host.offer!.reservable(1000), isTrue);
+      wire.close();
+    });
+  });
 }

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:share_hub_connection/share_hub_connection.dart';
 import 'package:share_hub_open/features/connections/connection_controller.dart';
 import 'package:share_hub_open/features/desktop/desktop_lifecycle.dart';
 import 'package:share_hub_open/features/devices/device_controller.dart';
@@ -142,6 +143,53 @@ void main() {
       final stateWrites = calls.where((v) => v == 'state').length;
       expect(await lifecycle.requestExit(), true);
       expect(calls.where((v) => v == 'state').length, stateWrites);
+    },
+  );
+  test(
+    'restart restores the admission preference and no authorization',
+    () async {
+      const restart = MethodChannel('test/desktop-restart');
+      final published = <bool>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(restart, (call) async {
+            if (call.method == 'initialize') return {'allowConnections': true};
+            if (call.method == 'state') {
+              published.add(
+                (call.arguments as Map)['allowConnections'] as bool,
+              );
+            }
+            return null;
+          });
+      addTearDown(() async {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(restart, null);
+      });
+      final connectionPlatform = FakeConnectionPlatform();
+      final restored = ConnectionController(connectionPlatform);
+      final restarted = DesktopLifecycle(
+        devices: devices,
+        connections: restored,
+        preview: preview,
+        transfers: transfers,
+        connectionSupported: true,
+        channel: restart,
+      );
+      addTearDown(() async {
+        await restored.disconnectAll();
+        restarted.dispose();
+        restored.dispose();
+      });
+      connectionPlatform.seed.complete(
+        await DeviceIdentity.fromSeed(List.filled(32, 31)),
+      );
+      await restarted.initialize();
+      // The remembered switch reopens admission with a brand new context.
+      expect(restored.accepting, isTrue);
+      expect(restored.code, matches(RegExp(r'^\d{6}$')));
+      // Only the preference survives a restart: no session, no grant, and the
+      // previous run's code cannot be replayed into this process.
+      expect(restored.sessions, isEmpty);
+      expect(published.last, isTrue);
     },
   );
 }

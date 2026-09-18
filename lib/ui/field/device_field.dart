@@ -3,7 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 
-import '../../platform/client_platform.dart';
+import '../../features/devices/device_directory.dart';
 import 'tokens.dart';
 
 /// Arrival order is retained, including offline slots, for this field's lifetime.
@@ -11,26 +11,24 @@ import 'tokens.dart';
 class DeviceField extends StatefulWidget {
   const DeviceField({
     super.key,
-    required this.devices,
+    required this.entries,
     required this.localName,
     required this.allowConnections,
     required this.onLocal,
     required this.onDevice,
     this.query = '',
-    this.verifiedPeers = const {},
   });
-  final List<NearbyDevice> devices;
-  final Set<String> verifiedPeers;
+  final List<DirectoryDevice> entries;
   final String localName, query;
   final bool allowConnections;
   final VoidCallback onLocal;
-  final Future<void> Function(NearbyDevice) onDevice;
+  final Future<void> Function(DirectoryDevice) onDevice;
   @override
   State<DeviceField> createState() => _DeviceFieldState();
 }
 
 class _DeviceFieldState extends State<DeviceField> {
-  final _known = <String, NearbyDevice>{};
+  final _known = <String, DirectoryDevice>{};
   final _focus = <String, FocusNode>{};
   final _aggregateFocus = FocusNode(debugLabel: 'aggregate');
   bool _expanded = false;
@@ -47,9 +45,12 @@ class _DeviceFieldState extends State<DeviceField> {
   }
 
   void _remember() {
-    for (final device in widget.devices) {
-      _known[device.id] = device;
-      _focus.putIfAbsent(device.id, () => FocusNode(debugLabel: device.id));
+    for (final entry in widget.entries) {
+      _known[entry.identityId] = entry;
+      _focus.putIfAbsent(
+        entry.identityId,
+        () => FocusNode(debugLabel: entry.identityId),
+      );
     }
   }
 
@@ -62,13 +63,31 @@ class _DeviceFieldState extends State<DeviceField> {
     super.dispose();
   }
 
+  /// Discovery, trust, reachability and capability stay four separate facts.
+  /// A retained slot that is absent from the current snapshot is not reachable,
+  /// and a verified identity stays saved material only.
+  static String describe(DirectoryDevice entry, {bool present = true}) {
+    if (!present) return entry.verified ? '已保存资料 · 需重新输码' : '已离线';
+    if (entry.connected) {
+      return entry.capabilities.isEmpty
+          ? '${entry.platform} · 已验证连接 · 暂无可用操作'
+          : '${entry.platform} · 已验证连接';
+    }
+    if (!entry.verified) return '${entry.platform} · 未认证发现';
+    return entry.online ? '${entry.platform} · 已验证 · 未连接' : '已保存资料 · 需重新输码';
+  }
+
   @override
   Widget build(BuildContext context) {
-    final online = widget.devices.map((d) => d.id).toSet();
+    final online = widget.entries
+        .where((entry) => entry.online)
+        .map((entry) => entry.identityId)
+        .toSet();
     final filtered = _known.values
         .where(
-          (d) =>
-              d.name.toLowerCase().contains(widget.query.trim().toLowerCase()),
+          (entry) => entry.name.toLowerCase().contains(
+            widget.query.trim().toLowerCase(),
+          ),
         )
         .toList();
     final visible = _expanded ? filtered : filtered.take(5).toList();
@@ -90,20 +109,21 @@ class _DeviceFieldState extends State<DeviceField> {
             onPressed: widget.onLocal,
             local: true,
           ),
-          for (final device in visible)
+          for (final entry in visible)
             _node(
               context,
-              key: ValueKey('device-${device.id}'),
-              name: device.name,
-              detail: online.contains(device.id)
-                  ? '${device.platform} · ${widget.verifiedPeers.contains(device.publicKey) ? '已验证连接' : '未认证发现'}'
-                  : '已离线',
+              key: ValueKey('device-${entry.identityId}'),
+              name: entry.name,
+              detail: describe(
+                entry,
+                present: online.contains(entry.identityId),
+              ),
               icon: Icons.devices,
-              focus: _focus[device.id],
-              onPressed: online.contains(device.id)
+              focus: _focus[entry.identityId],
+              onPressed: online.contains(entry.identityId)
                   ? () async {
-                      await widget.onDevice(device);
-                      if (mounted) _focus[device.id]?.requestFocus();
+                      await widget.onDevice(entry);
+                      if (mounted) _focus[entry.identityId]?.requestFocus();
                     }
                   : null,
             ),
@@ -119,7 +139,7 @@ class _DeviceFieldState extends State<DeviceField> {
                 setState(() => _expanded = true);
                 WidgetsBinding.instance.addPostFrameCallback((_) {
                   if (mounted) {
-                    _focus[filtered[visible.length].id]?.requestFocus();
+                    _focus[filtered[visible.length].identityId]?.requestFocus();
                   }
                 });
               },
