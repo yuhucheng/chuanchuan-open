@@ -5,7 +5,12 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:share_hub_media_api/share_hub_media_api.dart';
 import 'package:share_hub_media_sdk/share_hub_media_sdk.dart';
+import 'package:share_hub_open/features/connections/connection_controller.dart';
+import 'package:share_hub_open/features/desktop/desktop_lifecycle.dart';
+import 'package:share_hub_open/features/devices/device_controller.dart';
 import 'package:share_hub_open/features/preview/preview_controller.dart';
+import 'package:share_hub_open/features/transfers/file_access.dart';
+import 'package:share_hub_open/features/transfers/transfer_queue.dart';
 import 'package:share_hub_open/platform/client_platform.dart';
 
 /// Development-only macOS acceptance entry.
@@ -24,6 +29,10 @@ import 'package:share_hub_open/platform/client_platform.dart';
 ///   20 real start/stop cycles.
 /// * `source-loss|<needle>,<needle>` — captures the first window source whose
 ///   name contains a needle, then waits for an external close of that source.
+/// * `background` — drives the real background matrix (minimize, app hide,
+///   close-to-background, external reopen, exit) through the shipped
+///   [DesktopLifecycle] while sampling native capture telemetry, so
+///   "still capturing while hidden" is measured rather than inferred.
 ///
 /// The engine view is mounted exactly like the shipped client does. The native
 /// bridge only reports `firstFrame` from the first `copyPixelBuffer()` call, so
@@ -41,6 +50,7 @@ Future<void> main() async {
     'revocation' => await _revocationRun(engine, home),
     'lifecycle' => await _lifecycleRun(engine),
     'source-loss' => await _sourceLossRun(engine, home, mode),
+    'background' => await _backgroundRun(engine, home),
     _ => await _runAcceptance(engine),
   };
   await _writeReport(home, report);
@@ -761,5 +771,315 @@ Future<void> _revocationScenario(
     if (readiness.existsSync()) await readiness.delete();
   } catch (_) {
     // The runner clears it anyway; a leftover marker is not a failure.
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Background matrix (6.1 / 7.1 / 7.2, macOS side)
+// ---------------------------------------------------------------------------
+
+const _desktopChannel = MethodChannel('dev.sharehub.client/desktop');
+// Read-only use only: the SDK owns this channel's inbound handler, and
+// registering another one here would silently steal `firstFrame`/`ended`.
+const _previewChannel = MethodChannel('dev.sharehub.client/preview');
+
+Future<Map<String, dynamic>> _windowState() async {
+  try {
+    return await _desktopChannel
+            .invokeMapMethod<String, dynamic>('window.state') ??
+        <String, dynamic>{};
+  } catch (error) {
+    return <String, dynamic>{'error': error.toString()};
+  }
+}
+
+Future<Map<String, dynamic>> _windowAction(String action) async {
+  try {
+    return await _desktopChannel.invokeMapMethod<String, dynamic>(
+          'window.action',
+          {'action': action},
+        ) ??
+        <String, dynamic>{};
+  } catch (error) {
+    return <String, dynamic>{'error': error.toString()};
+  }
+}
+
+Future<Map<String, dynamic>> _captureStats() async {
+  try {
+    return await _previewChannel
+            .invokeMapMethod<String, dynamic>('stats') ??
+        <String, dynamic>{};
+  } catch (error) {
+    return <String, dynamic>{'error': error.toString()};
+  }
+}
+
+Future<List<dynamic>> _systemIndicators() async {
+  try {
+    return await _desktopChannel.invokeListMethod<dynamic>(
+          'system.indicators',
+        ) ??
+        const <dynamic>[];
+  } catch (_) {
+    return const <dynamic>[];
+  }
+}
+
+Future<bool> _waitUntilAsync(
+  Future<bool> Function() done,
+  Duration limit,
+) async {
+  final until = DateTime.now().add(limit);
+  while (DateTime.now().isBefore(until)) {
+    if (await done()) return true;
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+  }
+  return done();
+}
+
+int _frameCount(Map<String, dynamic> stats, String key) =>
+    (stats[key] as num?)?.toInt() ?? 0;
+
+/// One background stage: settle, read the observable window/tray state, then
+/// measure how many frames the capture produced over a fixed sampling window.
+/// `capturedDelta` is the measurement that separates "the capture stopped" from
+/// "only the renderer paused".
+Future<Map<String, dynamic>> _observeStage({
+  required String stage,
+  required Duration settle,
+  required Duration window,
+}) async {
+  await Future<void>.delayed(settle);
+  final state = await _windowState();
+  final first = await _captureStats();
+  final sampledAt = DateTime.now();
+  await Future<void>.delayed(window);
+  final second = await _captureStats();
+  return <String, dynamic>{
+    'stage': stage,
+    'at': sampledAt.toIso8601String(),
+    'window': state,
+    'sampleWindowMs': window.inMilliseconds,
+    'capturedFramesStart': _frameCount(first, 'capturedFrames'),
+    'capturedFramesEnd': _frameCount(second, 'capturedFrames'),
+    'capturedDelta':
+        _frameCount(second, 'capturedFrames') -
+        _frameCount(first, 'capturedFrames'),
+    'renderedFramesStart': _frameCount(first, 'renderedFrames'),
+    'renderedFramesEnd': _frameCount(second, 'renderedFrames'),
+    'renderedDelta':
+        _frameCount(second, 'renderedFrames') -
+        _frameCount(first, 'renderedFrames'),
+    'sessionId': second['sessionId'],
+    'running': second['running'],
+    'acceptingFrames': second['acceptingFrames'],
+    'hasPixelBuffer': second['hasPixelBuffer'],
+    'lastFrameAgeMs': second['lastFrameAgeMs'],
+  };
+}
+
+Future<Map<String, dynamic>> _backgroundRun(
+  PreviewEngine engine,
+  String home,
+) async {
+  await Future<void>.delayed(const Duration(milliseconds: 800));
+  final report = <String, dynamic>{
+    'platform': Platform.operatingSystem,
+    'mode': 'background',
+    'startedAt': DateTime.now().toIso8601String(),
+  };
+  await Future.any([
+    _backgroundScenario(engine, home, report),
+    Future<void>.delayed(const Duration(seconds: 240), () {
+      report['watchdogExpired'] = true;
+    }),
+  ]);
+  report['finishedAt'] = DateTime.now().toIso8601String();
+  return report;
+}
+
+Future<void> _backgroundScenario(
+  PreviewEngine engine,
+  String home,
+  Map<String, dynamic> report,
+) async {
+  final platform = MethodChannelClientPlatform();
+  final preview = PreviewController(platform, engine);
+  final transfers = TransferQueue(MethodChannelFileAccess());
+  // The shipped background owner, wired exactly as the client wires it.
+  final desktop = DesktopLifecycle(
+    devices: DeviceController(platform),
+    connections: ConnectionController(MacConnectionPlatform()),
+    preview: preview,
+    transfers: transfers,
+    connectionSupported: false,
+  );
+  final stages = <Map<String, dynamic>>[];
+
+  try {
+    report['permissions'] = await _permissionSnapshot(platform);
+    await desktop.initialize();
+    final tray = await _windowState();
+    report['trayAfterInitialize'] = tray;
+    report['desktopError'] = desktop.error;
+    report['trayReady'] =
+        tray['trayInstalled'] == true && tray['trayButtonAvailable'] == true;
+
+    await preview.loadSources();
+    report['loadSources'] = <String, dynamic>{
+      'sources': preview.sources.length,
+      'selected': preview.selected?.name,
+      'error': preview.error,
+    };
+    if (preview.sources.where((item) => item.isPrimary).length != 1) {
+      report['outcome'] = 'no-unique-primary';
+      return;
+    }
+    await preview.start();
+    final started = await _waitUntil(
+      () => preview.active && preview.firstFrame,
+      const Duration(seconds: 20),
+    );
+    report['captureStart'] = <String, dynamic>{
+      'started': started,
+      'active': preview.active,
+      'firstFrame': preview.firstFrame,
+      'selected': preview.selected?.name,
+      'error': preview.error,
+    };
+    if (!started) {
+      report['outcome'] = 'capture-not-started';
+      return;
+    }
+    report['indicatorsWhileCapturing'] = await _systemIndicators();
+
+    stages.add(
+      await _observeStage(
+        stage: 'foreground',
+        settle: const Duration(milliseconds: 400),
+        window: const Duration(seconds: 2),
+      ),
+    );
+
+    await _windowAction('minimize');
+    stages.add(
+      await _observeStage(
+        stage: 'window-minimized',
+        settle: const Duration(seconds: 1),
+        window: const Duration(seconds: 3),
+      ),
+    );
+
+    await _windowAction('deminiaturize');
+    stages.add(
+      await _observeStage(
+        stage: 'window-restored',
+        settle: const Duration(seconds: 1),
+        window: const Duration(seconds: 2),
+      ),
+    );
+
+    await _windowAction('hide');
+    stages.add(
+      await _observeStage(
+        stage: 'app-hidden',
+        settle: const Duration(seconds: 1),
+        window: const Duration(seconds: 3),
+      ),
+    );
+
+    await _windowAction('unhide');
+    stages.add(
+      await _observeStage(
+        stage: 'app-unhidden',
+        settle: const Duration(seconds: 1),
+        window: const Duration(seconds: 2),
+      ),
+    );
+
+    // The real close-button path. Without a tray the shipped `close()` would
+    // terminate the process, so that case is recorded and skipped instead of
+    // killing the run before the report is written.
+    if (report['trayReady'] == true) {
+      await _windowAction('close');
+      stages.add(
+        await _observeStage(
+          stage: 'closed-to-background',
+          settle: const Duration(seconds: 1),
+          window: const Duration(seconds: 3),
+        ),
+      );
+      // Reaching the native side again proves the process survived the close.
+      report['processAliveAfterClose'] = !(await _windowState())
+          .containsKey('error');
+      report['controllerAfterClose'] = <String, dynamic>{
+        'active': preview.active,
+        'firstFrame': preview.firstFrame,
+        'cleanupFailed': preview.cleanupFailed,
+        'error': preview.error,
+      };
+
+      // Marker for the runner: it wakes the app through LaunchServices (the
+      // same path as clicking the Dock icon), which must run
+      // `applicationShouldHandleReopen` without any accessibility permission.
+      await File(
+        '$home/acceptance-reopen-request',
+      ).writeAsString(DateTime.now().toIso8601String());
+      final external = await _waitUntilAsync(() async {
+        final state = await _windowState();
+        return state['visible'] == true && state['miniaturized'] != true;
+      }, const Duration(seconds: 45));
+      report['externalReopen'] = <String, dynamic>{
+        'observed': external,
+        'state': await _windowState(),
+      };
+      if (!external) {
+        // Labelled fallback: same selector, but the in-app path rather than the
+        // system one, so it cannot be read as a LaunchServices result.
+        await _windowAction('reopen');
+        await Future<void>.delayed(const Duration(seconds: 1));
+        report['externalReopenFallback'] = await _windowState();
+      }
+      stages.add(
+        await _observeStage(
+          stage: 'after-reopen',
+          settle: const Duration(seconds: 1),
+          window: const Duration(seconds: 2),
+        ),
+      );
+    } else {
+      report['closedToBackgroundSkipped'] = 'tray-unavailable';
+    }
+
+    report['beforeExit'] = <String, dynamic>{
+      'active': preview.active,
+      'cleanupFailed': preview.cleanupFailed,
+      'transfers': transfers.items.length,
+      'indicators': await _systemIndicators(),
+    };
+    report['stages'] = stages;
+
+    final allowed = await desktop.requestExit();
+    // Contrast sample: the same enumeration after the capture is released, so
+    // "an indicator window exists while capturing" can be told apart from
+    // "that window is always there".
+    report['indicatorsAfterStop'] = await _systemIndicators();
+    report['exit'] = <String, dynamic>{
+      'allowed': allowed,
+      'exited': desktop.exited,
+      'error': desktop.error,
+      'active': preview.active,
+      'cleanupFailed': preview.cleanupFailed,
+      'transfersRemaining': transfers.items.length,
+    };
+    report['outcome'] = 'complete';
+    // The native `exit` reply tears the process down on the next run-loop turn,
+    // so the report must be on disk before it is requested.
+    await _writeReport(home, report);
+    if (allowed) await desktop.finishExit();
+  } catch (error) {
+    report['error'] = error.toString();
+    report['stages'] = stages;
   }
 }

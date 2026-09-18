@@ -23,6 +23,11 @@
 #   tool/test_macos_acceptance.sh lifecycle   # stop releases the surface + 20 start/stop cycles
 #   tool/test_macos_acceptance.sh source-loss # capture a real window, then close that window
 #   tool/test_macos_acceptance.sh revocation  # real permission withdrawal mid-capture
+#   tool/test_macos_acceptance.sh background  # minimize/hide/close-to-background/reopen/exit
+#
+# `background` also wakes the app through LaunchServices (`open`, no `-n`) once
+# the window has been closed to the background, so `applicationShouldHandleReopen`
+# is exercised on the real system path instead of the in-app fallback.
 #
 # Set ACCEPTANCE_CLEAN=1 to wipe the acceptance DerivedData and rebuild from
 # scratch (slower, but rules out stale intermediates).
@@ -42,6 +47,9 @@ BUNDLE="dev.sharehub.client"
 DATA="$HOME/Library/Containers/$BUNDLE/Data"
 REPORT="$DATA/macos-acceptance.json"
 READY="$DATA/acceptance-ready.json"
+# Written by the `background` entry once the main window is closed to the
+# background; the runner reacts by waking the app through LaunchServices.
+REOPEN_REQ="$DATA/acceptance-reopen-request"
 # Window source names are "<app> · <title>"; cover both localisations.
 NEEDLES="未命名,Untitled,文本编辑,TextEdit"
 
@@ -68,7 +76,8 @@ case "$MODE" in
   lifecycle) FILE_MODE="lifecycle" ;;
   source-loss) FILE_MODE="source-loss|$NEEDLES" ;;
   revocation) FILE_MODE="revocation" ;;
-  *) echo "未知模式: $MODE（可选 full|lifecycle|source-loss|revocation）" >&2; exit 2 ;;
+  background) FILE_MODE="background" ;;
+  *) echo "未知模式: $MODE（可选 full|lifecycle|source-loss|revocation|background）" >&2; exit 2 ;;
 esac
 
 crashes() { ls "$HOME/Library/Logs/DiagnosticReports/" 2>/dev/null | grep -c "Share Hub" || true }
@@ -110,8 +119,13 @@ else
 fi
 
 echo "=== 复制到 $APP ==="
-rm -rf "$APP"
 mkdir -p "$(dirname "$APP")"
+# ditto merges into an existing bundle: every file this build produces replaces
+# its counterpart, so the entry point, assets and frameworks are always current.
+# A recursive bulk remove of the previous bundle is deliberately avoided (the
+# runner blocks large single deletions, and the bundle is a rebuildable,
+# gitignored build product). The kernel_blob guard below re-checks that the
+# launched entry really is the acceptance one.
 ditto "$BUILT" "$APP"
 
 # Guard against ever launching the product entry by mistake.
@@ -125,7 +139,7 @@ echo "验收 app 就绪: $(stat -f "%Sm" "$APP/Contents/MacOS/Share Hub")"
 mkdir -p "$DATA"
 pkill -f "$APP/Contents/MacOS/Share Hub" 2>/dev/null || true
 sleep 1
-rm -f "$REPORT" "$READY"
+rm -f "$REPORT" "$READY" "$REOPEN_REQ"
 printf '%s' "$FILE_MODE" > "$DATA/acceptance-mode"
 BEFORE=$(crashes)
 
@@ -160,6 +174,28 @@ case "$MODE" in
       echo "!! 未观测到采集中标记，直接读结果"
     fi
     ;;
+  background)
+    # Wait for the app to close its window to the background, then wake it the
+    # way a user would: LaunchServices activation of the running instance, which
+    # delivers the reopen event. No accessibility permission is involved.
+    for _ in $(seq 1 200); do
+      [[ -f "$REOPEN_REQ" ]] && break
+      [[ -f "$REPORT" ]] && break
+      sleep 0.5
+    done
+    if [[ -f "$REOPEN_REQ" ]]; then
+      echo "=== 系统级唤醒 $(date +%H:%M:%S)（open，非 -n）==="
+      open "$APP"
+      # The app leaves the background stage within a few seconds of waking, so
+      # a long probe here would race its own exit and read as a false failure.
+      # The authoritative aliveness evidence is the in-app
+      # `processAliveAfterClose` / `externalReopen` pair.
+      sleep 1
+      echo "唤醒已发出，等待应用自行完成剩余阶段"
+    else
+      echo "!! 未观测到唤醒标记（可能未进入关闭到后台阶段）"
+    fi
+    ;;
 esac
 
 for _ in $(seq 1 600); do
@@ -167,6 +203,15 @@ for _ in $(seq 1 600); do
   sleep 0.5
 done
 sleep 1
+
+if [[ "$MODE" == "background" ]]; then
+  if pgrep -f "$APP/Contents/MacOS/Share Hub" >/dev/null 2>&1; then
+    echo "!! 退出后进程仍在运行"
+    pkill -f "$APP/Contents/MacOS/Share Hub" 2>/dev/null || true
+  else
+    echo "退出后进程已终止"
+  fi
+fi
 
 echo "=== 崩溃报告 基线=$BEFORE 现在=$(crashes) ==="
 [[ -f "$REPORT" ]] || { echo "!! 未产出报告"; exit 1; }
@@ -211,6 +256,24 @@ if mode == 'revocation':
           json.dumps((d.get('permissionSamples') or [{}])[0], ensure_ascii=False),
           json.dumps((d.get('permissionSamples') or [{}])[-1], ensure_ascii=False),
           '采样数=', len(d.get('permissionSamples') or []))
+
+if mode == 'background':
+    for key in ('trayReady', 'trayAfterInitialize', 'captureStart', 'indicatorsWhileCapturing',
+                'indicatorsAfterStop', 'processAliveAfterClose', 'controllerAfterClose',
+                'externalReopen', 'externalReopenFallback', 'closedToBackgroundSkipped',
+                'beforeExit', 'exit'):
+        if key in d:
+            print(f'{key}: {json.dumps(d[key], ensure_ascii=False)}')
+    while_capturing = len(d.get('indicatorsWhileCapturing') or [])
+    after_stop = len(d.get('indicatorsAfterStop') or [])
+    print(f'录屏指示对照: 采集中={while_capturing} 项, 停止后={after_stop} 项')
+    print('--- 阶段帧计数 ---')
+    for s in d.get('stages') or []:
+        w = s.get('window') or {}
+        print(f"  {s['stage']}: visible={w.get('visible')} miniaturized={w.get('miniaturized')} "
+              f"onscreen={w.get('onscreen')} tray={w.get('trayInstalled')} "
+              f"captured {s.get('capturedFramesStart')}→{s.get('capturedFramesEnd')} (+{s.get('capturedDelta')}) "
+              f"rendered +{s.get('renderedDelta')} 最后帧龄={s.get('lastFrameAgeMs')}ms")
 
 for t in d.get('transitions') or []:
     print('transition:', json.dumps(t, ensure_ascii=False))

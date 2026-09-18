@@ -141,3 +141,82 @@ source-loss（采集真实 TextEdit 窗口，随后用 `pkill` 关闭该窗口�
 实测（2026-09-18 17:39，`full` 模式）：产品 app mtime 保持 `17:20:59` 未被覆盖；验收 app 从 `build/acceptance/` 启动；`permissions.screenRecording=true`（授权随 bundle id 保留）；来源 16 项、主屏唯一「显示器 1 · 1728 × 1117」、冷启动首帧 207 ms、停止后恢复 182 ms、控制器路径全绿；崩溃报告 4 → 4。`pkill` 模式已改为按绝对路径匹配并单独复验通过。
 
 代价与开关：验收构建不再复用产品构建的增量产物，首次需完整编译一次，之后 `build/acceptance-dd` 增量复用；设置 `ACCEPTANCE_CLEAN=1` 可强制从零重建。`build/` 整体仍被 `.gitignore` 覆盖，三个产物目录（`build/acceptance-dd`、`build/acceptance`、`build/macos`）都可整目录删除后重建。
+
+## 2026-09-18 macOS 后台矩阵（6.1 / 7.1 / 7.2 的 macOS 部分）
+
+`tool/test_macos_acceptance.sh background`，2026-09-18 17:52–17:53 两次执行（第二次为加入停止对照后的最终结果）。验收宿主用**产品同一个 `DesktopLifecycle`** 接线后台入口，采集与退出走产品控制器，崩溃报告计数 4 → 4，退出后进程已终止。
+
+### 为取得正面证据新增的原生接口
+
+「隐藏时仍在采集」此前只能间接推断（会话未结束、无 `ended` 事件、Texture 仍挂载），无法区分「采集停了」与「只是渲染暂停」。为此补了两处**只读**可观测性，不改变任何既有行为：
+
+| 位置 | 新增 | 说明 |
+|---|---|---|
+| SDK 原生（chuanchuan）`ScreenPreviewBridge` | `capturedFrames`（`didOutputSampleBuffer` 接受的有效帧）、`renderedFrames`（`copyPixelBuffer` 拉取次数）、`lastFrameAt` | 两个计数器分开，隐藏/最小化时即使渲染停摆也能量到采集是否在推进 |
+| SDK 原生 | 通道方法 `stats`（只读） | 在 `busy`/`session` 守卫**之前**处理，因此采集中也能读 |
+| 客户端原生（chuanchuan-open）`MainFlutterWindow` | 通道方法 `window.state`、`system.indicators` | 后台状态与菜单栏项的可观测快照 |
+| 客户端原生 | 通道方法 `window.action`（`minimize`/`deminiaturize`/`hide`/`unhide`/`close`/`reopen`） | 见下方「未支持条件」：本机无辅助功能权限，无法用真实点击驱动窗口动作，故每个动作复用与相应用户手势**同一条代码路径** |
+
+`stats` 与 `window.*` 都只在宿主–插件通道上，**不进入 SDK 的 Dart 公共 API**，产品客户端不调用。
+
+### 阶段帧计数（采样窗口：foreground 2 s，其余 3 s）
+
+| 阶段 | visible | miniaturized | onscreen | capturedFrames 增量 | renderedFrames 增量 | 最后帧龄 |
+|---|---|---|---|---|---|---|
+| foreground | true | false | true | +58 | +59 | 30 ms |
+| window-minimized | **false** | **true** | false | **+88** | +88 | 4 ms |
+| window-restored | true | false | true | +59 | +59 | 7 ms |
+| app-hidden | **false** | false | false | **+88** | +88 | 30 ms |
+| app-unhidden | true | false | false | +59 | +58 | 5 ms |
+| closed-to-background | **false** | false | false | **+89** | +89 | 9 ms |
+| after-reopen | true | false | true | +59 | +59 | 16 ms |
+
+换算：3 s 窗口 +88/+89 ≈ **29.6 fps**，2 s 窗口 +58/+59 ≈ **29.3 fps**，与原生 `minimumFrameInterval = 1/30` 的上限一致。**窗口不可见与可见时的采集帧率没有差别**，且每阶段 `running=true`、`acceptingFrames=true`、`hasPixelBuffer=true`、`sessionId` 未变（单一会话贯穿全程）。这是 7.2「隐藏仍持续采集」的正面证据，而非推断。
+
+`window-restored` / `app-unhidden` 阶段的 `onscreen=false` 是采样时机所致（刚解除隐藏后合成器尚未上报遮挡状态），不影响该阶段的 `visible` 结论。
+
+### 菜单栏入口与后台驻留（7.1）
+
+`trayAfterInitialize`（`desktop.initialize` 之后，`connectionSupported=false`）：
+
+| 菜单项 | enabled |
+|---|---|
+| 打开主窗口 | true |
+| 允许连接（当前平台不可用） | false（与 `connectionSupported=false` 一致） |
+| 停止控制（当前无远控会话） | true |
+| 退出串串 | true |
+
+`trayInstalled=true`、`trayButtonAvailable=true`、`desktopReady=true`，且以上状态在**全部七个阶段**（含关闭到后台后）都保持为真 —— 菜单栏入口在窗口不可见时未被拆除，这是「关闭到后台」可恢复的前提。
+
+关闭到后台走真实 `close()` 路径：`visible=false` 但 `processAliveAfterClose=true`、`controllerAfterClose.active=true`、`cleanupFailed=false` —— 引擎、采集会话与菜单栏进程内保留。
+
+### 系统级唤醒
+
+关闭窗口后，验收宿主写出标记文件，由执行器用 `open "$APP"`（**不带 `-n`**）唤醒已运行实例，即 `applicationShouldHandleReopen` 的 LaunchServices 真实路径，不涉及任何辅助功能权限。结果 `externalReopen.observed=true`，唤醒后 `visible=true`、`key=true`、`trayInstalled=true`。**未使用** `window.action: reopen` 兜底（报告中的 `externalReopenFallback` 字段不存在，即未触发）。
+
+### 退出与资源回收（6.1）
+
+`desktop.requestExit()` → `allowed=true`、`exited=true`、`error=null`；退出时序上 `active=false`、`cleanupFailed=false`、`transfersRemaining=0`。执行器确认**退出后进程已终止**，崩溃报告 4 → 4，菜单栏项随进程消失。
+
+### 录屏指示：本轮**未取得**可用证据
+
+按 6.1「记录录屏指示」的要求做了对照枚举（`system.indicators`，`CGWindowListCopyWindowInfo` 过滤 `Window Server` / `Control Center` 等）：
+
+| 采样点 | 命中窗口数 |
+|---|---|
+| 采集中 | 5 |
+| 采集停止后 | 5 |
+
+两次命中都是常驻的 `Window Server · StatusIndicator`（菜单栏区域 1697,3 及屏幕外坐标）与 `Cursor`，**逐项一致**。结论：这些窗口与采集无关，**无法用公开窗口枚举区分 macOS 的录屏指示**。因此本轮不得声称「观测到录屏指示」，此项作为未支持条件记录；系统自身的录屏指示属 WindowServer 私有实现，无公开 API 可读。
+
+### 未支持条件（不得由上述记录替代）
+
+1. **菜单栏项与窗口按钮未经真实点击驱动**：本机无辅助功能权限（`osascript` 对 System Events 报权限违例），无法点击菜单栏或窗口按钮。`window.action` 复用与用户手势相同的 selector/代码路径，但这是**程序化等价路径**，不是真实点击证据；菜单栏项的「点击」本身只有状态读数与等价调用两层覆盖。
+2. **录屏指示**：见上，公开接口无法区分，未取得证据。
+3. **「停止后画面冻结」仍无像素级证据**：`capturedFrames` 现在能证明「停止前持续出帧」，但停止后的冻结仍需帧计数或像素比对，本轮未做。原生 `stats` 已提供 `capturedFrames`，具备补测条件。
+4. **Windows 侧未参与**：6.1 / 7.1 / 7.2 均要求两平台，上表全部是 macOS 单平台证据，**不足以勾选任何一项**。
+5. **`window.action` 是验收专用接口**：产品 UI 不调用；若后续认为不应留在产品 Runner 中，应在 7.1 完成后评估移出。
+
+### 本轮回归
+
+`flutter analyze --no-pub` 无问题；`flutter test --no-pub` 72/72；SDK `flutter test --no-pub` 91/91；`swift test --package-path macos/Platform` 6/6。验收构建未覆盖产品 app（mtime 守卫通过）。
