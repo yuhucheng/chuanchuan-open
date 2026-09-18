@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:share_hub_open/features/preview/preview_controller.dart';
 import 'package:share_hub_open/platform/mac_platform.dart';
@@ -78,6 +79,27 @@ void main() {
     expect(controller.error, contains('尚未获得'));
     await controller.start();
     expect(engine.starts, 0);
+  });
+
+  // macOS ScreenCaptureKit reports `permission` from the native start even when
+  // preflight was satisfied, so the denial must not be described as a source
+  // problem or the user is told to retry something that cannot succeed.
+  test('native permission failure points at the system setting', () async {
+    await prepare();
+    engine.startError = PlatformException(code: 'permission');
+    await controller.start();
+    expect(controller.error, contains('屏幕录制权限不可用'));
+    expect(controller.error, isNot(contains('刷新来源')));
+    expect(controller.active, false);
+    expect(engine.released, true);
+  });
+
+  test('unknown native start failures keep the retry guidance', () async {
+    await prepare();
+    engine.startError = PlatformException(code: 'internal');
+    await controller.start();
+    expect(controller.error, contains('预览未能启动'));
+    expect(controller.active, false);
   });
 
   test('capture and first frame are separate; stop is repeatable', () async {

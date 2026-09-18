@@ -74,6 +74,9 @@ class FakePreviewEngine implements PreviewEngine {
   bool released = false;
   bool closed = false;
   bool failStart = false;
+  /// Raised from [start] before [failStart] applies, so platform failures can
+  /// be reproduced with their real error code.
+  Object? startError;
   bool failStop = false;
   Completer<void>? startCompleter;
   VoidCallback? ended;
@@ -96,6 +99,7 @@ class FakePreviewEngine implements PreviewEngine {
     ended = onEnded;
     firstFrame = onFirstFrame;
     await startCompleter?.future;
+    if (startError != null) throw startError!;
     if (failStart) throw StateError('capture failed');
   }
 

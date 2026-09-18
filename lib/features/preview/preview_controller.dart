@@ -154,11 +154,7 @@ class PreviewController extends ChangeNotifier {
           // before awaiting cleanup, including when cleanup itself fails.
           ++_generation;
           firstFrame = false;
-          error =
-              failure is PlatformException &&
-                  failure.code == 'source_unavailable'
-              ? '所选窗口或显示器已不可用，请重新读取画面来源。'
-              : '预览未能启动，请刷新来源后重新选择画面。';
+          error = _failureMessage(failure);
           try {
             await engine.stop();
           } catch (_) {
@@ -171,6 +167,21 @@ class PreviewController extends ChangeNotifier {
         _notify();
       }
     }();
+  }
+
+  /// Native captures report `permission` when the OS refuses the attempt, even
+  /// though the earlier preflight looked satisfied. Retrying or re-reading
+  /// sources cannot help, so the message must point at the system setting.
+  String _failureMessage(Object failure) {
+    if (failure is PlatformException) {
+      switch (failure.code) {
+        case 'source_unavailable':
+          return '所选窗口或显示器已不可用，请重新读取画面来源。';
+        case 'permission':
+          return '屏幕录制权限不可用，请在系统设置中允许 Share Hub 后重试。';
+      }
+    }
+    return '预览未能启动，请刷新来源后重新选择画面。';
   }
 
   Future<void> stop({String? reason}) =>
