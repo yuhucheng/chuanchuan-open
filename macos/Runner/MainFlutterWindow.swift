@@ -96,6 +96,28 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
         self.completeTermination(); result(nil)
         DispatchQueue.main.async { NSApp.terminate(nil) }
       case "prepareExit": self.files.cancelPicker(); result(nil)
+      case "system.indicators": result(Self.screenRecordingIndicators())
+      case "window.state": result(self.windowState())
+      case "window.action":
+        // Acceptance-only window control. The shipped UI never calls this; it
+        // exists because the host has no accessibility permission here, so the
+        // background matrix (minimize/hide/close-to-background/reopen) cannot be
+        // driven through real clicks. Each action reuses the same code path as
+        // the corresponding user gesture.
+        guard let action = (call.arguments as? [String: Any])?["action"] as? String else {
+          result(FlutterError(code: "invalid_action", message: "缺少窗口动作。", details: nil)); return
+        }
+        switch action {
+        case "minimize": self.miniaturize(nil)
+        case "deminiaturize": self.deminiaturize(nil)
+        case "hide": NSApp.hide(nil)
+        case "unhide": NSApp.unhide(nil)
+        case "close": self.close()
+        case "reopen": self.showMainWindow()
+        default:
+          result(FlutterError(code: "invalid_action", message: "不支持的窗口动作。", details: nil)); return
+        }
+        result(self.windowState())
       default: result(FlutterMethodNotImplemented)
       }
     }
@@ -112,6 +134,66 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     discovery.onChange = nil
     discovery.stop()
     return nil
+  }
+
+  /// Observable background/tray state, used by the acceptance entry to record
+  /// the macOS background matrix without accessibility-driven UI automation.
+  private func windowState() -> [String: Any] {
+    var trayItems: [[String: Any]] = []
+    if let menu = statusItem?.menu {
+      trayItems = menu.items.filter { !$0.isSeparatorItem }.map { item in
+        [
+          "title": item.title,
+          "enabled": item.isEnabled,
+          "checked": item.state == .on,
+        ]
+      }
+    }
+    return [
+      "visible": isVisible,
+      "miniaturized": isMiniaturized,
+      "key": isKeyWindow,
+      "onscreen": occlusionState.contains(.visible),
+      "trayInstalled": statusItem != nil,
+      "trayButtonAvailable": statusItem?.button != nil,
+      "trayItems": trayItems,
+      "desktopReady": desktopReady,
+      "terminationApproved": terminationApproved,
+      "quitPending": quitPending,
+    ]
+  }
+
+  /// Best-effort enumeration of system windows that look like the screen
+  /// recording indicator. macOS draws that indicator outside the app, so the
+  /// public window list is the only handle. An empty result is recorded as an
+  /// unsupported observation, never as "the system shows no indicator".
+  private static func screenRecordingIndicators() -> [[String: Any]] {
+    let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+    guard let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+      return []
+    }
+    let needles = ["screen", "capture", "record", "录制", "control center", "window server"]
+    return windows.compactMap { info in
+      let owner = info[kCGWindowOwnerName as String] as? String ?? ""
+      let name = info[kCGWindowName as String] as? String ?? ""
+      let haystack = "\(owner) \(name)".lowercased()
+      guard needles.contains(where: { haystack.contains($0) }) else { return nil }
+      var bounds: [String: Any] = [:]
+      if let raw = info[kCGWindowBounds as String] as? [String: Any] {
+        bounds = [
+          "x": (raw["X"] as? NSNumber)?.doubleValue ?? 0,
+          "y": (raw["Y"] as? NSNumber)?.doubleValue ?? 0,
+          "width": (raw["Width"] as? NSNumber)?.doubleValue ?? 0,
+          "height": (raw["Height"] as? NSNumber)?.doubleValue ?? 0,
+        ]
+      }
+      return [
+        "owner": owner,
+        "name": name,
+        "layer": info[kCGWindowLayer as String] as? Int ?? -1,
+        "bounds": bounds,
+      ]
+    }
   }
 
   private func installStatusItem() {
