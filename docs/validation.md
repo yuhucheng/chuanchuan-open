@@ -48,3 +48,96 @@ Mac 当前工程产物已有限复验自动发现、未手选时启动主屏、�
 Mac 实机验证空场、深浅切换与跨重启偏好；修复新 UI 退出触发 AppKit 嵌套终止等待，修复后界面退出与 Cmd+Q 均确认进程消失。失败版本的进程用 SIGTERM 结束，不计为通过。Windows 主屏、拖放和完整后台矩阵由用户另在 Windows 开发机完成，本轮未验收；当前为未提交工作区，不是发布组合。
 
 本轮最终客户端 59/59、管理工具 60/60 测试通过，客户端 analyze 与 Mac Debug 构建通过，workspace:check 通过。平台实机范围仅限上述明确步骤；字体字标、平台图标与完整读屏/高对比仍未验收。
+
+## 2026-09-18 macOS 真实预览验收（plan-desktop-platform-completion 2.2）
+
+在真实 macOS 主机（arm64，Flutter 3.47.2）重新构建当前插件布局并运行真实客户端验收。验收入口为专用开发 target `lib/dev/macos_acceptance_main.dart`，不进入产品入口；它按产品方式挂载引擎视图，读取真实权限与真实来源，并对主屏执行两次真实采集。验收构建的隔离方式见文末「验收入口的构建隔离」一节（本条记录当时仍写入产品路径，该问题已修复）。构建 `flutter build macos --debug --no-pub` 通过；`swift test --package-path macos/Platform` 6/6 通过；客户端 analyze 无问题，`flutter test` 72 项通过（含本轮新增 2 项回归）。
+
+真实客户端记录（2026-09-18，同一构建）：
+
+- 设备身份稳定：`loadDevice()` 两次返回同一 discovery id，名称默认「我的 Mac」。
+- 权限读数为真实 TCC 状态：`screenRecording=true`、`accessibility=false`，未以权限值推断画面。
+- 真实来源 17–19 项（2 个屏幕 + 15–17 个窗口），其中主屏唯一标记为「显示器 1 · 1728 × 1117」；未手选来源时控制器选择该主屏，没有回退到整屏或首个来源。
+- 两次真实采集均取得首帧：冷启动首帧 205/218/233 ms，停止后恢复再次取得首帧 152/166 ms；停止后 `cleanupFailed=false`，可立即再次启动并再次停止。
+- 控制器路径（`PreviewController`）逐项通过：`loadSources` 17 项、`selected` 为空、`start` 后 `active` 与 `firstFrame` 均为真、`stop` 后 `active` 为假且无释放失败、恢复与再次停止一致。
+
+未授权路径（独立 bundle id `dev.sharehub.client.permprobe`，ad hoc 重签，不影响已授权客户端）：preflight 为假、来源枚举为空、原生 `sources()` 抛 `PlatformException(code: permission)`。据此本轮修复：客户端不再把原生权限失败描述成来源问题，改为指向系统设置；新增 2 项回归覆盖权限失败与未知失败的分流。
+
+环境限制（本轮实测，非产品缺陷）：从沙箱化 shell 直接启动 app 会因 App Sandbox 容器初始化被拒而 SIGTRAP（`_libsecinit_appsandbox`），必须经 LaunchServices（`open`）启动；Xcode 解析 Swift Package Manager 依赖需要 `IDEPackageSupportDisableManifestSandbox`，否则 `sandbox_apply: Operation not permitted`；`flutter test` 在注入 `HTTP_PROXY` 时无法连接 flutter_tester 的回环 WebSocket。
+
+本轮仍未完成：隐藏/关闭主窗、最小化、菜单栏入口与 20 次启停的完整后台矩阵；上述验收未覆盖 Windows 侧，也未替代任何双机或发行验收。默认主屏与「停止后恢复」仅在本条记录限定的 macOS 构建上成立。
+
+入口 `integration_test/macos_platform_test.dart` 已按真实进程/真实通道编写，但在当前环境无法由 `flutter test -d macos` 启动 app（同一沙箱限制），因此本轮以开发 target 的记录为准，该集成入口保留待可用环境执行。
+
+## 2026-09-18 采集中真实权限撤回
+
+同一构建的专用 target 增加 `revocation` 模式：经产品控制器启动一次真实采集，在容器内写入就绪标记，等待外部撤回后记录观测结果；外部执行器 `tool/test_macos_acceptance.sh revocation` 负责执行 `tccutil reset ScreenCapture dev.sharehub.client` 并回收结果。
+
+实测（2026-09-18 16:31，同一构建；系统崩溃报告计数 4 → 4，未新增）：
+
+| 观测项 | 结果 |
+|---|---|
+| 撤回前 preflight / 采集状态 | `screenRecording=true`；`active=true`、`firstFrame=true`（269 ms），来源 17 项，选中「显示器 1 · 1728 × 1117」 |
+| `tccutil reset ScreenCapture dev.sharehub.client` | 成功（exit=0） |
+| 撤回后运行中进程的 preflight | 连续 60 次采样（0–59.6 s）**始终为 true** |
+| 撤回后运行中的采集 | **未中断**：无 `ended` 事件、无权限轮询停止、`active` 保持为真 |
+| 撤回后同进程新的 `SCShareableContent` 查询 | 失败，原生返回 `capture_failed` |
+| 撤回后重复停止 | 幂等：`active=false`、`cleanupFailed=false`、无错误信息 |
+| 撤回后**新进程**的 preflight | false |
+| 撤回后新进程 `sources()` | `PlatformException(code: permission)`，客户端不发起采集（`controller` 路径整体跳过） |
+
+结论与边界：macOS 按进程缓存录屏 TCC 决定，`tccutil reset` 只清除 TCC 记录、不通知运行中的进程，而系统设置开关会要求正在运行的应用退出并重新打开。因此「撤回后终止采集并释放资源」在 macOS 上由操作系统（进程退出）保证，客户端进程内 2 秒权限轮询观测不到该变化。这不是客户端缺陷，但也不得据此宣称进程内已能感知撤回；客户端在重开后拒绝采集的行为本轮已实测。反向的「采集中被原生结束」路径由下方的来源关闭验收独立覆盖。
+
+撤回操作会清除本机对该 bundle id 的录屏授权，后续任何需要真实采集的验收都必须在系统设置中重新授权一次并重开应用（本次已重新授权，见下节）。
+
+## 2026-09-18 停止释放、20 次启停与采集中来源关闭
+
+`tool/test_macos_acceptance.sh lifecycle|source-loss` 两个模式在重新授权后执行（2026-09-18 17:21–17:22，同一构建；崩溃报告计数 4 → 4，未新增）。
+
+lifecycle（真实主屏「显示器 1 · 1728 × 1117」，来源 16 项，权限 `true`）：
+
+| 观测项 | 结果 |
+|---|---|
+| 启动前渲染树中的预览 Texture | 不存在 |
+| 采集中的预览 Texture | 存在（52 ms 内出现） |
+| `stop()` | 无错误 |
+| 停止后的预览 Texture | **不存在**（0 ms 内确认） |
+| 20 次真实启停 | 20/20 取得首帧，0 报错，总耗时 8280 ms；首帧 min 139 / p50 157 / max 164 ms |
+| 20 次后的预览 Texture | 不存在 |
+| 20 次后控制器恢复 | 重新启动取得首帧，`cleanupFailed=false` |
+
+说明：本轮可得的最强「停止后不再更新画面」证据是三层叠加 —— 操作系统层 `stopCapture` 成功返回（错误码只容忍 `.attemptToStopStreamState`）、原生会话清除像素缓冲并注销纹理、Dart 侧预览 Texture 从渲染树移除。本轮**没有**取得像素级帧计数证据（原生只在首帧回调一次，Dart 侧无法读到逐帧信号），因此不得声称已逐帧验证画面冻结。
+
+source-loss（采集真实 TextEdit 窗口，随后用 `pkill` 关闭该窗口；两次独立执行结果一致）：
+
+| 观测项 | 结果 |
+|---|---|
+| 选中来源 | 「文本编辑 · 打开」（TextEdit 窗口） |
+| 采集建立 | `active=true`、`firstFrame=true`，228 / 240 ms |
+| 窗口关闭后 | **原生结束事件到达**：`ended=true`，306 / 409 ms 后客户端进入停止 |
+| 客户端提示 | `屏幕预览已被系统结束。`（`endedPath=native-ended-event`），`cleanupFailed=false` |
+| 失效来源回落 | **不回退**：`loadSources` 报「所选来源已失效，请重新选择；不会自动切换到整屏。」，`start` 报「请重新选择画面来源；不会自动切换到整屏。」 |
+| 显式改选主屏后恢复 | 取得首帧（613→619 ms），停止后 `cleanupFailed=false` |
+
+这是原生结束路径（`SCStreamDelegate.didStopWithError` 或帧状态 `.stopped/.suspended` → `onEnded` → 控制器 `stop`）首次取得真实客户端证据；此前该路径只有单元测试覆盖。
+
+仍未完成（本轮未执行，不得由上述记录代替）：隐藏/最小化/关闭主窗后的持续采集与菜单栏停止入口、明确退出后的资源回收矩阵、Windows 侧对应验收。
+
+## 2026-09-18 验收入口的构建隔离
+
+问题：`flutter build macos --target=lib/dev/macos_acceptance_main.dart` 与产品构建写入**同一路径** `build/macos/Build/Products/Debug/Share Hub.app`，一次验收运行就会把产品 app 替换成开发入口，所以"当前这个 app 是哪个入口"取决于最后一次构建用的 target，工作区因此难以判断。
+
+`tool/test_macos_acceptance.sh` 已改为四步，产品路径不再被触碰：
+
+1. `flutter build macos --debug --no-pub --config-only --target=lib/dev/macos_acceptance_main.dart` —— 只把 `FLUTTER_TARGET` 写进生成的 xcconfig，不执行构建。
+2. `xcodebuild -workspace macos/Runner.xcworkspace -scheme Runner -configuration Debug -derivedDataPath build/acceptance-dd -clonedSourcePackagesDirPath build/macos/SourcePackages build` —— Dart 编译仍由 Runner 的 Run Script 阶段完成，产物落在独立 DerivedData，SwiftPM 依赖复用已有解析结果。
+3. `ditto` 到 `build/acceptance/Share Hub Acceptance.app`，经 `open` 从该路径启动。
+4. 退出时用 `--config-only`（默认 target）还原生成的配置。
+
+两道守卫：产品 app 的 mtime 发生变化、或复制出来的 app 不含 `acceptance-mode` 标记时，脚本直接失败退出。
+
+**bundle identifier 有意保持不变**（`dev.sharehub.client`）：App Sandbox 容器与录屏授权都按它索引，因此验收仍写同一个容器（`~/Library/Containers/dev.sharehub.client/Data`）、沿用同一份授权，无需重新授权即可运行。
+
+实测（2026-09-18 17:39，`full` 模式）：产品 app mtime 保持 `17:20:59` 未被覆盖；验收 app 从 `build/acceptance/` 启动；`permissions.screenRecording=true`（授权随 bundle id 保留）；来源 16 项、主屏唯一「显示器 1 · 1728 × 1117」、冷启动首帧 207 ms、停止后恢复 182 ms、控制器路径全绿；崩溃报告 4 → 4。`pkill` 模式已改为按绝对路径匹配并单独复验通过。
+
+代价与开关：验收构建不再复用产品构建的增量产物，首次需完整编译一次，之后 `build/acceptance-dd` 增量复用；设置 `ACCEPTANCE_CLEAN=1` 可强制从零重建。`build/` 整体仍被 `.gitignore` 覆盖，三个产物目录（`build/acceptance-dd`、`build/acceptance`、`build/macos`）都可整目录删除后重建。
