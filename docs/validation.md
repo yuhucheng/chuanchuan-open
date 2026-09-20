@@ -213,10 +213,85 @@ source-loss（采集真实 TextEdit 窗口，随后用 `pkill` 关闭该窗口�
 
 1. **菜单栏项与窗口按钮未经真实点击驱动**：本机无辅助功能权限（`osascript` 对 System Events 报权限违例），无法点击菜单栏或窗口按钮。`window.action` 复用与用户手势相同的 selector/代码路径，但这是**程序化等价路径**，不是真实点击证据；菜单栏项的「点击」本身只有状态读数与等价调用两层覆盖。
 2. **录屏指示**：见上，公开接口无法区分，未取得证据。
-3. **「停止后画面冻结」仍无像素级证据**：`capturedFrames` 现在能证明「停止前持续出帧」，但停止后的冻结仍需帧计数或像素比对，本轮未做。原生 `stats` 已提供 `capturedFrames`，具备补测条件。
+3. **「停止后画面冻结」本轮已补测**（2026-09-20，「停止后冻结与重复停止」一节）：帧计数与原生像素指纹两侧都已取得停止后冻结的读数。但该证据有边界——观测期内 `rejectedFrames = 0`，即**没有**迟到帧到达，「到达后确实被丢弃」这一分支仍未真实触发，仍由单元测试与代码审查覆盖。
 4. **Windows 侧未参与**：6.1 / 7.1 / 7.2 均要求两平台，上表全部是 macOS 单平台证据，**不足以勾选任何一项**。
 5. **`window.action` 是验收专用接口**：产品 UI 不调用；若后续认为不应留在产品 Runner 中，应在 7.1 完成后评估移出。
 
 ### 本轮回归
 
 `flutter analyze --no-pub` 无问题；`flutter test --no-pub` 72/72；SDK `flutter test --no-pub` 91/91；`swift test --package-path macos/Platform` 6/6。验收构建未覆盖产品 app（mtime 守卫通过）。
+
+## 2026-09-20 停止后冻结、重复停止与产品入口复验（3.1 / 3.2 / 6.1 / 6.2 的 macOS 部分）
+
+`tool/test_macos_acceptance.sh stop-freeze` 三次独立复跑（10:19:42、10:20:27、10:22:54）。环境：macOS 26.6.2、Flutter 3.47.2、客户端 `0.1.0-dev.1+1`、媒体 SDK `0.1.0-dev.1`、媒体 API `0.2.0`；来源为真实主屏「显示器 1 · 1728 × 1117」（`sources` 10 项）；崩溃报告 0 → 0。
+
+### 为什么需要这一轮
+
+「停止后不再更新」此前只有三层叠加证据（操作系统 `stopCapture` 成功返回、原生清空像素缓冲并注销纹理、Dart 侧预览 Texture 移出渲染树），**没有帧级或像素级读数**，无法把「采集停了」与「采集还在跑、只是渲染停了」分开。本节把该结论变成测量。
+
+新增的三项仍是**只读**观测，不改既有行为：
+
+| 位置 | 新增 | 作用 |
+|---|---|---|
+| SDK `ScreenPreviewSession` | `rejectedFrames`、`blankFrames` | 分别统计 `acceptingFrames=false` 之后仍到达的完整帧，以及 blank/suspended/stopped 状态帧。二者**不受** `acceptingFrames` 门控，所以停止后的迟到回调会体现为增长，而不会被「本来就该丢弃」的守卫顺手吞掉 |
+| SDK `ScreenPreviewSession` | `lastFrameChecksum`、`contentChanges` | 对 32BGRA 帧做稀疏 FNV-1a 指纹（最多 64 列 × 32 行采样），`contentChanges` 记录指纹真正变化的次数。把「画面不再更新」从计数器问题变成像素问题 |
+| SDK `ScreenPreviewBridge` | `lastSession`、`stats` 的 `live` 字段 | 停止后保留最近会话对象，使停止后的 `stats` 读到**冻结的真实计数**而不是清零载荷；否则「停止后没有迟到帧」与「根本没有东西可读」无法区分 |
+
+### 阳性对照：先证明这项测量会动
+
+冻结读数只有在同一测量于采集期间确实移动时才有意义。验收宿主在 `stop-freeze` 模式下渲染一个往复动画元素，而它正位于被采集的那块屏幕上，因此内容变化是**确定性**的，不依赖屏幕上恰好有什么。
+
+| 项 | 第 1 次 | 第 2 次 | 第 3 次 |
+|---|---|---|---|
+| 采样窗口 | 3 s | 3 s | 3 s |
+| `capturedFrames` 增量 | +88 | +88 | +87 |
+| `renderedFrames` 增量 | +87 | +88 | +88 |
+| `contentChanges` 增量 | +88 | +88 | +87 |
+| 指纹是否变化 | true | true | true |
+| 最后帧龄 | 4 ms | 26 ms | 24 ms |
+
+换算 ≈29.0–29.3 fps，与原生 `minimumFrameInterval = 1/30` 的上限相符。`contentChanges` 与 `capturedFrames` 同步增长，说明指纹确实跟随像素内容变化。
+
+### 停止后的冻结读数
+
+`stop()` 返回耗时 9 / 7 / 9 ms；返回时 `active=false`、`stopping=false`、`cleanupFailed=false`、`error=null`，渲染树中已无预览 Texture（`surfacePresent=false`，随后 `_awaitSurface(false)` 在 **0 ms** 内确认消失）。
+
+停止后三次**瞬时**读数（相对 `stop()` 返回时刻，第 2 次复跑）：
+
+| 时点 | live | accepting | hasPixelBuffer | textureId | sessionId | captured | rendered | rejected | blank | contentChanges | 指纹 | 最后帧龄 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| +703 ms | false | false | false | 0 | `preview-1` | 91 | 92 | 0 | 0 | 91 | `6addab2a2f7b4b51` | 738 ms |
+| +2706 ms | false | false | false | 0 | `preview-1` | 91 | 92 | 0 | 0 | 91 | 同上 | 2741 ms |
+| +6709 ms | false | false | false | 0 | `preview-1` | 91 | 92 | 0 | 0 | 91 | 同上 | 6743 ms |
+
+第 1 次（`captured=92/rendered=92`、指纹 `2a24bf4e4adc3684`）与第 3 次（`captured=91/rendered=92`、指纹 `92b5ae38dd6bd280`）的三次读数同样逐项一致。
+
+结论：**停止后没有任何一侧在推进** —— 采集侧不产帧（`capturedFrames` 冻结）、渲染侧不拉帧（`renderedFrames` 冻结）、像素指纹不变、最后帧龄随墙上时间单调增长，即最后一帧停在停止时刻且从未被替换。会话对象已释放（`live=false`、`textureId=0`）而计数仍可读，这正是「冻结」而非「读不到」。
+
+另：`renderedFrames` 统计的是 `copyPixelBuffer` **被调用的次数**，同一缓冲可被引擎重复拉取，因此它不要求与 `capturedFrames` 相等（第 2、3 次各多 1）。差异在三次读数间保持恒定，说明不是采样竞态。
+
+### 重复停止与恢复
+
+连续三次 `stop()`：三次均 0 ms 返回，`active=false`、`stopping=false`、`cleanupFailed=false`、`error=null` —— 幂等，且没有把重复停止报告成释放失败。
+
+重复停止后重新 `start()`：取得**新会话** `preview-2`（首次为 `preview-1`），首帧到达，2 s 内 `capturedFrames` +58/+59、`contentChanges` +58/+59。这把「干净停止」与「卡在失败态」区分开来。随后 `finalStop` 再次 `cleanupFailed=false`。
+
+### 产品入口复验（3.1 / 6.2 的 macOS 部分）
+
+验收构建与产品构建共用 Runner 工程，因此产品入口需要单独确认仍可构建、且产物不是验收入口：
+
+- `flutter build macos --debug --no-pub`（普通调用，无 `--target`）构建成功。
+- 产品 app 的 `kernel_blob.bin`：`acceptance-mode` 命中 **0**、`macos-acceptance` 命中 **0**、产品字串 `chuanchuan` 命中 49 → 产物确为产品入口。
+- 生成配置回到产品入口：`macos/Flutter/ephemeral/{flutter_export_environment.sh, Flutter-Generated.xcconfig}` 三处均为 `FLUTTER_TARGET=lib/main.dart`。
+- 该项核验已固化为执行器末尾的守卫（`product_entry_restored`）：还原后读回磁盘确认，不一致则非零退出。此前 `restore_config` 只在陷阱里尽力还原、不读回，配置残留会让后续普通 `xcodebuild` 把验收入口构建到产品路径。
+
+### 本轮结论的边界
+
+1. **`rejectedFrames = 0` 的含义**：三次运行该计数从未增长，说明观测期（约 6.7 s）内**没有**迟到帧到达 —— 这是想要的结果，但**不等于**已单独验证丢弃分支。`acceptingFrames` 在 `stop()` 内同步置为 false，而 `stopCapture` 完成后才真正移除输出；两次运行该窗口内恰好没有帧到达，故「到达后确实被丢弃」仍未真实触发，该分支仍由单元测试与代码审查覆盖。
+2. **像素指纹是稀疏采样**：最多 64 × 32 个采样点，画面若只在采样点之间变化理论上可漏检。本轮 `contentChanges` 与 `capturedFrames` 同步增长说明该场景下没有漏检，但不能推广为「任意微小变化都能检出」。
+3. **观测窗约 6.7 s**：不支持「长时间运行后仍不产帧」的结论。
+4. **仍不足两个平台**：3.1 / 3.2 / 6.1 / 6.2 都要求 Windows 与 macOS 分别验收，本节全部是 macOS 单平台证据，**不勾选任何一项**。3.2 的 macOS 四项（停止后不再更新、来源关闭、权限撤回、重复停止）现已齐全，但 Windows 侧未参与。
+
+### 本轮回归
+
+`flutter analyze --no-pub` 无问题；客户端 `flutter test --no-pub` **72/72**；SDK `flutter test --no-pub` **91/91**；`swift test --package-path macos/Platform` **6/6**；`npm run spec:validate` **22 passed / 0 failed**；验收构建未覆盖产品 app（mtime 守卫通过）。

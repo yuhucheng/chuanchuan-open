@@ -24,6 +24,7 @@
 #   tool/test_macos_acceptance.sh source-loss # capture a real window, then close that window
 #   tool/test_macos_acceptance.sh revocation  # real permission withdrawal mid-capture
 #   tool/test_macos_acceptance.sh background  # minimize/hide/close-to-background/reopen/exit
+#   tool/test_macos_acceptance.sh stop-freeze # stop really freezes capture and pixels + repeated stop
 #
 # `background` also wakes the app through LaunchServices (`open`, no `-n`) once
 # the window has been closed to the background, so `applicationShouldHandleReopen`
@@ -77,7 +78,8 @@ case "$MODE" in
   source-loss) FILE_MODE="source-loss|$NEEDLES" ;;
   revocation) FILE_MODE="revocation" ;;
   background) FILE_MODE="background" ;;
-  *) echo "未知模式: $MODE（可选 full|lifecycle|source-loss|revocation|background）" >&2; exit 2 ;;
+  stop-freeze) FILE_MODE="stop-freeze" ;;
+  *) echo "未知模式: $MODE（可选 full|lifecycle|source-loss|revocation|background|stop-freeze）" >&2; exit 2 ;;
 esac
 
 crashes() { ls "$HOME/Library/Logs/DiagnosticReports/" 2>/dev/null | grep -c "Share Hub" || true }
@@ -89,6 +91,19 @@ restore_config() {
   "$FLUTTER" build macos --debug --no-pub --config-only >/dev/null 2>&1 || true
 }
 trap restore_config EXIT
+
+# Same question as the `restore_config` comment, but read back from disk instead
+# of trusting that the restore succeeded. It is checked explicitly at the end of
+# the run so a failure exits non-zero; the trap above stays as a backstop for
+# early exits.
+product_entry_restored() {
+  local found
+  found="$(grep -h 'FLUTTER_TARGET' \
+    "$REPO/macos/Flutter/ephemeral/flutter_export_environment.sh" \
+    "$REPO/macos/Flutter/ephemeral/Flutter-Generated.xcconfig" 2>/dev/null \
+    | sed 's/.*FLUTTER_TARGET=//; s/"//g' | sort -u)"
+  [[ "$found" == "lib/main.dart" ]]
+}
 
 PRODUCT_BEFORE="$(product_stamp)"
 
@@ -275,6 +290,50 @@ if mode == 'background':
               f"captured {s.get('capturedFramesStart')}→{s.get('capturedFramesEnd')} (+{s.get('capturedDelta')}) "
               f"rendered +{s.get('renderedDelta')} 最后帧龄={s.get('lastFrameAgeMs')}ms")
 
+if mode == 'stop-freeze':
+    print('captureStart:', json.dumps(d.get('captureStart'), ensure_ascii=False))
+    print('stop:', json.dumps(d.get('stop'), ensure_ascii=False))
+
+    def counters(sample):
+        return (f"captured={sample.get('capturedFrames')} rendered={sample.get('renderedFrames')} "
+                f"rejected={sample.get('rejectedFrames')} blank={sample.get('blankFrames')} "
+                f"contentChanges={sample.get('contentChanges')} "
+                f"checksum={sample.get('lastFrameChecksum')} 帧龄={sample.get('lastFrameAgeMs')}ms")
+
+    live = d.get('live') or {}
+    print('--- 阳性对照（采集进行中 3s）---')
+    print(f"  captured +{live.get('capturedDelta')} rendered +{live.get('renderedDelta')} "
+          f"contentChanges +{live.get('contentChangesDelta')} "
+          f"指纹变化={live.get('checksumChanged')} 帧龄={live.get('lastFrameAgeMs')}ms")
+    print('--- 停止后（每次为瞬时读数）---')
+    for s in d.get('afterStop') or []:
+        print(f"  {s['stage']} (+{s.get('sinceStopMs')}ms): live={s.get('live')} "
+              f"accepting={s.get('acceptingFrames')} buffer={s.get('hasPixelBuffer')} "
+              f"texture={s.get('textureId')} session={s.get('sessionId')} | {counters(s)}")
+    print('surfaceAfterStop:', json.dumps(d.get('surfaceAfterStop'), ensure_ascii=False))
+    print('repeatedStop:', json.dumps(d.get('repeatedStop'), ensure_ascii=False))
+    print('restart:', json.dumps(d.get('restart'), ensure_ascii=False))
+    restart_live = d.get('restartLive') or {}
+    if restart_live:
+        print(f"  重启后: captured +{restart_live.get('capturedDelta')} "
+              f"contentChanges +{restart_live.get('contentChangesDelta')} session={restart_live.get('sessionId')}")
+    print('finalStop:', json.dumps(d.get('finalStop'), ensure_ascii=False))
+    verdict = d.get('verdict') or {}
+    print('--- 结论 ---')
+    for key, value in verdict.items():
+        print(f"  {'OK ' if value else 'NG '} {key}={value}")
+    if verdict and not all(verdict.values()):
+        print('!! 存在未达标项')
+
 for t in d.get('transitions') or []:
     print('transition:', json.dumps(t, ensure_ascii=False))
 PY
+
+echo "=== 还原生成配置并核验 $(date +%H:%M:%S) ==="
+restore_config
+if product_entry_restored; then
+  echo "生成配置已回到产品入口 (lib/main.dart)"
+else
+  echo "!! 生成配置未回到产品入口，后续 xcodebuild 可能把验收入口构建到产品路径" >&2
+  exit 1
+fi

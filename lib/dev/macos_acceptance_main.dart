@@ -33,6 +33,10 @@ import 'package:share_hub_open/platform/client_platform.dart';
 ///   close-to-background, external reopen, exit) through the shipped
 ///   [DesktopLifecycle] while sampling native capture telemetry, so
 ///   "still capturing while hidden" is measured rather than inferred.
+/// * `stop-freeze` — samples the frame counters and a native pixel fingerprint
+///   around a real `stop()`, so "the preview no longer updates" is measured on
+///   both the capture and the render side instead of inferred from the surface
+///   going away. The live stage is the positive control.
 ///
 /// The engine view is mounted exactly like the shipped client does. The native
 /// bridge only reports `firstFrame` from the first `copyPixelBuffer()` call, so
@@ -43,14 +47,22 @@ final GlobalKey _hostKey = GlobalKey();
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final engine = createPreviewEngine();
-  runApp(MacosAcceptanceHost(engine: engine, hostKey: _hostKey));
   final home = Platform.environment['HOME']!;
   final mode = _readMode(home);
+  runApp(
+    MacosAcceptanceHost(
+      engine: engine,
+      hostKey: _hostKey,
+      // Only the stop-freeze run needs a deterministic content change to sample.
+      animate: mode.split('|').first == 'stop-freeze',
+    ),
+  );
   final report = switch (mode.split('|').first) {
     'revocation' => await _revocationRun(engine, home),
     'lifecycle' => await _lifecycleRun(engine),
     'source-loss' => await _sourceLossRun(engine, home, mode),
     'background' => await _backgroundRun(engine, home),
+    'stop-freeze' => await _stopFreezeRun(engine),
     _ => await _runAcceptance(engine),
   };
   await _writeReport(home, report);
@@ -74,24 +86,81 @@ Future<void> _writeReport(String home, Map<String, dynamic> report) async {
 }
 
 /// Minimal render host: a real window with the real engine texture mounted.
-class MacosAcceptanceHost extends StatelessWidget {
+///
+/// `animate` is used only by the stop-freeze run. That run captures the display
+/// this window sits on, so a repeating element gives the capture a content
+/// change that is deterministic rather than dependent on whatever else happens
+/// to be on screen. Without it a fingerprint that stops changing after the stop
+/// could simply mean the screen was static the whole time.
+class MacosAcceptanceHost extends StatefulWidget {
   const MacosAcceptanceHost({
     super.key,
     required this.engine,
     required this.hostKey,
+    this.animate = false,
   });
 
   final PreviewEngine engine;
   final GlobalKey hostKey;
+  final bool animate;
 
   @override
-  Widget build(BuildContext context) => Directionality(
-    textDirection: TextDirection.ltr,
-    child: KeyedSubtree(
-      key: hostKey,
-      child: SizedBox.expand(child: engine.view),
-    ),
-  );
+  State<MacosAcceptanceHost> createState() => _MacosAcceptanceHostState();
+}
+
+class _MacosAcceptanceHostState extends State<MacosAcceptanceHost>
+    with SingleTickerProviderStateMixin {
+  AnimationController? _animation;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.animate) {
+      _animation = AnimationController(
+        vsync: this,
+        duration: const Duration(milliseconds: 500),
+      )..repeat(reverse: true);
+    }
+  }
+
+  @override
+  void dispose() {
+    _animation?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final animation = _animation;
+    return Directionality(
+      textDirection: TextDirection.ltr,
+      child: KeyedSubtree(
+        key: widget.hostKey,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            widget.engine.view,
+            if (animation != null)
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: AnimatedBuilder(
+                  animation: animation,
+                  builder: (context, _) {
+                    final level = (animation.value * 255).round();
+                    return Container(
+                      height: 80 + animation.value * 240,
+                      color: Color.fromARGB(255, level, 30, 255 - level),
+                    );
+                  },
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 /// Whether the preview `Texture` widget is currently mounted. The engine only
@@ -1082,4 +1151,235 @@ Future<void> _backgroundScenario(
     report['error'] = error.toString();
     report['stages'] = stages;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Stop freeze (3.2 / 6.1, macOS side: "the preview no longer updates")
+// ---------------------------------------------------------------------------
+
+/// Frame counters plus the native pixel fingerprint, read twice `window` apart.
+/// With `window == Duration.zero` it is a single instant read, which is what the
+/// post-stop sequence needs: each reading is compared against the others rather
+/// than against itself.
+Future<Map<String, dynamic>> _sampleFrames(
+  String stage,
+  Duration window, {
+  DateTime? since,
+}) async {
+  final first = await _captureStats();
+  final at = DateTime.now();
+  var second = first;
+  if (window > Duration.zero) {
+    await Future<void>.delayed(window);
+    second = await _captureStats();
+  }
+  final before = first['lastFrameChecksum']?.toString();
+  final after = second['lastFrameChecksum']?.toString();
+  return <String, dynamic>{
+    'stage': stage,
+    'at': at.toIso8601String(),
+    if (since != null) 'sinceStopMs': at.difference(since).inMilliseconds,
+    'sampleWindowMs': window.inMilliseconds,
+    'live': second['live'],
+    'sessionId': second['sessionId'],
+    'running': second['running'],
+    'acceptingFrames': second['acceptingFrames'],
+    'hasPixelBuffer': second['hasPixelBuffer'],
+    'textureId': second['textureId'],
+    'capturedFrames': _frameCount(second, 'capturedFrames'),
+    'capturedDelta':
+        _frameCount(second, 'capturedFrames') -
+        _frameCount(first, 'capturedFrames'),
+    'renderedFrames': _frameCount(second, 'renderedFrames'),
+    'renderedDelta':
+        _frameCount(second, 'renderedFrames') -
+        _frameCount(first, 'renderedFrames'),
+    'rejectedFrames': _frameCount(second, 'rejectedFrames'),
+    'blankFrames': _frameCount(second, 'blankFrames'),
+    'contentChanges': _frameCount(second, 'contentChanges'),
+    'contentChangesDelta':
+        _frameCount(second, 'contentChanges') -
+        _frameCount(first, 'contentChanges'),
+    'lastFrameChecksum': after,
+    'checksumChanged': window > Duration.zero && before != after,
+    'lastFrameAgeMs': second['lastFrameAgeMs'],
+  };
+}
+
+Future<Map<String, dynamic>> _stopFreezeRun(PreviewEngine engine) async {
+  await Future<void>.delayed(const Duration(milliseconds: 800));
+  final report = <String, dynamic>{
+    'platform': Platform.operatingSystem,
+    'mode': 'stop-freeze',
+    'startedAt': DateTime.now().toIso8601String(),
+  };
+  await Future.any([
+    _stopFreezeScenario(engine, report),
+    Future<void>.delayed(const Duration(seconds: 150), () {
+      report['watchdogExpired'] = true;
+    }),
+  ]);
+  report['finishedAt'] = DateTime.now().toIso8601String();
+  return report;
+}
+
+Future<void> _stopFreezeScenario(
+  PreviewEngine engine,
+  Map<String, dynamic> report,
+) async {
+  final platform = MethodChannelClientPlatform();
+  final preview = PreviewController(platform, engine);
+
+  try {
+    report['permissions'] = await _permissionSnapshot(platform);
+    await preview.loadSources();
+    report['loadSources'] = <String, dynamic>{
+      'sources': preview.sources.length,
+      'selected': preview.selected?.name,
+      'error': preview.error,
+    };
+    if (preview.sources.where((item) => item.isPrimary).length != 1) {
+      report['outcome'] = 'no-unique-primary';
+      return;
+    }
+    await preview.start();
+    final started = await _waitUntil(
+      () => preview.active && preview.firstFrame,
+      const Duration(seconds: 20),
+    );
+    report['captureStart'] = <String, dynamic>{
+      'started': started,
+      'active': preview.active,
+      'firstFrame': preview.firstFrame,
+      'selected': preview.selected?.name,
+      'error': preview.error,
+    };
+    if (!started) {
+      report['outcome'] = 'capture-not-started';
+      return;
+    }
+
+    // Positive control. A frozen reading after the stop only means something if
+    // the same measurement moved while the capture was live: the frame counters
+    // must advance, and the pixel fingerprint must actually change (the host
+    // animates for this run so content changes are not left to chance).
+    report['live'] = await _sampleFrames('live', const Duration(seconds: 3));
+
+    final stopRequestedAt = DateTime.now();
+    await preview.stop();
+    final stoppedAt = DateTime.now();
+    report['stop'] = <String, dynamic>{
+      'requestedAt': stopRequestedAt.toIso8601String(),
+      'elapsedMs': stoppedAt.difference(stopRequestedAt).inMilliseconds,
+      'active': preview.active,
+      'stopping': preview.stopping,
+      'firstFrame': preview.firstFrame,
+      'cleanupFailed': preview.cleanupFailed,
+      'error': preview.error,
+      'surfacePresent': _surfaceMounted(),
+    };
+
+    // Read the retained last session, not a zeroed payload: a late
+    // ScreenCaptureKit callback after the stop would still show up as growth.
+    // The first read waits out the teardown window so in-flight frames are not
+    // mistaken for a leak.
+    await Future<void>.delayed(const Duration(milliseconds: 700));
+    final afterStop = <Map<String, dynamic>>[
+      await _sampleFrames('immediate', Duration.zero, since: stoppedAt),
+    ];
+    for (final step in const <(String, Duration)>[
+      ('plus-2s', Duration(seconds: 2)),
+      ('plus-4s', Duration(seconds: 4)),
+    ]) {
+      await Future<void>.delayed(step.$2);
+      afterStop.add(
+        await _sampleFrames(step.$1, Duration.zero, since: stoppedAt),
+      );
+    }
+    report['afterStop'] = afterStop;
+    report['surfaceAfterStop'] = await _awaitSurface(
+      false,
+      const Duration(seconds: 3),
+    );
+
+    // A repeated stop must stay idempotent and must not be reported as a leak.
+    final repeats = <Map<String, dynamic>>[];
+    for (var index = 0; index < 3; index++) {
+      final at = DateTime.now();
+      await preview.stop();
+      repeats.add(<String, dynamic>{
+        'index': index + 1,
+        'elapsedMs': DateTime.now().difference(at).inMilliseconds,
+        'active': preview.active,
+        'stopping': preview.stopping,
+        'cleanupFailed': preview.cleanupFailed,
+        'error': preview.error,
+      });
+    }
+    report['repeatedStop'] = repeats;
+
+    // A capture after repeated stops must still start a fresh session, which is
+    // what tells "cleanly stopped" apart from "wedged in a failed state".
+    await preview.start();
+    final restarted = await _waitUntil(
+      () => preview.active && preview.firstFrame,
+      const Duration(seconds: 20),
+    );
+    report['restart'] = <String, dynamic>{
+      'started': restarted,
+      'active': preview.active,
+      'firstFrame': preview.firstFrame,
+      'cleanupFailed': preview.cleanupFailed,
+      'error': preview.error,
+    };
+    if (restarted) {
+      report['restartLive'] = await _sampleFrames(
+        'restart',
+        const Duration(seconds: 2),
+      );
+    }
+
+    await preview.stop();
+    report['finalStop'] = <String, dynamic>{
+      'active': preview.active,
+      'cleanupFailed': preview.cleanupFailed,
+      'error': preview.error,
+    };
+
+    final frozen = afterStop
+        .map(
+          (sample) => <String, dynamic>{
+            'capturedFrames': sample['capturedFrames'],
+            'renderedFrames': sample['renderedFrames'],
+            'rejectedFrames': sample['rejectedFrames'],
+            'contentChanges': sample['contentChanges'],
+            'lastFrameChecksum': sample['lastFrameChecksum'],
+          },
+        )
+        .toList(growable: false);
+    bool unchanged(String key) =>
+        frozen.every((item) => item[key] == frozen.first[key]);
+    final live = report['live']! as Map<String, dynamic>;
+    report['verdict'] = <String, dynamic>{
+      'liveFramesMoved': (live['capturedDelta']! as int) > 0,
+      'livePixelsMoved': (live['contentChangesDelta']! as int) > 0,
+      'frozenCapturedFrames': unchanged('capturedFrames'),
+      'frozenRenderedFrames': unchanged('renderedFrames'),
+      'frozenPixelFingerprint':
+          unchanged('lastFrameChecksum') && unchanged('contentChanges'),
+      'noLateCallbacks': unchanged('rejectedFrames'),
+      'sessionReleased':
+          afterStop.every((item) => item['live'] == false) &&
+          afterStop.every((item) => item['textureId'] == 0),
+      'surfaceReleased': (report['surfaceAfterStop']! as Map)['ok'] == true,
+      'repeatedStopClean': repeats.every(
+        (item) => item['cleanupFailed'] != true && item['error'] == null,
+      ),
+      'restartWorks': (report['restart']! as Map)['started'] == true,
+    };
+    report['outcome'] = 'complete';
+  } catch (error) {
+    report['error'] = error.toString();
+  }
+  preview.dispose();
 }
