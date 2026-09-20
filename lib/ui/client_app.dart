@@ -11,6 +11,8 @@ import '../features/desktop/desktop_lifecycle.dart';
 import '../features/devices/device_controller.dart';
 import '../features/preview/preview_controller.dart';
 import '../features/preview/preview_engine.dart';
+import '../features/remote/remote_media.dart';
+import '../features/remote/remote_session_controller.dart';
 import '../features/transfers/file_access.dart';
 import '../features/transfers/transfer_queue.dart';
 import '../platform/client_platform.dart';
@@ -21,12 +23,17 @@ class ShareHubApp extends StatefulWidget {
     this.platform,
     required this.previewEngine,
     this.fileAccess,
+    this.remoteMedia,
     this.targetPlatform,
     this.appTitle = 'Share Hub',
   });
   final ClientPlatform? platform;
   final PreviewEngine previewEngine;
   final FileAccess? fileAccess;
+
+  /// Remote send/watch implementation. Defaults to the media SDK adapter; tests
+  /// inject a fake so no capture device or peer is needed.
+  final RemotePictureFactory? remoteMedia;
   final TargetPlatform? targetPlatform;
   final String appTitle;
 
@@ -42,7 +49,21 @@ class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
   late final _fileAccess = widget.fileAccess ?? MethodChannelFileAccess();
   late final _devices = DeviceController(_platform);
   late final _connections = ConnectionController(MacConnectionPlatform());
-  late final _preview = PreviewController(_platform, _engine);
+  // Both sides consult the other so the single picture budget is respected in
+  // either direction. The closures are lazy, so a late field is only read after
+  // the tree is built.
+  late final PreviewController _preview = PreviewController(
+    _platform,
+    _engine,
+    blockedByRemotePicture: () => _remote.occupied,
+  );
+  late final RemoteSessionController _remote = RemoteSessionController(
+    connections: _connections,
+    platform: _platform,
+    factory: widget.remoteMedia ?? RtcRemotePictureFactory(),
+    listSources: _engine.sources,
+    localCaptureActive: () => _preview.active || _preview.cleanupFailed,
+  );
   late final _transfers = TransferQueue(_fileAccess);
   late final _desktop = DesktopLifecycle(
     devices: _devices,
@@ -84,6 +105,7 @@ class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
     _devices.dispose();
     _connections.dispose();
     _preview.dispose();
+    _remote.dispose();
     _transfers.dispose();
     super.dispose();
   }
@@ -107,6 +129,7 @@ class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
         devices: _devices,
         connections: _connections,
         preview: _preview,
+        remote: _remote,
         transfers: _transfers,
         desktop: _desktop,
         appearance: _appearance,

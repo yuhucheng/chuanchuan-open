@@ -8,9 +8,11 @@ import '../../features/devices/device_controller.dart';
 import '../../features/devices/device_directory.dart';
 import '../../features/preview/preview_controller.dart';
 import '../../features/preview/preview_engine.dart';
+import '../../features/remote/remote_session_controller.dart';
 import '../../features/transfers/transfer_queue.dart';
 import '../../features/transfers/transfers_page.dart';
 import '../../platform/client_platform.dart';
+import '../remote/remote_panel.dart';
 import 'appearance.dart';
 import 'brand_mark.dart';
 import 'device_field.dart';
@@ -21,6 +23,7 @@ class FieldShell extends StatefulWidget {
     required this.devices,
     required this.connections,
     required this.preview,
+    required this.remote,
     required this.transfers,
     required this.desktop,
     required this.appearance,
@@ -29,6 +32,7 @@ class FieldShell extends StatefulWidget {
   final DeviceController devices;
   final ConnectionController connections;
   final PreviewController preview;
+  final RemoteSessionController remote;
   final TransferQueue transfers;
   final DesktopLifecycle desktop;
   final Appearance appearance;
@@ -52,11 +56,16 @@ class _FieldShellState extends State<FieldShell> {
 
   /// Discovery, trust, reachability and capability are projected from the
   /// current snapshot and the live authenticated sessions only.
+  ///
+  /// The capability set is what this build can offer over that live connection.
+  /// The peer's own support is confirmed by the session, so an entry that the
+  /// peer cannot serve ends as a visible refusal rather than a silent omission.
   List<DirectoryDevice> _directory() {
     final connected = <String, TrustedConnection>{};
     for (final session in widget.connections.sessions) {
       if (!session.isClosed) connected[session.peerKey] = session;
     }
+    final offered = widget.remote.offeredOperations;
     final advertised = <String, String>{};
     for (final device in widget.devices.discovery.devices) {
       if (device.publicKey != null) advertised[device.publicKey!] = device.name;
@@ -70,7 +79,7 @@ class _FieldShellState extends State<FieldShell> {
           publicKey: key,
           name: _verifiedNames[key],
           connected: connected.containsKey(key),
-          capabilities: connected[key]?.capabilities ?? const {},
+          capabilities: connected.containsKey(key) ? offered : const {},
         ),
     ];
     return buildDeviceDirectory(
@@ -120,6 +129,7 @@ class _FieldShellState extends State<FieldShell> {
       widget.devices,
       widget.connections,
       widget.preview,
+      widget.remote,
       widget.desktop,
       widget.appearance,
     ]),
@@ -169,6 +179,12 @@ class _FieldShellState extends State<FieldShell> {
                         icon: const Icon(Icons.stop_circle_outlined),
                         label: const Text('停止预览'),
                       ),
+                    if (widget.remote.occupied)
+                      TextButton.icon(
+                        onPressed: widget.remote.stop,
+                        icon: const Icon(Icons.stop_screen_share_outlined),
+                        label: const Text('停止远端画面'),
+                      ),
                     TextButton(
                       onPressed: () async {
                         if (await widget.desktop.requestExit() &&
@@ -191,6 +207,7 @@ class _FieldShellState extends State<FieldShell> {
                         widget.desktop.error,
                         widget.devices.error,
                         widget.appearance.error,
+                        if (!widget.remote.occupied) widget.remote.error,
                       ])
                         if (error != null)
                           Semantics(liveRegion: true, child: Text(error)),
@@ -198,6 +215,13 @@ class _FieldShellState extends State<FieldShell> {
                         Semantics(
                           liveRegion: true,
                           child: Text(widget.connections.message!),
+                        ),
+                      // The single remote picture stays in the main surface so a
+                      // receiving view never unmounts mid-session.
+                      if (widget.remote.occupied)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 24),
+                          child: RemotePicturePanel(controller: widget.remote),
                         ),
                       // Device field remains the main surface; tools are contextual dialogs.
                       Column(
@@ -289,7 +313,7 @@ class _FieldShellState extends State<FieldShell> {
         .where((item) => item.identityId == entry.identityId)
         .firstOrNull;
     if (selected == null || !selected.online) return;
-    final action = await showDialog<bool>(
+    final action = await showDialog<String>(
       context: context,
       builder: (context) => AnimatedBuilder(
         animation: widget.connections,
@@ -315,7 +339,26 @@ class _FieldShellState extends State<FieldShell> {
                   const Text('设备名称与网络可见性都不是身份凭证，连接始终需要 6 位短接码。'),
                   const Text('时延未测。'),
                   if (live.connected && live.capabilities.isEmpty)
-                    const Text('对端未协商任何操作能力，暂不提供观看、控制与文件入口。'),
+                    const Text('本构建未提供观看或投屏能力。'),
+                  if (live.connected) ...[
+                    const Text('对端是否支持由会话本身确认；被拒绝会明确显示失败原因。'),
+                    const SizedBox(height: 8),
+                    for (final operation in const [
+                      SessionOperation.watch,
+                      SessionOperation.cast,
+                    ])
+                      if (live.hasCapability(operation.name))
+                        FilledButton(
+                          onPressed: widget.remote.occupied
+                              ? null
+                              : () => Navigator.pop(context, operation.name),
+                          child: Text(
+                            operation == SessionOperation.watch
+                                ? '观看该设备屏幕'
+                                : '投屏到该设备',
+                          ),
+                        ),
+                  ],
                   const SizedBox(height: 16),
                   if (live.connected)
                     for (final session in widget.connections.sessions.where(
@@ -325,11 +368,35 @@ class _FieldShellState extends State<FieldShell> {
                         onPressed: session.close,
                         child: const Text('断开并撤销授权'),
                       )
-                  else if (live.connectable && _connectionSupported)
+                  else if (live.connectable &&
+                      _connectionSupported &&
+                      widget.remote.offeredOperations.isNotEmpty) ...[
+                    // The code is entered first; the operation only starts once
+                    // the connection actually exists.
+                    const Text('连接本身不采集任何画面。'),
+                    FilledButton(
+                      onPressed: widget.remote.occupied
+                          ? null
+                          : () => Navigator.pop(
+                              context,
+                              SessionOperation.watch.name,
+                            ),
+                      child: const Text('连接并观看'),
+                    ),
+                    OutlinedButton(
+                      onPressed: widget.remote.occupied
+                          ? null
+                          : () => Navigator.pop(
+                              context,
+                              SessionOperation.cast.name,
+                            ),
+                      child: const Text('连接并投屏'),
+                    ),
+                  ] else if (live.connectable && _connectionSupported)
                     FilledButton(
                       onPressed: widget.connections.busy
                           ? null
-                          : () => Navigator.pop(context, true),
+                          : () => Navigator.pop(context, 'connect'),
                       child: const Text('连接设备'),
                     )
                   else
@@ -347,25 +414,45 @@ class _FieldShellState extends State<FieldShell> {
         },
       ),
     );
-    if (action == true && mounted) {
-      final latest = _directory()
+    if (action == null || !mounted) return;
+    final target = _directory()
+        .where((item) => item.identityId == entry.identityId)
+        .firstOrNull;
+    if (target == null) return;
+    if (!target.connected) {
+      if (!target.connectable || !_connectionSupported) return;
+      await showConnectionDialog(
+        context,
+        widget.connections,
+        device: NearbyDevice(
+          target.identityId,
+          target.name,
+          target.platform,
+          host: target.host,
+          port: target.port,
+          publicKey: target.publicKey,
+        ),
+      );
+      if (!mounted) return;
+      // The dialog already reported why a connection did not come up.
+      final connected = _directory()
           .where((item) => item.identityId == entry.identityId)
           .firstOrNull;
-      if (latest != null && latest.connectable) {
-        await showConnectionDialog(
-          context,
-          widget.connections,
-          device: NearbyDevice(
-            latest.identityId,
-            latest.name,
-            latest.platform,
-            host: latest.host,
-            port: latest.port,
-            publicKey: latest.publicKey,
-          ),
-        );
-      }
+      if (connected == null || !connected.connected) return;
     }
+    if (action == 'connect') return;
+    final live = _directory()
+        .where((item) => item.identityId == entry.identityId)
+        .firstOrNull;
+    final peerKey = live?.publicKey;
+    if (peerKey == null) return;
+    await widget.remote.start(
+      action == SessionOperation.cast.name
+          ? SessionOperation.cast
+          : SessionOperation.watch,
+      peerKey: peerKey,
+      label: live?.name,
+    );
   }
 
   Widget previewPage() {

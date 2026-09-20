@@ -7,9 +7,13 @@ import '../../platform/client_platform.dart';
 import 'preview_engine.dart';
 
 class PreviewController extends ChangeNotifier {
-  PreviewController(this.platform, this.engine);
+  PreviewController(this.platform, this.engine, {this.blockedByRemotePicture});
   final ClientPlatform platform;
   final PreviewEngine engine;
+
+  /// True while a remote picture occupies the process-wide single picture
+  /// budget. Local preview and remote sending never capture at the same time.
+  final bool Function()? blockedByRemotePicture;
   List<CaptureSource> sources = [];
   CaptureSource? selected;
   bool _explicitSource = false;
@@ -57,6 +61,11 @@ class PreviewController extends ChangeNotifier {
 
   Future<void> start() {
     if (_unavailable()) return Future.value();
+    if (blockedByRemotePicture?.call() ?? false) {
+      error = '远端画面正在进行，请先结束远端画面再开始本机预览（单画面预算）。';
+      _notify();
+      return Future.value();
+    }
 
     return _run((token) async {
       if (!await _hasPermission()) {

@@ -72,7 +72,7 @@ class ConnectionPanel extends StatelessWidget {
               contentPadding: EdgeInsets.zero,
               title: const Text('已验证 · 本地直连'),
               subtitle: Text(
-                '设备 ${connection.peerId.substring(0, 16)}\n投屏、控制和文件权限尚未开放。',
+                '设备 ${connection.peerId.substring(0, 16)}\n本版本提供观看与投屏；控制与文件入口尚未开放。',
               ),
               trailing: TextButton(
                 onPressed: connection.close,
@@ -182,7 +182,7 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
               onSubmitted: (_) => submit(),
               decoration: const InputDecoration(labelText: '6 位纯数字短接码'),
             ),
-            const Text('验证后建立 8 小时连接。当前版本观看尚未开放，不会开始远端采集。'),
+            const Text('验证后建立 8 小时连接。连接本身不采集任何画面，观看或投屏需要单独发起。'),
             if (submitting) const Text('正在验证，可随时取消'),
             if (error != null) Semantics(liveRegion: true, child: Text(error!)),
             if (attempted && widget.controller.message != null)

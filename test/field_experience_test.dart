@@ -131,7 +131,7 @@ void main() {
   });
 
   testWidgets(
-    'available connection action opens code dialog; unreleased capabilities have no entries',
+    'a discovered device is acted on through the code dialog and connecting starts no capture',
     (tester) async {
       tester.view.physicalSize = const Size(1180, 900);
       tester.view.devicePixelRatio = 1;
@@ -183,7 +183,10 @@ void main() {
         ),
         findsNothing,
       );
-      await tester.tap(find.text('连接设备'));
+      // An unverified peer is never acted on without the short code, and the
+      // remote operation is only offered together with that code step.
+      expect(find.text('观看该设备屏幕'), findsNothing);
+      await tester.tap(find.text('连接并观看'));
       await tester.pumpAndSettle();
       final field = find.descendant(
         of: find.byType(AlertDialog),
@@ -195,6 +198,7 @@ void main() {
       await tester.tap(find.text('取消'));
       await tester.pumpAndSettle();
       expect(tester.widget<OutlinedButton>(node).focusNode!.hasFocus, true);
+      // Connecting, and cancelling it, must not capture anything.
       expect(engine.sourceCalls, 0);
       expect(engine.starts, 0);
       await tester.pumpWidget(const SizedBox());

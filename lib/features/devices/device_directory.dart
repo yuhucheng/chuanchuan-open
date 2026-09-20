@@ -77,8 +77,8 @@ class DirectoryDevice {
   bool get verified => trust == DeviceTrust.verified;
   bool get online => reachability == DeviceReachability.reachable;
 
-  /// An operation may be offered only from the identity-bound capabilities of a
-  /// live connection. Saved material alone authorizes nothing.
+  /// An operation may be offered only from the capabilities of a live
+  /// connection. Saved material alone authorizes nothing.
   bool hasCapability(String operation) =>
       connected && capabilities.contains(operation);
 
