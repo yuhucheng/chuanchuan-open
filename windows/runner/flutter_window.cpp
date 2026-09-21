@@ -4,6 +4,7 @@
 #include <cstring>
 #include <flutter/standard_method_codec.h>
 #include <flutter/method_result_functions.h>
+#include "exit_trace.h"
 #include "resource.h"
 
 namespace {
@@ -12,6 +13,7 @@ constexpr UINT kExitApproved = WM_APP + 73;
 constexpr UINT kOpen = 2101, kAllow = 2102, kStopControl = 2103, kQuit = 2104;
 using Value = flutter::EncodableValue;
 using Map = flutter::EncodableMap;
+
 bool BooleanField(const Value* value, const char* key) {
   const auto* map = value ? std::get_if<Map>(value) : nullptr;
   if (!map) return false;
@@ -48,6 +50,11 @@ bool FlutterWindow::OnCreate() {
   if (!Win32Window::OnCreate()) {
     return false;
   }
+
+  // Win32Window::Create() calls Destroy() (and thus OnDestroy) before the
+  // window exists, which resets the lifetime token; mint it again so the
+  // window actually owns a valid token until teardown.
+  alive_ = std::make_shared<int>(0);
 
   RECT frame = GetClientArea();
 
@@ -125,6 +132,10 @@ bool FlutterWindow::OnCreate() {
       else if (*action == "unhide") ShowWindow(window, SW_SHOW);
       else if (*action == "close") CloseToBackground();
       else if (*action == "reopen") ShowMainWindow();
+      // Drives the real quit path (tray "退出" -> requestExit -> cleanup ->
+      // DestroyWindow), so a stuck quit can be exercised and logged without
+      // needing a real click.
+      else if (*action == "quit") RequestQuit();
       else { result->Error("invalid_action", "Unsupported window action"); return; }
       result->Success(WindowState());
     } else if (call.method_name() == "system.indicators") {
@@ -147,14 +158,17 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  TraceAppExit("OnDestroy enter");
   alive_.reset();
   if (tray_installed_) Shell_NotifyIconW(NIM_DELETE, &tray_);
   tray_installed_ = false;
   desktop_.reset();
+  TraceAppExit("OnDestroy: bridge+controller teardown begin");
   platform_bridge_.reset();
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
+  TraceAppExit("OnDestroy: teardown done");
 
   Win32Window::OnDestroy();
 }
@@ -169,7 +183,13 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     if (!tray_installed_) ShowMainWindow();
     return 0;
   }
-  if (message == kExitApproved) { exit_approved_ = true; DestroyWindow(hwnd); return 0; }
+  if (message == kExitApproved) {
+    exit_approved_ = true;
+    TraceAppExit("kExitApproved received, calling DestroyWindow");
+    DestroyWindow(hwnd);
+    TraceAppExit("DestroyWindow returned");
+    return 0;
+  }
   if (message == kTrayCallback) {
     if (LOWORD(lparam) == WM_LBUTTONDBLCLK) ShowMainWindow();
     if (LOWORD(lparam) == WM_RBUTTONUP || LOWORD(lparam) == WM_CONTEXTMENU) TrayMenu();
@@ -293,6 +313,7 @@ void FlutterWindow::TrayMenu() {
   }
 }
 void FlutterWindow::RequestQuit() {
+  TraceAppExit("RequestQuit enter");
   if (quit_pending_ || !desktop_) return;
   quit_pending_ = true;
   const std::weak_ptr<int> alive = alive_;
@@ -303,8 +324,9 @@ void FlutterWindow::RequestQuit() {
           if (alive.expired()) return;
           quit_pending_ = false;
           if (result && std::get_if<bool>(result) && std::get<bool>(*result)) {
+            TraceAppExit("requestExit result=true, posting kExitApproved");
             PostMessage(window, kExitApproved, 0, 0);
-          } else { ShowMainWindow(); }
+          } else { TraceAppExit("requestExit result=false, showing main window"); ShowMainWindow(); }
         },
         [this, alive](const std::string&, const std::string&, const Value*) {
           if (!alive.expired()) { quit_pending_ = false; ShowMainWindow(); }

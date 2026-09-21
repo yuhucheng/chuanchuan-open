@@ -3,6 +3,7 @@
 #include <dwmapi.h>
 #include <flutter_windows.h>
 
+#include "exit_trace.h"
 #include "resource.h"
 
 namespace {
@@ -180,13 +181,16 @@ Win32Window::MessageHandler(HWND hwnd,
                             LPARAM const lparam) noexcept {
   switch (message) {
     case WM_DESTROY:
+      TraceAppExit("WM_DESTROY enter");
       window_handle_ = nullptr;
       Destroy();
       if (quit_on_close_) {
+        TraceAppExit("WM_DESTROY: PostQuitMessage");
         PostQuitMessage(0);
+      } else {
+        TraceAppExit("WM_DESTROY: quit_on_close_ false, no PostQuitMessage");
       }
       return 0;
-
     case WM_DPICHANGED: {
       auto newRectSize = reinterpret_cast<RECT*>(lparam);
       LONG newWidth = newRectSize->right - newRectSize->left;

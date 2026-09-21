@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -102,13 +103,13 @@ class DesktopLifecycle extends ChangeNotifier {
     try {
       // Revoke authorization synchronously before any native cleanup await.
       final disconnect = connections.disconnectAll();
-      await Future.wait([preview.stop(), disconnect]);
+      await _exitStep('stop-capture+disconnect', () => Future.wait([preview.stop(), disconnect]));
       if (preview.cleanupFailed) throw StateError('capture cleanup');
       // Cancel a native picker before waiting for its queued result/releases.
-      if (_ready) await channel.invokeMethod<void>('prepareExit');
-      await transfers.close();
+      if (_ready) await _exitStep('cancel-picker', () => channel.invokeMethod<void>('prepareExit'));
+      await _exitStep('close-transfers', () => transfers.close());
       if (transfers.items.isNotEmpty) throw StateError('file cleanup');
-      await devices.stopForExit();
+      await _exitStep('stop-discovery', () => devices.stopForExit());
       exited = true;
       return true;
     } catch (_) {
@@ -117,6 +118,38 @@ class DesktopLifecycle extends ChangeNotifier {
     } finally {
       exiting = false;
       _notify();
+    }
+  }
+
+  // Each cleanup step is bounded: a stuck await must surface as a timeout (and
+  // be attributable to a named step), not freeze the whole quit silently. The
+  // per-step lines also go to a log file so a hang is visible even when the app
+  // was launched by double-clicking (no console attached).
+  Future<void> _exitStep(String name, Future<void> Function() action) async {
+    _exitLog('begin $name');
+    try {
+      await action().timeout(const Duration(seconds: 10));
+      _exitLog('done  $name');
+    } on TimeoutException {
+      _exitLog('TIMEOUT $name');
+      rethrow;
+    } catch (error) {
+      _exitLog('fail  $name: $error');
+      rethrow;
+    }
+  }
+
+  void _exitLog(String message) {
+    debugPrint('[exit] $message');
+    try {
+      final temp = Platform.environment['TEMP'] ?? Platform.environment['TMP'];
+      if (temp == null) return;
+      File('$temp${Platform.pathSeparator}share_hub_exit.log').writeAsStringSync(
+        '${DateTime.now().toIso8601String()} $message\n',
+        mode: FileMode.append,
+      );
+    } catch (_) {
+      /* Logging must never break the quit path. */
     }
   }
 
