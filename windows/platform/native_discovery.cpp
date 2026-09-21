@@ -33,6 +33,15 @@ std::string Utf8(const wchar_t* text) {
   WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, text, static_cast<int>(length), result.data(), size, nullptr, nullptr);
   return result;
 }
+// The ".local" name peers resolve, matching the macOS local host name. UTF-8
+// because it travels in a TXT record and is shown back as the "host:port"
+// address. Empty means the platform refused to report a name.
+std::string LocalHostname() {
+  wchar_t name[256]{}; DWORD size = 256;
+  if (!GetComputerNameExW(ComputerNameDnsHostname, name, &size)) return {};
+  const auto text = Utf8(name);
+  return text.empty() ? std::string{} : text + ".local";
+}
 std::optional<std::string> InstanceName(const wchar_t* text) {
   auto name = Utf8(text);
   if (!name.empty() && name.back() == '.') name.pop_back();
@@ -233,7 +242,8 @@ void WINAPI ResolveComplete(DWORD status, void* context, DNS_SERVICE_INSTANCE* i
         instance->keys && instance->values) {
       for (DWORD i = 0; i < instance->dwPropertyCount; ++i) {
         auto key = Utf8(instance->keys[i]);
-        if (key != "v" && key != "id" && key != "name" && key != "platform") continue;
+        // Same contract every platform advertises with; see IsAcceptedTxtKey.
+        if (!IsAcceptedTxtKey(key)) continue;
         if (event.txt.count(key)) { event.txt.clear(); event.status = ERROR_INVALID_DATA; break; }
         event.txt[key] = Utf8(instance->values[i]);
       }
@@ -291,6 +301,11 @@ struct NativeDiscovery::Impl {
   struct Resolving { std::shared_ptr<Operation> operation; uint32_t ttl; uint64_t seen; };
   std::map<std::string, Resolving> resolving;
   std::unique_ptr<Listener> listener;
+  // Presence values and the advertised endpoint are kept so a TXT change can
+  // rebuild the registration without the caller re-supplying the identity.
+  std::string presence_id_, presence_name_;
+  std::optional<uint16_t> advertise_port_;
+  std::optional<std::string> advertise_key_;
   uint64_t last_browse = 0;
   bool winsock = false, closed = false;
   void CancelBrowser() {
@@ -353,7 +368,9 @@ bool NativeDiscovery::Start(const std::string& id, const std::string& name) {
   auto fail = [&](const std::string& error) {
     impl_->StopOperations(); impl_->model.Fail(token, error); Emit(); return false;
   };
-  if (impl_->closed || !NormalizeUuid(id) || !NormalizeName(name)) return fail(u8"设备信息无效，无法开始发现。");
+  const auto presence_id = NormalizeUuid(id), presence_name = NormalizeName(name);
+  if (impl_->closed || !presence_id || !presence_name) return fail(u8"设备信息无效，无法开始发现。");
+  impl_->presence_id_ = *presence_id; impl_->presence_name_ = *presence_name;
   if (!Api::Get().available) return fail(u8"此 Windows 缺少系统 DNS-SD 接口，请更新系统后重试。");
   if (!impl_->winsock || impl_->mailbox->pending > 128 || impl_->mailbox->cleanup_error)
     return fail(u8"网络组件尚未就绪或正在清理，请稍后重试。");
@@ -362,14 +379,25 @@ bool NativeDiscovery::Start(const std::string& id, const std::string& name) {
   wchar_t hostname[256]{}; DWORD size = 256;
   if (!GetComputerNameExW(ComputerNameDnsHostname, hostname, &size)) return fail(u8"无法读取本机网络名称。");
   std::wstring host = hostname; host += L".local";
-  auto wide_id = Wide(*NormalizeUuid(id)), wide_name = Wide(*NormalizeName(name));
+  const auto wide_id = Wide(*presence_id), wide_name = Wide(*presence_name);
   std::wstring instance_name = wide_id + L"." + kService;
-  PCWSTR keys[] = {L"v", L"id", L"name", L"platform"};
-  PCWSTR values[] = {L"1", wide_id.c_str(), wide_name.c_str(), L"windows"};
+  std::vector<std::wstring> keys{L"v", L"id", L"name", L"platform"};
+  std::vector<std::wstring> values{L"1", wide_id, wide_name, L"windows"};
+  // The endpoint travels in TXT so peers offer "connect" only while we are
+  // actually listening; it is absent whenever "允许连接" is off.
+  if (impl_->advertise_port_ && impl_->advertise_key_) {
+    keys.push_back(L"host"); values.push_back(host);
+    keys.push_back(L"port"); values.push_back(std::to_wstring(*impl_->advertise_port_));
+    keys.push_back(L"key"); values.push_back(Wide(*impl_->advertise_key_));
+  }
+  std::vector<PCWSTR> key_ptrs; key_ptrs.reserve(keys.size());
+  for (const auto& item : keys) key_ptrs.push_back(item.c_str());
+  std::vector<PCWSTR> value_ptrs; value_ptrs.reserve(values.size());
+  for (const auto& item : values) value_ptrs.push_back(item.c_str());
   auto registration = std::make_shared<Registration>();
   registration->mailbox = impl_->mailbox; registration->token = token;
   registration->instance = Api::Get().construct(instance_name.c_str(), host.c_str(), nullptr, nullptr,
-      impl_->listener->port, 0, 0, 4, keys, values);
+      impl_->listener->port, 0, 0, static_cast<DWORD>(key_ptrs.size()), key_ptrs.data(), value_ptrs.data());
   if (!registration->instance) return fail(u8"无法创建 DNS-SD 设备记录。");
   impl_->registration = registration;
   auto operation = std::make_shared<Operation>(impl_->mailbox, token);
@@ -385,6 +413,30 @@ bool NativeDiscovery::Start(const std::string& id, const std::string& name) {
   }
   Emit();
   if (!impl_->Browse()) return fail(u8"DNS-SD 浏览启动失败，请检查网络策略。");
+  return true;
+}
+bool NativeDiscovery::Advertise(const std::optional<uint16_t>& port,
+                                const std::optional<std::string>& key,
+                                std::string* hostname) {
+  const auto host = LocalHostname();
+  if (host.empty()) return false;
+  const bool valid = port && key && *port >= 1;
+  std::optional<uint16_t> next_port;
+  std::optional<std::string> next_key;
+  if (valid) { next_port = port; next_key = key; }
+  const bool changed =
+      impl_->advertise_port_ != next_port || impl_->advertise_key_ != next_key;
+  impl_->advertise_port_ = next_port;
+  impl_->advertise_key_ = next_key;
+  // Windows cannot update a TXT record in place, so the registration is rebuilt
+  // when the endpoint changes. Only do it while discovery is live; a stopped run
+  // picks the new endpoint up on its next Start.
+  const auto state = snapshot().state;
+  if (changed && !impl_->presence_id_.empty() &&
+      (state == "searching" || state == "starting")) {
+    if (!Start(impl_->presence_id_, impl_->presence_name_)) return false;
+  }
+  if (hostname) *hostname = host;
   return true;
 }
 void NativeDiscovery::Stop() { impl_->model.Stop(); impl_->StopOperations(); Emit(); }

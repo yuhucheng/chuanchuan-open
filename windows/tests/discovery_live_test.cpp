@@ -16,6 +16,10 @@ bool Contains(const NativeDiscovery& service, const std::string& id) {
   for (const auto& device : service.snapshot().devices) if (device.id == id) return true;
   return false;
 }
+const Device* Seen(const NativeDiscovery& service, const std::string& id) {
+  for (const auto& device : service.snapshot().devices) if (device.id == id) return &device;
+  return nullptr;
+}
 template <class Predicate>
 bool Wait(NativeDiscovery& left, NativeDiscovery& right, int seconds, Predicate predicate) {
   auto until = std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
@@ -50,6 +54,36 @@ int main() {
     std::cerr << "FAIL: discovery did not survive a periodic browse refresh\n"; return 1;
   }
   std::cout << "PASS: both peers retained across browse refresh; observation_ms=" << elapsed() << std::endl;
+  // A published endpoint must survive browse + resolve on the peer. Without this
+  // a device stays discoverable yet can never be offered as connectable, which
+  // is exactly how an asymmetric TXT parser fails.
+  phase = std::chrono::steady_clock::now();
+  const std::string endpoint_key(44, 'k');
+  std::string endpoint_host;
+  if (!left.Advertise(uint16_t{51999}, endpoint_key, &endpoint_host) || endpoint_host.empty()) {
+    std::cerr << "FAIL: advertise endpoint: " << left.snapshot().message << '\n'; return 1;
+  }
+  if (!Wait(left, right, 60, [&] {
+        const auto* device = Seen(right, a);
+        return device && device->host == endpoint_host &&
+            device->port == "51999" && device->key == endpoint_key;
+      })) {
+    const auto* device = Seen(right, a);
+    std::cerr << "FAIL: peer did not resolve the advertised endpoint; host='"
+              << (device ? device->host : std::string("<no device>")) << "' port='"
+              << (device ? device->port : std::string()) << "'\n";
+    return 1;
+  }
+  std::cout << "PASS: peer resolved the advertised endpoint; endpoint_ms=" << elapsed() << std::endl;
+  phase = std::chrono::steady_clock::now();
+  left.Advertise(std::nullopt, std::nullopt, nullptr);
+  if (!Wait(left, right, 60, [&] {
+        const auto* device = Seen(right, a);
+        return device && device->host.empty() && device->port.empty() && device->key.empty();
+      })) {
+    std::cerr << "FAIL: withdrawn endpoint still offered to peers\n"; return 1;
+  }
+  std::cout << "PASS: withdrawn endpoint cleared for peers; withdrawal_ms=" << elapsed() << std::endl;
   phase = std::chrono::steady_clock::now();
   right.Stop();
   if (!Wait(left, right, 135, [&] { return !Contains(left, b); })) {

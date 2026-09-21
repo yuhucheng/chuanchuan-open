@@ -88,7 +88,30 @@ std::optional<Device> ParseDevice(const TxtRecord& record, const std::string& lo
   // Names received from peers retain their spelling, matching the Mac contract.
   auto raw = Decode(record.at("name"));
   for (const auto& c : *raw) if (Control(c.value)) return std::nullopt;
-  return Device{*id, record.at("name"), platform};
+  Device device{*id, record.at("name"), platform};
+  // Mirror the macOS endpoint gate exactly: a partial or malformed
+  // advertisement stays discoverable but not connectable, so it can never be
+  // offered as a verified endpoint.
+  const auto host_field = record.find("host");
+  const auto port_field = record.find("port");
+  const auto key_field = record.find("key");
+  if (host_field != record.end() && port_field != record.end() && key_field != record.end()) {
+    const auto& hostname = host_field->second;
+    const auto& text = port_field->second;
+    bool digits = !text.empty() && text.size() <= 5;
+    uint32_t number = 0;
+    for (const char c : text) {
+      if (c < '0' || c > '9') { digits = false; break; }
+      number = number * 10 + static_cast<uint32_t>(c - '0');
+    }
+    if (digits && number >= 1 && number <= 65535 &&
+        hostname.size() >= 6 && hostname.size() <= 253 &&
+        hostname.compare(hostname.size() - 6, 6, ".local") == 0 &&
+        key_field->second.size() == 44) {
+      device.host = hostname; device.port = text; device.key = key_field->second;
+    }
+  }
+  return device;
 }
 uint64_t DiscoveryModel::Start(const std::string& local_id) {
   Stop(); local_id_ = local_id; snapshot_.state = "starting"; return generation_;

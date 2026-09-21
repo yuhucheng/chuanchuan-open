@@ -5,6 +5,8 @@
 #include <flutter/flutter_view_controller.h>
 
 #include <memory>
+#include <string>
+#include <vector>
 #include <flutter/method_channel.h>
 #include <flutter/encodable_value.h>
 #include <shellapi.h>
@@ -12,6 +14,17 @@
 #include "win32_window.h"
 
 namespace share_hub { class PlatformBridge; }
+
+// One tray entry. The menu and the "window.state" observation are built from the
+// same list, so a recorded acceptance state can never disagree with the menu the
+// user gets. "separator_before" mirrors a menu separator, which has no item.
+struct TrayItem {
+  std::wstring title;
+  bool enabled;
+  bool checked;
+  int command;
+  bool separator_before;
+};
 
 // A window that does nothing but host a Flutter view.
 class FlutterWindow : public Win32Window {
@@ -32,10 +45,16 @@ class FlutterWindow : public Win32Window {
   void ShowMainWindow();
   void RequestQuit();
   void TrayMenu();
+  void CloseToBackground();
+  // The tray menu is built from this list, so the menu and the observed state
+  // cannot drift apart.
+  std::vector<TrayItem> TrayItems() const;
+  flutter::EncodableValue WindowState();
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> desktop_;
   NOTIFYICONDATAW tray_{};
   bool desktop_ready_ = false, tray_installed_ = false, quit_pending_ = false;
   bool allow_connections_ = false, connection_supported_ = false;
+  bool exit_approved_ = false;
   UINT taskbar_created_ = 0;
   std::shared_ptr<int> alive_ = std::make_shared<int>(0);
   // The project to run.

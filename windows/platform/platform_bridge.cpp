@@ -1,4 +1,5 @@
 #include "platform_bridge.h"
+#include "connection_security.h"
 #include "device_preferences.h"
 #include "native_discovery.h"
 #include "selected_file_store.h"
@@ -51,8 +52,14 @@ Value DeviceValue(const Device& device) {
 Value SnapshotValue(const DiscoverySnapshot& snapshot) {
   List devices;
   for (const auto& device : snapshot.devices) {
-    devices.emplace_back(Map{{Value("id"), Value(device.id)}, {Value("name"), Value(device.name)},
-                             {Value("platform"), Value(device.platform)}});
+    Map entry{{Value("id"), Value(device.id)}, {Value("name"), Value(device.name)},
+              {Value("platform"), Value(device.platform)}};
+    // Endpoint fields are present only while the peer is accepting connections,
+    // matching the macOS dictionary and the Dart "connectable" gate.
+    if (!device.host.empty()) entry[Value("host")] = Value(device.host);
+    if (!device.port.empty()) entry[Value("port")] = Value(device.port);
+    if (!device.key.empty()) entry[Value("key")] = Value(device.key);
+    devices.emplace_back(std::move(entry));
   }
   Map value{{Value("state"), Value(snapshot.state)}, {Value("devices"), Value(devices)}};
   if (!snapshot.message.empty()) value[Value("message")] = Value(snapshot.message);
@@ -61,11 +68,13 @@ Value SnapshotValue(const DiscoverySnapshot& snapshot) {
 }
 struct PlatformBridge::Impl {
   Impl(HWND window, std::wstring registry_key)
-      : window(window), preferences(std::move(registry_key)), discovery(window) {}
+      : window(window), preferences(registry_key),
+        security(std::move(registry_key)), discovery(window) {}
   HWND window;
   bool loaded = false, closed = false;
   UINT_PTR timer = 0;
   DevicePreferences preferences;
+  ConnectionSecurity security;
   NativeDiscovery discovery;
   SelectedFileStore files;
   ComPtr<IFileOpenDialog> picker;
@@ -185,6 +194,49 @@ PlatformBridge::PlatformBridge(flutter::BinaryMessenger* messenger, HWND window,
       } catch (const SelectedFileException& error) {
         FileFailure(result.get(), error.reason());
       }
+      return;
+    }
+    if (method == "connection.identity") {
+      // Protected-storage failure must be a hard error: an anonymous fallback
+      // identity would silently break every saved peer.
+      std::vector<uint8_t> seed;
+      if (!impl_->security.LoadIdentitySeed(&seed)) {
+        result->Error("identity_unavailable", u8"无法读取设备身份，请检查本机受保护存储。");
+        return;
+      }
+      result->Success(Value(seed));
+      return;
+    }
+    if (method == "connection.clock") {
+      uint64_t micros = 0;
+      if (!ConnectionSecurity::ContinuousMicros(&micros)) {
+        result->Error("clock_unavailable", u8"系统连续时钟不可用，无法安全计期。");
+        return;
+      }
+      result->Success(Value(static_cast<int64_t>(micros)));
+      return;
+    }
+    if (method == "connection.advertise") {
+      // A null port or key clears the endpoint, matching the macOS primitive.
+      const auto* args = call.arguments() ? std::get_if<Map>(call.arguments()) : nullptr;
+      std::optional<uint16_t> port;
+      std::optional<std::string> key;
+      if (args) {
+        const auto* port_value = Field(*args, "port");
+        const auto* key_value = Field(*args, "key");
+        const auto number = port_value ? Integer(*port_value) : std::nullopt;
+        const auto* text = key_value ? std::get_if<std::string>(key_value) : nullptr;
+        if (number && *number >= 1 && *number <= 65535) {
+          port = static_cast<uint16_t>(*number);
+        }
+        if (text) key = *text;
+      }
+      std::string hostname;
+      if (!impl_->discovery.Advertise(port, key, &hostname)) {
+        result->Error("discovery_failed", u8"无法发布连接入口，请检查局域网发现是否正常。");
+        return;
+      }
+      result->Success(hostname.empty() ? Value() : Value(hostname));
       return;
     }
     if (method == "loadDevice" || method == "setDeviceName" || method == "startDiscovery") {

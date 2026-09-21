@@ -48,7 +48,7 @@ class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
   late final _engine = widget.previewEngine;
   late final _fileAccess = widget.fileAccess ?? MethodChannelFileAccess();
   late final _devices = DeviceController(_platform);
-  late final _connections = ConnectionController(MacConnectionPlatform());
+  late final _connections = ConnectionController(MethodChannelConnectionPlatform());
   // Both sides consult the other so the single picture budget is respected in
   // either direction. The closures are lazy, so a late field is only read after
   // the tree is built.
@@ -70,9 +70,9 @@ class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
     connections: _connections,
     preview: _preview,
     transfers: _transfers,
-    connectionSupported:
-        (widget.targetPlatform ?? defaultTargetPlatform) ==
-        TargetPlatform.macOS,
+    connectionSupported: connectionHostSupported(
+      widget.targetPlatform ?? defaultTargetPlatform,
+    ),
   );
 
   @override

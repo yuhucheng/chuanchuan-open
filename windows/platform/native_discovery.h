@@ -17,6 +17,12 @@ class NativeDiscovery {
   NativeDiscovery(const NativeDiscovery&) = delete;
   NativeDiscovery& operator=(const NativeDiscovery&) = delete;
   bool Start(const std::string& id, const std::string& name);
+  // Publishes or clears the connection endpoint on the live advertisement: an
+  // unset port or key clears it. Returns the local ".local" host name callers
+  // show as "host:port", or false when the endpoint could not be published.
+  // Safe to call while discovery is stopped (the endpoint is applied on start).
+  bool Advertise(const std::optional<uint16_t>& port,
+                 const std::optional<std::string>& key, std::string* hostname);
   void Stop();
   void Pump();
   void Tick();

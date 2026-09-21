@@ -11,6 +11,7 @@ add_executable(${BINARY_NAME} WIN32
   "main.cpp"
   "utils.cpp"
   "win32_window.cpp"
+  "../platform/connection_security.cpp"
   "../platform/discovery_model.cpp"
   "../platform/device_preferences.cpp"
   "../platform/native_discovery.cpp"
@@ -40,7 +41,7 @@ target_compile_definitions(${BINARY_NAME} PRIVATE WIN32_LEAN_AND_MEAN)
 # dependencies here.
 target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app)
 target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib")
-target_link_libraries(${BINARY_NAME} PRIVATE dnsapi ws2_32 advapi32 ole32 shell32 uuid)
+target_link_libraries(${BINARY_NAME} PRIVATE dnsapi ws2_32 advapi32 ole32 shell32 uuid crypt32 bcrypt)
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.

@@ -5,8 +5,9 @@ $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('share-hub-required-sdk-' + [g
 New-Item -ItemType Directory -Path $tempRoot | Out-Null
 function Assert($Condition, $Message) { if (!$Condition) { throw $Message } }
 function Fixture($Name) {
-    $project = Join-Path $tempRoot "$Name/client 空格"
-    $sdk = Join-Path $tempRoot "$Name/sdk 空格"
+    # Cover non-ASCII and space characters in both the project and SDK paths.
+    $project = Join-Path $tempRoot "$Name/客户端 空格"
+    $sdk = Join-Path $tempRoot "$Name/媒体SDK 空格"
     New-Item -ItemType Directory -Force -Path $project,(Join-Path $sdk 'lib') | Out-Null
     Set-Content -LiteralPath (Join-Path $project 'pubspec.yaml') -Value "name: share_hub_open`ndependencies:`n  share_hub_media_sdk:`n    path: .local/media-sdk/package"
     Set-Content -LiteralPath (Join-Path $sdk 'pubspec.yaml') -Value 'name: share_hub_media_sdk'
@@ -28,7 +29,7 @@ try {
     Assert ((Get-FileHash -LiteralPath $manifest).Hash -eq $before) 'Manifest was modified'
     Assert (Test-Path -LiteralPath (Join-Path $f.Project '.local/media-sdk/package/lib/share_hub_media_sdk.dart')) 'Linked SDK missing'
     Assert (!(Test-Path -LiteralPath (Join-Path $f.Project '.local/media-sdk/main.dart'))) 'Unexpected alternate entry'
-    Write-Output 'PASS SDK linking is idempotent, handles spaces, preserves manifest and normal entry'
+    Write-Output 'PASS SDK linking is idempotent, handles non-ASCII and space paths, preserves manifest and normal entry'
 
     $f=Fixture 'invalid'
     Set-Content -LiteralPath (Join-Path $f.Sdk 'pubspec.yaml') -Value 'name: wrong_sdk'

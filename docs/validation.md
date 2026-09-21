@@ -295,3 +295,37 @@ source-loss（采集真实 TextEdit 窗口，随后用 `pkill` 关闭该窗口�
 ### 本轮回归
 
 `flutter analyze --no-pub` 无问题；客户端 `flutter test --no-pub` **72/72**；SDK `flutter test --no-pub` **91/91**；`swift test --package-path macos/Platform` **6/6**；`npm run spec:validate` **22 passed / 0 failed**；验收构建未覆盖产品 app（mtime 守卫通过）。
+
+## 2026-09-18 Windows 依赖链复验与工具链解阻
+
+开发机补齐 Windows 侧工具链前置：安装 PowerShell 7（原机仅有 5.1，多个带 `#Requires -Version 7.0` 的工具脚本无法运行）；按 `native/libwebrtc/README.md` 建立 Windows SDK 覆盖目录，各顶层目录指向已安装 SDK 10.0.26100，`Debuggers/x64/dbghelp.dll` 取同一 SDK App Certification Kit 的 x64 `DbgHelp.dll`（未修改系统目录，未用其他版本 DLL 顶替）。
+
+核对本机既有 libwebrtc 开发产物 `build/windows/libwebrtc`：`build-manifest.json`、`source-lock.json`、补丁与 DLL 校验值自洽（DLL SHA-256 `6a0d77…`、补丁 SHA-256 `20fea9…`），版本锁五个提交与仓内 `native/libwebrtc/source-lock.json` 完全相同，确认为固定版本 x64 产物。使用该产物执行客户端 `flutter pub get`、`tool/prepare_windows_plugins.ps1`、再次 `pub get` 及 `flutter build windows --debug --no-pub`：构建成功（55.6s），产物 `build/windows/x64/runner/Debug/libwebrtc.dll` 的 SHA-256 与 manifest 记录值一致，说明 SDK 的 Windows 插件构建钩子已用自建补丁版替换上游预编译 DLL；构建未产生受跟踪文件改动。
+
+`tool/test_configure_media_sdk.ps1` 本轮可执行（此前缺 PowerShell 7）。测试夹具路径改为在项目路径与 SDK 路径两侧同时包含中文与空格字符后：链接幂等、非 ASCII/空格路径、清单不被改写、无效包在写入前拒绝、已解压 SDK 不被覆盖、冲突链接保留、遗留本地配置不被覆盖、重定向目标拒绝，6/6 通过。
+
+边界：本轮复用既有本机开发 DLL，未重新执行 WebRTC 源码编译，不构成正式二进制制品、签名或发行验收；未进行实机媒体、双机通信与真实窗口采集验收；未安装 ARM64 交叉工具链，Windows arm64 制品（D2/D3 要求）当前不可构建。
+
+## 2026-09-18 Windows 后台/预览回归与默认主屏边界
+
+在 Windows 开发机对本轮代码执行回归：`flutter analyze --no-pub` 无问题；`flutter test --no-pub --concurrency=1` **70/70 通过**；`flutter build windows --debug --no-pub` 成功（10.4s），产物 `build/windows/x64/runner/Debug/share_hub.exe`，其中 `libwebrtc.dll` 的 SHA-256 与 `build-manifest.json` 记录值一致，仍为自建补丁版。70 项覆盖主屏解析/失效不回退、权限拒绝与撤回、启停与首帧分离、首帧超时释放、退出统一清理与失败重试、清理失败阻塞后续采集、迟到令牌释放等。
+
+更正此前结论：本工作区**可以**运行 `flutter test`。"`flutter_tester` 启动即退、WebSocket 握手失败"的真因是会话内 `HTTP_PROXY/HTTPS_PROXY` 指向沙箱代理且未设 `NO_PROXY`，测试运行器与 `flutter_tester` 之间的 **localhost 连接被代理拦截**；清除代理变量后即稳定通过。与代码和回环网络无关。
+
+默认当前主屏在 Windows 仍为**实现缺口**：客户端解析策略与测试已就绪（`preview_controller.dart` / `preview_controller_test.dart`），但 Windows 引擎走上游 `WebRtcPreviewEngine`，`getDesktopSources` 只返回 `id`/`name`/`type`，无主屏标志，因而"明确开始即采集当前主屏"在 Windows 不成立，界面仍要求明确选源。屏幕 source id 的确切语义不在本仓源码内（仅可确认窗口 id 为纯数字 HWND），在拿到真实枚举数据前不做猜测实现。
+
+边界：`flutter devices` / `flutter run` / 真机集成测试在本会话被安全策略阻断（`reg.exe` 命中程序黑名单），故真实托盘交互、关闭到后台后真实持续帧、20 次启停、权限撤回与句柄/线程快照均**未实测**；本轮 70 项与构建是自动证据，不代替实机验收。工作区仍为未提交状态，不是发布组合。
+
+## 2026-09-18 Windows 默认主屏实现与来源探针
+
+新增只读来源探针（`tool/probe_windows_sources.ps1`、SDK 侧 `integration_test/windows_source_probe_test.dart` 与 `tool/windows_monitor_probe.ps1`），由用户在本机交互式桌面执行一次，取得原生 `getDesktopSources`、引擎 `sources()`、显示器清单与交叉推断，`All tests passed!`。
+
+实测结论：屏幕 source id 就是 `EnumDisplayDevicesW` 的 `device_index`（引擎 `id="0"` = 唯一 active 适配器 index 0）；主屏由两条独立 Win32 路径互证为 `\\.\DISPLAY1`（`DISPLAY_DEVICEW.stateFlags` 的 `PRIMARY_DEVICE` 位，与 `MonitorFromPoint`+`GetMonitorInfoW` 的 `MONITORINFOF_PRIMARY`/`szDevice` 同时命中同一显示器）；7 个适配器仅 index 0 被收录，证实 `device_index` 不连续。**更正上一节"屏幕 source id 的确切语义不在本仓源码内"的结论** —— 该语义已由上游源码阅读与本机实测共同确认。
+
+据此在 SDK 实现 Windows 默认主屏标记：新增 `lib/src/windows_display_devices.dart`（Dart FFI 调 `user32!EnumDisplayDevicesW`；纯函数 `primaryScreenSourceId` 仅在唯一 attached+primary 适配器存在时返回其 index，0 个或多个一律返回 null，与客户端"必须恰好 1 个主屏否则要求明确选源"的语义对齐），`WebRtcPreviewEngine._sourcesOfType` 据此填充契约中既有的 `CaptureSource.isPrimary`。未改原生、未重编 WebRTC，客户端 `preview_controller.dart` 无需改动。SDK 新增 `ffi: ^2.2.0` 显式依赖（原为传递依赖，版本未变）。
+
+验证：SDK `flutter analyze --no-pub` 无问题、`flutter test --no-pub --concurrency=1` **98/98 通过**（新增 `test/windows_display_devices_test.dart` 7 项，含真机探针快照与"主屏非 index 0"合成用例）；客户端 `flutter analyze --no-pub` 无问题、`flutter test --no-pub --concurrency=1` **70/70 通过**；`flutter build windows --debug --no-pub` 成功（22.0s），产物 `libwebrtc.dll` SHA-256 仍与 `build-manifest.json` 一致。
+
+工具约束：仓内 `tool/*.ps1` 首行均为 `#Requires -Version 7.0`，在 Windows PowerShell 5.1 下直接调用会在**解析期**被拒绝且脚本正文不会执行，必须用 pwsh 7 启动。
+
+边界：本机为**单显示器**且主屏恰为 index 0，"主屏非 0"与"多屏"分支只有合成单测、无真机证据；`engineSources.isPrimary` 的端到端复验尚未执行。托盘交互、20 次启停、权限撤回与句柄/线程快照仍未实测。工作区仍未提交，不是发布组合。

@@ -9,7 +9,14 @@
 
 namespace share_hub {
 using TxtRecord = std::map<std::string, std::string>;
-struct Device { std::string id, name, platform; };
+struct Device {
+  std::string id, name, platform;
+  // Advertised connection endpoint, present only while the peer accepts
+  // connections: host is the ".local" name, port the TCP port, key the peer's
+  // Ed25519 public key. Empty means discoverable but not connectable, so the UI
+  // never offers a connection the peer cannot answer.
+  std::string host, port, key;
+};
 struct DiscoverySnapshot {
   std::string state = "stopped";
   std::vector<Device> devices;
@@ -20,6 +27,15 @@ enum class EventDisposition { Ignore, Handle, MailboxFailure };
 std::optional<std::string> NormalizeName(const std::string& value);
 std::optional<std::string> NormalizeUuid(const std::string& value);
 std::optional<Device> ParseDevice(const TxtRecord& record, const std::string& local_id);
+
+// TXT keys in the shared discovery contract, matching the macOS browser which
+// reads the same seven. Advertising and parsing must agree on this set: dropping
+// "host"/"port"/"key" from the parser leaves a peer that every other platform
+// treats as connectable permanently non-connectable here.
+inline bool IsAcceptedTxtKey(const std::string& key) {
+  return key == "v" || key == "id" || key == "name" || key == "platform" ||
+      key == "host" || key == "port" || key == "key";
+}
 
 // Main-thread state; token checks make callbacks from a previous run harmless.
 class DiscoveryModel {

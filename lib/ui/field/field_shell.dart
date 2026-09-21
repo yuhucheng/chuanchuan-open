@@ -50,9 +50,10 @@ class _FieldShellState extends State<FieldShell> {
   /// with a new short code.
   final _verifiedNames = <String, String>{};
 
-  /// Connection is shipped for macOS only; other hosts keep discovery read-only.
+  /// Trusted connections ship for the desktop hosts; every other host keeps
+  /// discovery read-only.
   bool get _connectionSupported =>
-      widget.targetPlatform == TargetPlatform.macOS;
+      connectionHostSupported(widget.targetPlatform);
 
   /// Discovery, trust, reachability and capability are projected from the
   /// current snapshot and the live authenticated sessions only.
@@ -271,7 +272,7 @@ class _FieldShellState extends State<FieldShell> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (widget.targetPlatform == TargetPlatform.macOS)
+              if (_connectionSupported)
                 AnimatedBuilder(
                   animation: widget.connections,
                   builder: (_, _) =>
@@ -399,8 +400,15 @@ class _FieldShellState extends State<FieldShell> {
                           : () => Navigator.pop(context, 'connect'),
                       child: const Text('连接设备'),
                     )
-                  else
-                    const Text('对端未提供可验证的连接入口，或本平台尚未支持连接。'),
+                  else if (!_connectionSupported)
+                    const Text('本平台尚未支持连接。')
+                  else ...[
+                    const Text('对端当前未开放连接入口。'),
+                    const Text(
+                      '连接入口只在对方开启「允许连接」后的有效期内广播，过时即撤下；'
+                      '请让对方重新开启，再点「刷新」立即重试。',
+                    ),
+                  ],
                 ],
               ),
             ),

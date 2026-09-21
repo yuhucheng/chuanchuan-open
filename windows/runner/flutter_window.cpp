@@ -18,6 +18,22 @@ bool BooleanField(const Value* value, const char* key) {
   const auto found = map->find(Value(key));
   return found != map->end() && std::get_if<bool>(&found->second) && std::get<bool>(found->second);
 }
+const std::string* StringField(const Value* value, const char* key) {
+  const auto* map = value ? std::get_if<Map>(value) : nullptr;
+  if (!map) return nullptr;
+  const auto found = map->find(Value(key));
+  return found != map->end() ? std::get_if<std::string>(&found->second) : nullptr;
+}
+std::string Utf8(const std::wstring& text) {
+  if (text.empty()) return {};
+  const int size = WideCharToMultiByte(CP_UTF8, 0, text.data(),
+      static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
+  if (size <= 0) return {};
+  std::string result(static_cast<size_t>(size), '\0');
+  WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()),
+      result.data(), size, nullptr, nullptr);
+  return result;
+}
 }
 
 #include "flutter/generated_plugin_registrant.h"
@@ -94,6 +110,27 @@ bool FlutterWindow::OnCreate() {
       result->Success(); RequestQuit();
     } else if (call.method_name() == "prepareExit") {
       platform_bridge_->CancelFilePicker(); result->Success();
+    } else if (call.method_name() == "window.state") {
+      result->Success(WindowState());
+    } else if (call.method_name() == "window.action") {
+      // Acceptance-only window control, mirroring macOS: the product UI never
+      // calls this, but the background matrix (minimize / hide /
+      // close-to-tray / reopen) cannot be driven by real clicks from the host.
+      const auto* action = StringField(call.arguments(), "action");
+      if (!action) { result->Error("invalid_action", "Missing window action"); return; }
+      const auto window = GetHandle();
+      if (*action == "minimize") ShowWindow(window, SW_MINIMIZE);
+      else if (*action == "deminiaturize") ShowWindow(window, SW_RESTORE);
+      else if (*action == "hide") ShowWindow(window, SW_HIDE);
+      else if (*action == "unhide") ShowWindow(window, SW_SHOW);
+      else if (*action == "close") CloseToBackground();
+      else if (*action == "reopen") ShowMainWindow();
+      else { result->Error("invalid_action", "Unsupported window action"); return; }
+      result->Success(WindowState());
+    } else if (call.method_name() == "system.indicators") {
+      // No Windows counterpart to the macOS screen-recording indicator. An empty
+      // list is an unsupported observation, never "the system shows no indicator".
+      result->Success(Value(flutter::EncodableList{}));
     } else { result->NotImplemented(); }
   });
 
@@ -132,16 +169,14 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     if (!tray_installed_) ShowMainWindow();
     return 0;
   }
-  if (message == kExitApproved) { DestroyWindow(hwnd); return 0; }
+  if (message == kExitApproved) { exit_approved_ = true; DestroyWindow(hwnd); return 0; }
   if (message == kTrayCallback) {
     if (LOWORD(lparam) == WM_LBUTTONDBLCLK) ShowMainWindow();
     if (LOWORD(lparam) == WM_RBUTTONUP || LOWORD(lparam) == WM_CONTEXTMENU) TrayMenu();
     return 0;
   }
-  if (message == WM_CLOSE && desktop_ready_) {
-    if (tray_installed_ && !quit_pending_) ShowWindow(hwnd, SW_HIDE);
-    else if (!quit_pending_) RequestQuit();
-    return 0;
+  if (message == WM_CLOSE) {
+    if (desktop_ready_) { CloseToBackground(); return 0; }
   }
   if (platform_bridge_ && platform_bridge_->HandleMessage(message, wparam)) return 0;
   if (message == WM_GETMINMAXINFO) {
@@ -194,16 +229,58 @@ void FlutterWindow::ShowMainWindow() {
   ShowWindow(GetHandle(), IsIconic(GetHandle()) ? SW_RESTORE : SW_SHOW);
   SetForegroundWindow(GetHandle());
 }
+std::vector<TrayItem> FlutterWindow::TrayItems() const {
+  return {
+    {L"打开主窗口", true, false, kOpen, false},
+    {connection_supported_ ? L"允许连接" : L"允许连接（当前平台不可用）",
+     connection_supported_ && !quit_pending_, allow_connections_, kAllow, false},
+    {L"停止控制（当前无远控会话）", !quit_pending_, false, kStopControl, false},
+    {L"退出串串", !quit_pending_, false, kQuit, true},
+  };
+}
+
+flutter::EncodableValue FlutterWindow::WindowState() {
+  const auto window = GetHandle();
+  const bool iconic = IsIconic(window) != FALSE;
+  const bool visible = IsWindowVisible(window) != FALSE;
+  std::vector<Value> items;
+  for (const auto& item : TrayItems()) {
+    items.push_back(Value(Map{
+        {Value("title"), Value(Utf8(item.title))},
+        {Value("enabled"), Value(item.enabled)},
+        {Value("checked"), Value(item.checked)},
+    }));
+  }
+  return Value(Map{
+      {Value("visible"), Value(visible)},
+      {Value("miniaturized"), Value(iconic)},
+      {Value("key"), Value(GetForegroundWindow() == window)},
+      {Value("onscreen"), Value(visible && !iconic)},
+      {Value("trayInstalled"), Value(tray_installed_)},
+      {Value("trayButtonAvailable"), Value(tray_installed_)},
+      {Value("trayItems"), Value(items)},
+      {Value("desktopReady"), Value(desktop_ready_)},
+      {Value("terminationApproved"), Value(exit_approved_)},
+      {Value("quitPending"), Value(quit_pending_)},
+  });
+}
+
+void FlutterWindow::CloseToBackground() {
+  const auto window = GetHandle();
+  if (tray_installed_ && !quit_pending_) ShowWindow(window, SW_HIDE);
+  else if (!quit_pending_) RequestQuit();
+}
+
 void FlutterWindow::TrayMenu() {
   const auto menu = CreatePopupMenu();
   if (!menu) return;
-  AppendMenuW(menu, MF_STRING, kOpen, L"打开主窗口");
-  AppendMenuW(menu, MF_STRING | (allow_connections_ ? MF_CHECKED : MF_UNCHECKED) |
-      (connection_supported_ && !quit_pending_ ? MF_ENABLED : MF_GRAYED), kAllow,
-      connection_supported_ ? L"允许连接" : L"允许连接（当前平台不可用）");
-  AppendMenuW(menu, MF_STRING, kStopControl, L"停止控制（当前无远控会话）");
-  AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-  AppendMenuW(menu, MF_STRING | (quit_pending_ ? MF_GRAYED : MF_ENABLED), kQuit, L"退出串串");
+  for (const auto& item : TrayItems()) {
+    if (item.separator_before) AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu,
+        MF_STRING | (item.enabled ? MF_ENABLED : MF_GRAYED) |
+            (item.checked ? MF_CHECKED : MF_UNCHECKED),
+        static_cast<UINT_PTR>(item.command), item.title.c_str());
+  }
   POINT point{}; GetCursorPos(&point); SetForegroundWindow(GetHandle());
   const auto selected = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
       point.x, point.y, 0, GetHandle(), nullptr);

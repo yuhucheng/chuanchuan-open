@@ -979,7 +979,7 @@ Future<void> _backgroundScenario(
   // The shipped background owner, wired exactly as the client wires it.
   final desktop = DesktopLifecycle(
     devices: DeviceController(platform),
-    connections: ConnectionController(MacConnectionPlatform()),
+    connections: ConnectionController(MethodChannelConnectionPlatform()),
     preview: preview,
     transfers: transfers,
     connectionSupported: false,

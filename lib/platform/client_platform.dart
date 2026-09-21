@@ -1,5 +1,10 @@
 import 'package:flutter/services.dart';
 
+/// Hosts that ship trusted connections. Every other host keeps discovery
+/// read-only, so the UI never offers a connection that platform cannot finish.
+bool connectionHostSupported(TargetPlatform platform) =>
+    platform == TargetPlatform.macOS || platform == TargetPlatform.windows;
+
 class LocalDevice {
   const LocalDevice(this.id, this.name);
   final String id;

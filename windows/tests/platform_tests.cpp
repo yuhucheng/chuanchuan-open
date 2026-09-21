@@ -102,9 +102,60 @@ void MailboxFailureAcrossGenerations() {
   Check(model.ClassifyEvent(DiscoveryEventKind::Registered, old, 1) == EventDisposition::Ignore,
         "ordinary late completion remains ignored");
 }
+void EndpointRecords() {
+  const std::string key(44, 'A');
+  auto advertised = Record();
+  advertised["host"] = "studio-mac.local";
+  advertised["port"] = "51234";
+  advertised["key"] = key;
+  auto endpoint = ParseDevice(advertised, local);
+  Check(endpoint && endpoint->host == "studio-mac.local" && endpoint->port == "51234" &&
+            endpoint->key == key, "complete endpoint advertisement accepted");
+  // A peer that advertises presence only stays discoverable but not connectable,
+  // so the UI never offers a connection that cannot be answered.
+  auto presence_only = ParseDevice(Record(), local);
+  Check(presence_only && presence_only->host.empty() && presence_only->port.empty() &&
+            presence_only->key.empty(), "presence without endpoint stays not connectable");
+  const std::pair<const char*, std::string> invalid[] = {
+      {"host", "studio-mac"}, {"host", "studio"}, {"port", "0"}, {"port", "70000"},
+      {"port", "12a4"}, {"port", ""}, {"key", std::string(43, 'A')},
+      {"key", std::string(45, 'A')}};
+  for (const auto& item : invalid) {
+    auto changed = advertised; changed[item.first] = item.second;
+    auto device = ParseDevice(changed, local);
+    Check(device && device->host.empty() && device->port.empty() && device->key.empty(),
+          "malformed endpoint stays not connectable");
+  }
+}
+void TxtContract() {
+  // The resolver whitelist must carry the endpoint keys. A key the advertiser
+  // publishes but the parser drops leaves a connectable peer looking like a
+  // presence-only device forever.
+  for (const auto* key : {"v", "id", "name", "platform", "host", "port", "key"}) {
+    Check(IsAcceptedTxtKey(key), "contract TXT key accepted");
+  }
+  for (const auto* key : {"", "h", "HOST", "publicKey", "ip", "host ", "port2"}) {
+    Check(!IsAcceptedTxtKey(key), "foreign TXT key rejected");
+  }
+  // Filtering the exact record macOS publishes must still yield a connectable
+  // device end to end.
+  TxtRecord advertised{{"v", "1"}, {"id", remote}, {"name", u8"我的 Mac"},
+                       {"platform", "macos"}, {"host", "studio-mac.local"},
+                       {"port", "51234"}, {"key", std::string(44, 'A')}};
+  TxtRecord accepted;
+  for (const auto& field : advertised) {
+    if (IsAcceptedTxtKey(field.first)) accepted[field.first] = field.second;
+  }
+  Check(accepted.size() == advertised.size(), "whitelist keeps every contract key");
+  auto device = ParseDevice(accepted, local);
+  Check(device && device->host == "studio-mac.local" && device->port == "51234" &&
+            device->key.size() == 44,
+        "whitelisted macOS advertisement stays connectable");
+}
 }
 int main() {
   NamesAndRecords(); Lifecycle(); ResolveInvalidation(); BrowseInvalidation(); MailboxFailureAcrossGenerations();
+  EndpointRecords(); TxtContract();
   std::cout << "native model checks=" << checks << " failures=" << failures << '\n';
   return failures ? 1 : 0;
 }

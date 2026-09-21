@@ -151,11 +151,40 @@ public final class LocalDiscovery {
         if let port, let key, let host, (1...65535).contains(port) {
             connectionRecord = ["host": host, "port": String(port), "key": key]
         }
-        if var service = listener?.service {
-            service.txtRecordObject = NWTXTRecord(presence.merging(connectionRecord) { _, new in new })
-            listener?.service = service
-        }
+        rebuildListener()
         return host
+    }
+
+    // Windows' DNS-SD cache holds a TXT record for its full TTL (~75 min) and
+    // never observes an in-place update, so toggling the endpoint in place would
+    // leave a Windows peer staring at a stale record without host/port/key.
+    // Rebuilding the listener forces a fresh registration (goodbye + register),
+    // which every platform's resolver picks up. Verified 2026-09-21: a fresh
+    // registration resolves to all 7 keys while an in-place update stays at 4.
+    private func rebuildListener() {
+        let token = generation
+        guard let id = presence["id"] else { return }
+        listener?.cancel()
+        do {
+            let newListener = try NWListener(using: .tcp)
+            listener = newListener
+            var service = NWListener.Service(name: id, type: Self.serviceType, domain: "local.")
+            service.txtRecordObject = NWTXTRecord(presence.merging(connectionRecord) { _, new in new })
+            newListener.service = service
+            newListener.newConnectionHandler = { $0.cancel() }
+            newListener.stateUpdateHandler = { [weak self] value in
+                guard let self, self.generation == token else { return }
+                switch value {
+                case .ready: self.listenerReady = true; self.updateState()
+                case .waiting: self.listenerReady = false; self.waiting()
+                case .failed: self.fail()
+                default: break
+                }
+            }
+            newListener.start(queue: .main)
+        } catch {
+            fail()
+        }
     }
 
     public func stop() {

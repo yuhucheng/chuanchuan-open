@@ -5,13 +5,16 @@ import 'package:flutter/services.dart';
 import 'package:share_hub_connection/share_hub_connection.dart';
 import 'package:share_hub_media_api/share_hub_media_api.dart';
 
+/// Identity, a continuous clock and the discovery advertisement come from the
+/// platform channel. macOS and Windows implement the same channel, so this is
+/// not a per-platform implementation in the product sense.
 abstract interface class ConnectionPlatform {
   Future<DeviceIdentity> identity();
   Future<int> now();
   Future<String?> advertise(int? port, String? key);
 }
 
-class MacConnectionPlatform implements ConnectionPlatform {
+class MethodChannelConnectionPlatform implements ConnectionPlatform {
   static const _channel = MethodChannel('dev.sharehub.client/platform');
   @override
   Future<DeviceIdentity> identity() async {
