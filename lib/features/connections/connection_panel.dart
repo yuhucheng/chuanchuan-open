@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:share_hub_connection/share_hub_connection.dart';
+import 'package:share_hub_media_api/share_hub_media_api.dart' show GrantRole;
 
 import '../../platform/client_platform.dart';
 import 'connection_controller.dart';
 
 class ConnectionPanel extends StatelessWidget {
-  const ConnectionPanel({super.key, required this.controller});
+  const ConnectionPanel({super.key, required this.controller, this.peerName});
   final ConnectionController controller;
+  final String Function(String publicKey)? peerName;
   @override
   Widget build(BuildContext context) => Card(
     child: Padding(
@@ -15,7 +18,7 @@ class ConnectionPanel extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const Text(
-            '短接码连接',
+            '我的短接码',
             style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 8),
@@ -53,7 +56,7 @@ class ConnectionPanel extends StatelessWidget {
                 onPressed: controller.busy
                     ? null
                     : () => showConnectionDialog(context, controller),
-                child: const Text('输入地址和短接码'),
+                child: const Text('输入短接码连接设备'),
               ),
               if (controller.busy)
                 TextButton(
@@ -67,16 +70,37 @@ class ConnectionPanel extends StatelessWidget {
               padding: const EdgeInsets.only(top: 12),
               child: Text(controller.message!),
             ),
-          for (final connection in controller.sessions)
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('已验证 · 本地直连'),
-              subtitle: Text(
-                '设备 ${connection.peerId.substring(0, 16)}\n本版本提供观看与投屏；控制与文件入口尚未开放。',
-              ),
-              trailing: TextButton(
-                onPressed: connection.close,
-                child: const Text('断开并撤销'),
+          const SizedBox(height: 24),
+          const Divider(),
+          Text('已接入会话', style: Theme.of(context).textTheme.titleMedium),
+          if (controller.sessions.where((s) => !s.isClosed).isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 12),
+              child: Text('当前没有已接入会话'),
+            ),
+          for (final connection in controller.sessions.where(
+            (s) => !s.isClosed,
+          ))
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(peerName?.call(connection.peerKey) ?? '已验证设备'),
+                  Text('指纹 ${connection.peerId.substring(0, 8)} · 已验证连接'),
+                  Text(
+                    connection.grant?.role == GrantRole.initiator
+                        ? '本机发起的连接'
+                        : '对方发起的连接',
+                  ),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton(
+                      onPressed: connection.close,
+                      child: const Text('断开并撤销'),
+                    ),
+                  ),
+                ],
               ),
             ),
         ],
@@ -85,21 +109,31 @@ class ConnectionPanel extends StatelessWidget {
   );
 }
 
-Future<void> showConnectionDialog(
+Future<TrustedConnection?> showConnectionDialog(
   BuildContext context,
   ConnectionController controller, {
   NearbyDevice? device,
+  String? nextActionLabel,
 }) async {
-  await showDialog<void>(
+  return showDialog<TrustedConnection>(
     context: context,
-    builder: (_) => _ConnectionDialog(device: device, controller: controller),
+    builder: (_) => _ConnectionDialog(
+      device: device,
+      controller: controller,
+      nextActionLabel: nextActionLabel,
+    ),
   );
 }
 
 class _ConnectionDialog extends StatefulWidget {
-  const _ConnectionDialog({this.device, required this.controller});
+  const _ConnectionDialog({
+    this.device,
+    required this.controller,
+    this.nextActionLabel,
+  });
   final NearbyDevice? device;
   final ConnectionController controller;
+  final String? nextActionLabel;
   @override
   State<_ConnectionDialog> createState() => _ConnectionDialogState();
 }
@@ -112,6 +146,7 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
   final code = TextEditingController();
   bool submitting = false;
   bool attempted = false;
+  bool closing = false;
   String? error;
   @override
   void dispose() {
@@ -137,72 +172,97 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
       submitting = attempted = true;
       error = null;
     });
-    await widget.controller.connect(
+    final connection = await widget.controller.connect(
       host.text.trim(),
       number,
       code.text,
       expectedPeerKey: widget.device?.publicKey,
     );
-    if (!mounted) return;
+    if (!mounted || closing) return;
+    if (connection != null && !connection.isClosed) {
+      // Finish this submission before popping: disposal must not cancel the
+      // newly admitted connection, and only this result may continue an action.
+      submitting = false;
+      closing = true;
+      Navigator.pop(context, connection);
+      return;
+    }
     setState(() => submitting = false);
   }
 
   @override
-  Widget build(BuildContext context) => AlertDialog(
-    title: Text(
-      widget.device == null ? '连接另一台设备' : '连接 ${widget.device!.name}',
-    ),
-    content: SizedBox(
-      width: 360,
-      child: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (widget.device == null) ...[
+  Widget build(BuildContext context) => PopScope<TrustedConnection?>(
+    onPopInvokedWithResult: (didPop, result) {
+      if (!didPop) return;
+      closing = true;
+      // Barrier/Escape cancellation takes effect now, not after the route's
+      // dismissal animation, so a late handshake cannot pop another route.
+      if (submitting) {
+        submitting = false;
+        widget.controller.cancel();
+      }
+    },
+    child: AlertDialog(
+      title: Text(
+        widget.device == null ? '连接另一台设备' : '连接 ${widget.device!.name}',
+      ),
+      content: SizedBox(
+        width: 360,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (widget.device == null) ...[
+                TextField(
+                  controller: host,
+                  enabled: !submitting,
+                  decoration: const InputDecoration(labelText: '对端地址'),
+                ),
+                TextField(
+                  controller: port,
+                  enabled: !submitting,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  decoration: const InputDecoration(labelText: '端口'),
+                ),
+              ],
               TextField(
-                controller: host,
+                controller: code,
                 enabled: !submitting,
-                decoration: const InputDecoration(labelText: '对端地址'),
-              ),
-              TextField(
-                controller: port,
-                enabled: !submitting,
+                autofocus: true,
                 keyboardType: TextInputType.number,
+                maxLength: 6,
                 inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                decoration: const InputDecoration(labelText: '端口'),
+                onSubmitted: (_) => submit(),
+                decoration: const InputDecoration(labelText: '6 位纯数字短接码'),
               ),
+              Text(
+                widget.nextActionLabel == null
+                    ? '验证后建立 8 小时连接。连接本身不采集任何画面，观看或投屏需要单独发起。'
+                    : '验证后建立 8 小时连接，并继续${widget.nextActionLabel}。',
+              ),
+              if (submitting) const Text('正在验证，可随时取消'),
+              if (error != null)
+                Semantics(liveRegion: true, child: Text(error!)),
+              if (attempted && widget.controller.message != null)
+                Semantics(
+                  liveRegion: true,
+                  child: Text(widget.controller.message!),
+                ),
             ],
-            TextField(
-              controller: code,
-              enabled: !submitting,
-              autofocus: true,
-              keyboardType: TextInputType.number,
-              maxLength: 6,
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              onSubmitted: (_) => submit(),
-              decoration: const InputDecoration(labelText: '6 位纯数字短接码'),
-            ),
-            const Text('验证后建立 8 小时连接。连接本身不采集任何画面，观看或投屏需要单独发起。'),
-            if (submitting) const Text('正在验证，可随时取消'),
-            if (error != null) Semantics(liveRegion: true, child: Text(error!)),
-            if (attempted && widget.controller.message != null)
-              Semantics(
-                liveRegion: true,
-                child: Text(widget.controller.message!),
-              ),
-          ],
+          ),
         ),
       ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: submitting ? null : submit,
+          child: const Text('连接'),
+        ),
+      ],
     ),
-    actions: [
-      TextButton(
-        onPressed: () => Navigator.pop(context),
-        child: const Text('取消'),
-      ),
-      FilledButton(
-        onPressed: submitting ? null : submit,
-        child: const Text('连接'),
-      ),
-    ],
   );
 }

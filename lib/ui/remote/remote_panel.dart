@@ -32,15 +32,11 @@ class RemotePicturePanel extends StatelessWidget {
     if (controller.cleanupFailed) return '资源释放失败，尚未完全停止。';
     return switch (controller.phase) {
       RemotePhase.idle => controller.error ?? '未开始。',
-      RemotePhase.connecting => controller.transportReady
-          ? '媒体通道已建立，正在协商画面。'
-          : '正在建立媒体通道并核验授权…',
-      RemotePhase.waitingFirstFrame => controller.sending
-          ? '已开始采集本机屏幕，等待对端呈现。'
-          : '通道已建立，等待对端首帧。',
-      RemotePhase.active => controller.sending
-          ? '对端已呈现本机画面，正在共享。'
-          : '已收到对端画面。',
+      RemotePhase.connecting =>
+        controller.transportReady ? '媒体通道已建立，正在协商画面。' : '正在建立媒体通道并核验授权…',
+      RemotePhase.waitingFirstFrame =>
+        controller.sending ? '已开始采集本机屏幕，等待对端呈现。' : '通道已建立，等待对端首帧。',
+      RemotePhase.active => controller.sending ? '对端已呈现本机画面，正在共享。' : '已收到对端画面。',
       RemotePhase.paused => '已暂停；当前画面不是实时画面。',
       RemotePhase.failed => controller.error ?? '远端画面失败。',
     };
@@ -63,6 +59,48 @@ class RemotePicturePanel extends StatelessWidget {
           ],
           if (controller.error != null && controller.cleanupFailed)
             Semantics(liveRegion: true, child: Text(controller.error!)),
+          if (controller.supportsSourceSelection) ...[
+            const SizedBox(height: 12),
+            Text('本机分享来源：${controller.localSource?.name ?? '正在确认'}'),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: OutlinedButton(
+                onPressed: controller.canChangeSource
+                    ? controller.loadSourceChoices
+                    : null,
+                child: Text(controller.sourceBusy ? '正在处理来源…' : '更换分享来源'),
+              ),
+            ),
+            if (controller.sourceChoices.isNotEmpty)
+              DropdownButtonFormField<String>(
+                key: ValueKey(
+                  '${controller.mediaRevision}:${controller.sourceChoices.map((s) => '${s.type.name}:${s.id}').join('|')}',
+                ),
+                isExpanded: true,
+                initialValue: null,
+                decoration: const InputDecoration(labelText: '选择本机显示器或窗口并分享'),
+                items: [
+                  for (final source in controller.sourceChoices)
+                    DropdownMenuItem(
+                      value: '${source.type.name}:${source.id}',
+                      child: Text(
+                        '${source.type == CaptureSourceType.screen ? '显示器' : '窗口'} · ${source.name}',
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                ],
+                onChanged: controller.canChangeSource
+                    ? (value) {
+                        final source = controller.sourceChoices
+                            .where((s) => '${s.type.name}:${s.id}' == value)
+                            .firstOrNull;
+                        if (source != null) controller.changeSource(source);
+                      }
+                    : null,
+              ),
+            if (controller.sourceError case final String message)
+              Semantics(liveRegion: true, child: Text(message)),
+          ],
           const SizedBox(height: 12),
           Wrap(
             spacing: 12,
@@ -76,12 +114,12 @@ class RemotePicturePanel extends StatelessWidget {
               else ...[
                 if (controller.phase == RemotePhase.active)
                   OutlinedButton(
-                    onPressed: controller.pause,
+                    onPressed: controller.sourceBusy ? null : controller.pause,
                     child: const Text('暂停'),
                   ),
                 if (controller.phase == RemotePhase.paused)
                   FilledButton(
-                    onPressed: controller.resume,
+                    onPressed: controller.sourceBusy ? null : controller.resume,
                     child: const Text('恢复'),
                   ),
               ],

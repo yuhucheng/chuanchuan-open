@@ -22,6 +22,10 @@ class PreviewController extends ChangeNotifier {
   bool active = false;
   bool firstFrame = false;
   bool cleanupFailed = false;
+
+  /// Reserve synchronously through permission/startup and release, including
+  /// failed cleanup; incoming remote pictures must consult the same ownership.
+  bool get occupiesPicture => busy || stopping || active || cleanupFailed;
   String? error;
   bool _disposed = false;
   int _generation = 0;
@@ -61,18 +65,14 @@ class PreviewController extends ChangeNotifier {
 
   Future<void> start() {
     if (_unavailable()) return Future.value();
-    if (blockedByRemotePicture?.call() ?? false) {
-      error = '远端画面正在进行，请先结束远端画面再开始本机预览（单画面预算）。';
-      _notify();
-      return Future.value();
-    }
+    if (_remoteBlocked()) return Future.value();
 
     return _run((token) async {
       if (!await _hasPermission()) {
         error = '屏幕录制权限不可用，请检查系统设置。';
         return;
       }
-      if (!_current(token)) return;
+      if (!_current(token) || _remoteBlocked()) return;
       CaptureSource? source = selected;
       if (!_explicitSource) {
         final found = await engine.sources();
@@ -94,6 +94,7 @@ class PreviewController extends ChangeNotifier {
         error = '请重新选择画面来源；不会自动切换到整屏。';
         return;
       }
+      if (!_current(token) || _remoteBlocked()) return;
       await engine.start(
         source,
         onEnded: () {
@@ -118,6 +119,13 @@ class PreviewController extends ChangeNotifier {
         (_) => _checkPermission(token),
       );
     });
+  }
+
+  bool _remoteBlocked() {
+    if (!(blockedByRemotePicture?.call() ?? false)) return false;
+    error = '远端画面正在进行，请先结束远端画面再开始本机预览（单画面预算）。';
+    _notify();
+    return true;
   }
 
   Future<bool> _hasPermission() async =>

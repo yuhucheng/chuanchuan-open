@@ -28,7 +28,14 @@ abstract interface class RemotePicture {
 
   Future<void> pause();
   Future<void> resume();
-  Future<void> stop();
+  Future<void> stop({VideoEndReason reason = VideoEndReason.stopped});
+}
+
+/// Optional source selection, exposed only for the endpoint actually sending.
+abstract interface class SourceSelectableRemotePicture
+    implements RemotePicture {
+  CaptureSource? get localSource;
+  Future<void> changeSource(CaptureSource source);
 }
 
 /// One trusted connection's media receiver. The client owns exactly one per
@@ -85,19 +92,26 @@ class _SdkLink implements RemotePictureLink {
   final sdk.RtcRemoteMediaLink _link;
 
   @override
-  Future<RemotePicture> start(SessionOperation operation, String sessionId) async =>
-      _SdkPicture(await _link.start(operation, sessionId));
+  Future<RemotePicture> start(
+    SessionOperation operation,
+    String sessionId,
+  ) async => _SdkPicture(await _link.start(operation, sessionId));
 
   @override
   Future<void> close() => _link.close();
 }
 
-class _SdkPicture implements RemotePicture {
+class _SdkPicture implements SourceSelectableRemotePicture {
   _SdkPicture(this._session);
   final sdk.RtcVideoSession _session;
 
   @override
   String get id => _session.id;
+  @override
+  CaptureSource? get localSource => _session.localSource;
+  @override
+  Future<void> changeSource(CaptureSource source) =>
+      _session.changeSource(source);
   @override
   SessionOperation get operation => _session.authorization.operation;
   @override
@@ -117,5 +131,6 @@ class _SdkPicture implements RemotePicture {
   @override
   Future<void> resume() => _session.resume();
   @override
-  Future<void> stop() => _session.stop();
+  Future<void> stop({VideoEndReason reason = VideoEndReason.stopped}) =>
+      _session.stop(reason: reason);
 }

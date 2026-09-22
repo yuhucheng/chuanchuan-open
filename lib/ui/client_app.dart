@@ -48,7 +48,9 @@ class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
   late final _engine = widget.previewEngine;
   late final _fileAccess = widget.fileAccess ?? MethodChannelFileAccess();
   late final _devices = DeviceController(_platform);
-  late final _connections = ConnectionController(MethodChannelConnectionPlatform());
+  late final _connections = ConnectionController(
+    MethodChannelConnectionPlatform(),
+  );
   // Both sides consult the other so the single picture budget is respected in
   // either direction. The closures are lazy, so a late field is only read after
   // the tree is built.
@@ -62,7 +64,7 @@ class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
     platform: _platform,
     factory: widget.remoteMedia ?? RtcRemotePictureFactory(),
     listSources: _engine.sources,
-    localCaptureActive: () => _preview.active || _preview.cleanupFailed,
+    localCaptureActive: () => _preview.occupiesPicture,
   );
   late final _transfers = TransferQueue(_fileAccess);
   late final _desktop = DesktopLifecycle(

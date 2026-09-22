@@ -35,6 +35,20 @@ class MethodChannelConnectionPlatform implements ConnectionPlatform {
       .invokeMethod<String>('connection.advertise', {'port': port, 'key': key});
 }
 
+/// Status text belongs in the connection context; only problems enter the
+/// global issue queue. Keeping the kind beside the message avoids interpreting
+/// translated user-facing text as application state.
+enum ConnectionNoticeKind { status, problem }
+
+class ConnectionNotice {
+  const ConnectionNotice.status(this.message)
+    : kind = ConnectionNoticeKind.status;
+  const ConnectionNotice.problem(this.message)
+    : kind = ConnectionNoticeKind.problem;
+  final String message;
+  final ConnectionNoticeKind kind;
+}
+
 class ConnectionController extends ChangeNotifier {
   ConnectionController(this.platform);
   final ConnectionPlatform platform;
@@ -52,10 +66,29 @@ class ConnectionController extends ChangeNotifier {
   bool busy = false;
   String? code;
   String? address;
-  String? message;
+  ConnectionNotice? _notice;
+  ConnectionNotice? get notice => _notice;
+  String? get message => notice?.message;
+  String? get problem =>
+      notice?.kind == ConnectionNoticeKind.problem ? notice?.message : null;
   final List<TrustedConnection> _sessions = [];
   List<TrustedConnection> get sessions => List.unmodifiable(_sessions);
   bool get accepting => _host?.port != null;
+
+  /// Presentation/routing hint only. SDK still verifies the exact grant and
+  /// its authoritative clock before starting an operation.
+  TrustedConnection? outgoingFor(String peerKey) {
+    for (final connection in _sessions.reversed) {
+      if (!connection.isClosed &&
+          connection.peerKey == peerKey &&
+          connection.grant?.role == GrantRole.initiator &&
+          connection.grant?.phase == GrantPhase.active) {
+        return connection;
+      }
+    }
+    return null;
+  }
+
   void _emit() {
     if (!_disposed) notifyListeners();
   }
@@ -66,13 +99,13 @@ class ConnectionController extends ChangeNotifier {
   Future<void> open() async {
     if (busy || _disposed || _disconnecting) return;
     if (_sessions.length >= 8) {
-      message = '连接数量已达上限，请先断开一个连接。';
+      _notice = const ConnectionNotice.problem('连接数量已达上限，请先断开一个连接。');
       _emit();
       return;
     }
     final generation = ++_generation;
     busy = true;
-    message = null;
+    _notice = null;
     code = null;
     address = null;
     _emit();
@@ -95,7 +128,9 @@ class ConnectionController extends ChangeNotifier {
           }
           if (!_track(connection)) return;
           code = null;
-          message = '连接已建立，短接码已消费。授权有效 8 小时，可随时断开。';
+          _notice = const ConnectionNotice.status(
+            '连接已建立，短接码已消费。授权有效 8 小时，可随时断开。',
+          );
           unawaited(_clearAdvertisement());
           _emit();
         },
@@ -123,7 +158,7 @@ class ConnectionController extends ChangeNotifier {
       await opening?.stopAccepting();
       if (generation == _generation) await _clearAdvertisement();
       if (!_disposed && generation == _generation) {
-        message = '接入启动失败，请检查钥匙串及本地网络权限。';
+        _notice = const ConnectionNotice.problem('接入启动失败，请检查钥匙串及本地网络权限。');
       }
     } finally {
       if (generation == _generation) busy = false;
@@ -141,7 +176,7 @@ class ConnectionController extends ChangeNotifier {
       if (_disposed || !identical(offer, _host?.offer)) return;
       if (code != null && (offer == null || !offer.reservable(now))) {
         code = null;
-        message = '短接码已失效或尝试次数已用完，请重新生成。';
+        _notice = const ConnectionNotice.problem('短接码已失效或尝试次数已用完，请重新生成。');
         await _clearAdvertisement();
       }
       _emit();
@@ -191,25 +226,25 @@ class ConnectionController extends ChangeNotifier {
     }
   }
 
-  Future<void> connect(
+  Future<TrustedConnection?> connect(
     String host,
     int port,
     String shortCode, {
     String? expectedPeerKey,
   }) async {
-    if (busy || _disposed || _disconnecting) return;
+    if (busy || _disposed || _disconnecting) return null;
     if (_sessions.length >= 8) {
-      message = '连接数量已达上限，请先断开一个连接。';
+      _notice = const ConnectionNotice.problem('连接数量已达上限，请先断开一个连接。');
       _emit();
-      return;
+      return null;
     }
     final generation = ++_generation;
     busy = true;
-    message = '正在验证短接码和对端身份…';
+    _notice = const ConnectionNotice.status('正在验证短接码和对端身份…');
     _emit();
     try {
       final identity = await _loadIdentity();
-      if (_disposed || generation != _generation) return;
+      if (_disposed || generation != _generation) return null;
       final attempt = _attempt = PairingAttempt(
         identity: identity,
         clock: platform.now,
@@ -223,20 +258,21 @@ class ConnectionController extends ChangeNotifier {
       );
       if (_disposed || generation != _generation) {
         connection.close('cancelled');
-        return;
+        return null;
       }
       _attempt = null;
-      if (!_track(connection)) return;
-      message = '身份验证通过，已建立本地直连。授权有效 8 小时。';
+      if (!_track(connection)) return null;
+      _notice = const ConnectionNotice.status('身份验证通过，已建立本地直连。授权有效 8 小时。');
+      return connection;
     } catch (error) {
       if (!_disposed && generation == _generation) {
-        message = switch (error) {
+        _notice = ConnectionNotice.problem(switch (error) {
           ConnectionFailure(code: 'identity_mismatch') =>
             '对端身份与所选设备不一致，请重新发现设备。',
           ConnectionFailure(code: 'invalid_input') => '请输入完整的 6 位纯数字短接码及有效端口。',
           ConnectionFailure(code: 'cancelled') => '连接已取消或握手超时。',
           _ => '连接未建立，请检查短接码、对端接入状态及局域网连通性。',
-        };
+        });
       }
     } finally {
       if (generation == _generation) {
@@ -245,6 +281,7 @@ class ConnectionController extends ChangeNotifier {
       }
       _emit();
     }
+    return null;
   }
 
   void cancel() {
@@ -252,7 +289,7 @@ class ConnectionController extends ChangeNotifier {
     _attempt?.cancel();
     _attempt = null;
     busy = false;
-    message = '已取消连接。';
+    _notice = const ConnectionNotice.status('已取消连接。');
     _emit();
   }
 
@@ -260,7 +297,7 @@ class ConnectionController extends ChangeNotifier {
     final grant = connection.grant;
     if (connection.isClosed || grant == null || _sessions.length >= 8) {
       connection.close('admission_rejected');
-      message = '连接未接入：授权不可用或连接数量已达上限。';
+      _notice = const ConnectionNotice.problem('连接未接入：授权不可用或连接数量已达上限。');
       _emit();
       return false;
     }
@@ -271,9 +308,13 @@ class ConnectionController extends ChangeNotifier {
         grants.revoke(grant);
         _sessions.remove(connection);
         if (!_disposed) {
-          message = reason == 'expired'
-              ? '八小时授权已到期，请使用新短接码连接。'
-              : '连接已断开；再次连接需输入有效短接码。';
+          _notice = reason == 'revoked' || reason == 'cancelled'
+              ? const ConnectionNotice.status('连接已断开；再次连接需输入有效短接码。')
+              : ConnectionNotice.problem(
+                  reason == 'expired'
+                      ? '八小时授权已到期，请使用新短接码连接。'
+                      : '连接已断开；再次连接需输入有效短接码。',
+                );
           _emit();
         }
       }),

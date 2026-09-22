@@ -1,10 +1,10 @@
-# Share Hub Media API 0.2.0
+# Share Hub Media API 0.3.0
 
 Apache-2.0 公共契约。客户端和媒体实现共享此包，SDK 不依赖客户端 UI 或平台宿主。产品版本与 API 版本独立。
 
 `CaptureSource`、`CaptureSourceType` 和 `PreviewEngine` 保持源码兼容。`unavailableReason == null` 只表示存在媒体实现，不代表录屏权限、远端连接或真实首帧。
 
-新增可选 `RemoteMediaEngine`、版本与能力协商、来源几何、会话事件和共享画面预算。旧引擎经 `capabilitiesOf()` 得到仅本地预览能力；当前 SDK 尚未实现远端媒体接口。协议版本不兼容时远端能力为空，不回退假成功。
+新增可选 `RemoteMediaEngine`、版本与能力协商、来源几何、会话事件和共享画面预算。旧引擎经 `capabilitiesOf()` 得到仅本地预览能力；远端可用性仍以实际 SDK 入口和能力声明为准。协议版本不兼容时远端能力为空，不回退假成功。
 
 公共纯 Dart 包 `share_hub_session_api` 经本包导出，统一提供方向授权、认证恢复和可验证消息。连接服务在可信握手后登记 `GrantRegistry`，SDK 以该 registry 校验请求，不能从 UI 布尔值、自签证明或任意来源路径推导授权。完整协议见 [会话契约](../share_hub_session_api/README.md)。
 
@@ -20,7 +20,7 @@ CaptureSource.isPrimary 是可选的原生主屏标记，旧引擎默认为 fals
 
 `RemoteMediaEngine.startRemote(VerifiedSessionMessage)` 接收已经认证解码的对端请求。可选的 `BidirectionalRemoteMediaEngine.startOutgoing(LocalSessionRequest)` 支持发起端：请求必须由进程内有效 grant 的 `authorizeLocal` 生成，仍受方向、到期和当前传输代次约束。两个类型均继承不可由消费者实现的 `SessionAuthorization`，共用 `MediaSessionBudget`；原 PreviewEngine 和仅入站接口保持兼容。
 
-本地请求不是对端确认，不允许用它宣布网络已通或远端首帧已呈现。两端注册表不能互相替代，来源、系统权限、媒体指纹、信令回复和真实帧仍由实际实现验证。当前 SDK 尚未实现这两个远端入口。
+本地请求不是对端确认，不允许用它宣布网络已通或远端首帧已呈现。两端注册表不能互相替代，来源、系统权限、媒体指纹、信令回复和真实帧仍由实际实现验证。该接口声明不等于正式 SDK 或跨平台远端验收已完成。
 
 ## Authenticated video description profile (development)
 
@@ -87,7 +87,7 @@ Unknown versions, extra source fields and non-video operations fail closed.
 `stopped`, `busy`, `unavailable` or `failed`. Receivers verify the exact current
 operation authority, including before native allocation. Ending media preserves
 the device connection/grant. An end response is terminal and must not be echoed.
-Source-change negotiation remains separate.
+Sender-owned source changes use the pause/resume revision handshake below.
 
 ## Pause and resume
 
@@ -111,3 +111,67 @@ a new image. Stop remains terminal across every revision of the operation.
 Development video intent/SDP/ICE profile 1 is rejected rather than silently
 downgraded; both endpoints must update together. The outer authorization protocol,
 grant type/duration and eight-hour current product policy are unchanged.
+
+## Sender-owned source selection (0.3.0)
+
+`SourceSelectableMediaSession` is an optional extension of `RemoteMediaSession`;
+existing preview engines and sessions need not implement it. `localSource` exposes
+only this endpoint's current capture source (null on receivers).
+`changeSource(CaptureSource)` is permitted only on the endpoint actually sending:
+the cast initiator or the watch responder. It never requests a broader source on
+the other device, and never adds reverse authorization.
+
+The implementation quiesces the old revision through pause/paused, then starts
+the exact selected local source through resume/ready with a new media revision,
+retaining the same grant, deadline and budget. Native source identity and system
+permission are rechecked; missing sources fail without fallback. Concurrent
+changes are rejected, and stop or revoked authorization wins over late work.
+`sourceChanged` signals selection, not presentation: each new revision must get
+its own first-frame receipt before being shown as live. No geometry or quality
+metrics are invented. The public API addition does not change wire payloads,
+product version, grant duration or formal SDK delivery status.
+
+## Client state and compatibility examples
+
+| Evidence/event | Meaning available to a client | Must not imply |
+| --- | --- | --- |
+| Verified connection and live grant | Directional operations may be requested | A captured or received frame |
+| `connecting` | Authorization/media negotiation is pending | Transport ready |
+| `transportReady` | Native media transport is ready | Peer has presented the source |
+| `waitingFirstFrame` | Waiting for this revision's presentation evidence | Old revision is live |
+| `firstFrame` | This revision has presentation evidence | Continuous frame updates forever |
+| `paused` | Media is quiesced; budget and original grant remain | A last frame is live |
+| `sourceChanged` | Sender applied a new local source | Peer has presented the new source |
+| `failed` / `ended` | Failure or terminal end; owned resources must be released | Cleanup already succeeded if release failed |
+
+A cast starts with the current local primary source. Changing it to an explicitly
+selected local window goes through pause/paused revision 0, resume/ready revision
+1, then fresh SDP/ICE and a revision-1 presentation receipt. The window ID stays
+local; it is not inserted into the remote intent payload. A revision-0 receipt
+cannot mark the new window live. A watch uses the same exchange, with capture and
+source selection on the responder, independent of who assigns the next revision.
+
+Failure examples: adding `source` to `{"version":2,"kind":"video"}` is rejected;
+a second budget reservation returns `busy`; reverse local operation authority
+returns `direction_denied`; a receiver invoking `changeSource` returns
+`invalid_media_role`; a disappeared local source is refused instead of selecting
+the first available display. Client selection failures before switching retain
+the existing explicit share; native failures after quiescence end the operation.
+Current client policy bounds presentation waiting to 15 seconds per revision;
+that timeout is an implementation policy, not a new wire or performance promise.
+
+| Consumer/implementation | Compatibility |
+| --- | --- |
+| Legacy `PreviewEngine` | Source compatible, local preview only; never inferred remote capability |
+| Existing `RemoteMediaSession` without source extension | Pause/resume/stop remain available; source selection unavailable |
+| API 0.3.0 sender implementing `SourceSelectableMediaSession` | Exact local selection via the existing media revision handshake |
+| API 0.3.0 receiver | No local capture source selection, even if its session class implements the extension |
+| Old video profile 1 vs current profile 2 | Explicit rejection, no silent downgrade |
+
+Executable examples: `test/remote_contract_test.dart` covers legacy engines,
+budget, expiry and revocation; `test/video_session_messages_test.dart` covers
+intent/termination/playback and remote source-field rejection;
+`test/video_description_test.dart` covers descriptions, candidates, fingerprints
+and revision isolation. Client tests additionally exercise directional rejection,
+source selection, failure and first-frame deadlines. These tests do not claim
+Windows/macOS or two-machine delivery acceptance.

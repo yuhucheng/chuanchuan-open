@@ -140,6 +140,21 @@ abstract interface class RemoteMediaSession {
   Future<void> stop();
 }
 
+/// Optional sender-only extension. Older preview/session implementations remain
+/// usable without exposing a source-change entry. Receivers cannot select a
+/// source on the other device. The selected source is local metadata only.
+abstract interface class SourceSelectableMediaSession
+    implements RemoteMediaSession {
+  CaptureSource? get localSource;
+
+  /// Quiesces the old media revision before starting this exact local source in
+  /// a fresh revision under the same grant and budget. Native permission and
+  /// source identity are rechecked. Failure never falls back to another source;
+  /// cancellation or revoked authorization must not resume capture.
+  /// Completion means negotiation, not proof of a presented remote frame.
+  Future<void> changeSource(CaptureSource source);
+}
+
 /// Shared process-wide budget for watch/cast/control-with-video. Reserve before
 /// asynchronous engine startup; retain on cleanup failure. Thumbnail reuse uses
 /// the original slot. A stopped operation cannot be restarted with its old ID.

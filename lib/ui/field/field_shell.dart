@@ -16,6 +16,7 @@ import '../remote/remote_panel.dart';
 import 'appearance.dart';
 import 'brand_mark.dart';
 import 'device_field.dart';
+import 'issue_banner.dart';
 
 class FieldShell extends StatefulWidget {
   const FieldShell({
@@ -66,7 +67,6 @@ class _FieldShellState extends State<FieldShell> {
     for (final session in widget.connections.sessions) {
       if (!session.isClosed) connected[session.peerKey] = session;
     }
-    final offered = widget.remote.offeredOperations;
     final advertised = <String, String>{};
     for (final device in widget.devices.discovery.devices) {
       if (device.publicKey != null) advertised[device.publicKey!] = device.name;
@@ -80,7 +80,9 @@ class _FieldShellState extends State<FieldShell> {
           publicKey: key,
           name: _verifiedNames[key],
           connected: connected.containsKey(key),
-          capabilities: connected.containsKey(key) ? offered : const {},
+          capabilities: connected.containsKey(key)
+              ? widget.remote.operationsFor(key)
+              : const {},
         ),
     ];
     return buildDeviceDirectory(
@@ -110,6 +112,7 @@ class _FieldShellState extends State<FieldShell> {
                   widget.preview,
                   widget.transfers,
                   widget.appearance,
+                  widget.desktop,
                 ]),
                 builder: (_, _) => content(),
               ),
@@ -186,15 +189,6 @@ class _FieldShellState extends State<FieldShell> {
                         icon: const Icon(Icons.stop_screen_share_outlined),
                         label: const Text('停止远端画面'),
                       ),
-                    TextButton(
-                      onPressed: () async {
-                        if (await widget.desktop.requestExit() &&
-                            context.mounted) {
-                          await widget.desktop.finishExit();
-                        }
-                      },
-                      child: const Text('退出'),
-                    ),
                   ],
                 ),
               ),
@@ -204,19 +198,7 @@ class _FieldShellState extends State<FieldShell> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      for (final error in [
-                        widget.desktop.error,
-                        widget.devices.error,
-                        widget.appearance.error,
-                        if (!widget.remote.occupied) widget.remote.error,
-                      ])
-                        if (error != null)
-                          Semantics(liveRegion: true, child: Text(error)),
-                      if (widget.connections.message != null)
-                        Semantics(
-                          liveRegion: true,
-                          child: Text(widget.connections.message!),
-                        ),
+                      IssueBanner(issues: _issues()),
                       // The single remote picture stays in the main surface so a
                       // receiving view never unmounts mid-session.
                       if (widget.remote.occupied)
@@ -234,13 +216,6 @@ class _FieldShellState extends State<FieldShell> {
                                 ? '正在发现附近设备'
                                 : '正在准备发现',
                           ),
-                          if (!widget.devices.discovery.enabled)
-                            TextButton(
-                              onPressed: widget.devices.busy
-                                  ? null
-                                  : widget.devices.retryDiscovery,
-                              child: const Text('重试发现'),
-                            ),
                           DeviceField(
                             entries: _directory(),
                             localName: widget.devices.device?.name ?? '正在读取本机',
@@ -274,26 +249,54 @@ class _FieldShellState extends State<FieldShell> {
             children: [
               if (_connectionSupported)
                 AnimatedBuilder(
-                  animation: widget.connections,
-                  builder: (_, _) =>
-                      ConnectionPanel(controller: widget.connections),
+                  animation: Listenable.merge([
+                    widget.connections,
+                    widget.devices,
+                  ]),
+                  builder: (_, _) => ConnectionPanel(
+                    controller: widget.connections,
+                    peerName: (key) =>
+                        _directory()
+                            .where((d) => d.publicKey == key)
+                            .firstOrNull
+                            ?.name ??
+                        '已验证设备',
+                  ),
                 ),
-              TextButton(
-                onPressed: () {
-                  Navigator.pop(context);
-                  openPanel('本机屏幕预览', previewPage);
-                },
-                child: const Text('屏幕预览'),
+              const SizedBox(height: 24),
+              const Divider(),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  '本机工具',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
               ),
-              TextButton(
-                onPressed: () {
-                  Navigator.pop(context);
-                  openPanel(
-                    '本机文件准备',
-                    () => TransfersPage(queue: widget.transfers),
-                  );
-                },
-                child: const Text('文件准备'),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: [
+                  FilledButton.tonalIcon(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      openPanel('本机屏幕预览', previewPage);
+                    },
+                    icon: const Icon(Icons.desktop_windows_outlined),
+                    label: const Text('屏幕预览'),
+                  ),
+                  FilledButton.tonalIcon(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      openPanel(
+                        '本机文件准备',
+                        () => TransfersPage(queue: widget.transfers),
+                      );
+                    },
+                    icon: const Icon(Icons.folder_open),
+                    label: const Text('文件准备'),
+                  ),
+                ],
               ),
             ],
           ),
@@ -317,12 +320,18 @@ class _FieldShellState extends State<FieldShell> {
     final action = await showDialog<String>(
       context: context,
       builder: (context) => AnimatedBuilder(
-        animation: widget.connections,
+        animation: Listenable.merge([
+          widget.connections,
+          widget.devices,
+          widget.remote,
+        ]),
         builder: (_, _) {
           final live = _directory()
               .where((item) => item.identityId == entry.identityId)
               .firstOrNull;
           if (live == null) return const SizedBox.shrink();
+          final canInitiate =
+              widget.connections.outgoingFor(live.publicKey ?? '') != null;
           return AlertDialog(
             title: Text(live.name),
             content: SingleChildScrollView(
@@ -337,63 +346,79 @@ class _FieldShellState extends State<FieldShell> {
                         ? '身份已验证 · 当前未连接'
                         : '发现设备 · 尚未验证身份',
                   ),
-                  const Text('设备名称与网络可见性都不是身份凭证，连接始终需要 6 位短接码。'),
+                  Text('${live.platform} · ${live.host ?? '地址未提供'}'),
+                  Text('指纹摘要：${deviceFingerprint(live.publicKey)}'),
+                  const Text('名称与网络可见性都不是身份凭证。'),
+                  const SizedBox(height: 16),
+                  const Divider(),
+                  Text('会话操作', style: Theme.of(context).textTheme.titleMedium),
+                  const SizedBox(height: 12),
                   const Text('时延未测。'),
-                  if (live.connected && live.capabilities.isEmpty)
+                  if (widget.remote.offeredOperations.isEmpty)
                     const Text('本构建未提供观看或投屏能力。'),
-                  if (live.connected) ...[
+                  if (live.connected && !canInitiate)
+                    const Text('当前连接由对方发起。若要观看或投屏，请让对方开启「允许连接」，再输入对方的短接码。'),
+                  if (canInitiate) ...[
                     const Text('对端是否支持由会话本身确认；被拒绝会明确显示失败原因。'),
-                    const SizedBox(height: 8),
+                    const Text('观看：我看它的屏幕 · 投屏：它看我的屏幕'),
+                    const SizedBox(height: 12),
                     for (final operation in const [
                       SessionOperation.watch,
                       SessionOperation.cast,
                     ])
                       if (live.hasCapability(operation.name))
-                        FilledButton(
-                          onPressed: widget.remote.occupied
-                              ? null
-                              : () => Navigator.pop(context, operation.name),
-                          child: Text(
-                            operation == SessionOperation.watch
-                                ? '观看该设备屏幕'
-                                : '投屏到该设备',
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: FilledButton(
+                            onPressed: widget.remote.occupied
+                                ? null
+                                : () => Navigator.pop(context, operation.name),
+                            child: Text(
+                              operation == SessionOperation.watch
+                                  ? '观看该设备屏幕'
+                                  : '投屏到该设备',
+                            ),
                           ),
                         ),
                   ],
                   const SizedBox(height: 16),
-                  if (live.connected)
-                    for (final session in widget.connections.sessions.where(
-                      (s) => !s.isClosed && s.peerKey == live.publicKey,
-                    ))
-                      TextButton(
-                        onPressed: session.close,
-                        child: const Text('断开并撤销授权'),
-                      )
-                  else if (live.connectable &&
+                  if (!canInitiate &&
+                      live.hasPairingEndpoint &&
                       _connectionSupported &&
                       widget.remote.offeredOperations.isNotEmpty) ...[
                     // The code is entered first; the operation only starts once
                     // the connection actually exists.
                     const Text('连接本身不采集任何画面。'),
-                    FilledButton(
-                      onPressed: widget.remote.occupied
-                          ? null
-                          : () => Navigator.pop(
-                              context,
-                              SessionOperation.watch.name,
-                            ),
-                      child: const Text('连接并观看'),
-                    ),
-                    OutlinedButton(
-                      onPressed: widget.remote.occupied
-                          ? null
-                          : () => Navigator.pop(
-                              context,
-                              SessionOperation.cast.name,
-                            ),
-                      child: const Text('连接并投屏'),
-                    ),
-                  ] else if (live.connectable && _connectionSupported)
+                    const Text('观看：我看它的屏幕 · 投屏：它看我的屏幕'),
+                    const SizedBox(height: 12),
+                    if (widget.remote.offeredOperations.contains(
+                      SessionOperation.watch.name,
+                    ))
+                      FilledButton(
+                        onPressed: widget.remote.occupied
+                            ? null
+                            : () => Navigator.pop(
+                                context,
+                                SessionOperation.watch.name,
+                              ),
+                        child: const Text('连接并观看'),
+                      ),
+                    const SizedBox(height: 12),
+                    if (widget.remote.offeredOperations.contains(
+                      SessionOperation.cast.name,
+                    ))
+                      OutlinedButton(
+                        onPressed: widget.remote.occupied
+                            ? null
+                            : () => Navigator.pop(
+                                context,
+                                SessionOperation.cast.name,
+                              ),
+                        child: const Text('连接并投屏'),
+                      ),
+                  ] else if (!canInitiate &&
+                      live.hasPairingEndpoint &&
+                      _connectionSupported)
                     FilledButton(
                       onPressed: widget.connections.busy
                           ? null
@@ -402,11 +427,41 @@ class _FieldShellState extends State<FieldShell> {
                     )
                   else if (!_connectionSupported)
                     const Text('本平台尚未支持连接。')
-                  else ...[
+                  else if (!canInitiate) ...[
                     const Text('对端当前未开放连接入口。'),
                     const Text(
                       '连接入口只在对方开启「允许连接」后的有效期内广播，过时即撤下；'
-                      '请让对方重新开启，再点「刷新」立即重试。',
+                      '请让对方重新开启，再点「刷新设备」立即重试。',
+                    ),
+                    TextButton(
+                      onPressed: widget.devices.busy
+                          ? null
+                          : widget.devices.retryDiscovery,
+                      child: const Text('刷新设备'),
+                    ),
+                  ],
+                  if (live.connected) ...[
+                    const SizedBox(height: 28),
+                    const Divider(),
+                    Text('危险区', style: Theme.of(context).textTheme.titleMedium),
+                    const SizedBox(height: 12),
+                    OutlinedButton(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Theme.of(context).colorScheme.error,
+                      ),
+                      onPressed: () {
+                        for (final session
+                            in widget.connections.sessions
+                                .where(
+                                  (s) =>
+                                      !s.isClosed &&
+                                      s.peerKey == live.publicKey,
+                                )
+                                .toList()) {
+                          session.close();
+                        }
+                      },
+                      child: const Text('断开该设备并撤销全部授权'),
                     ),
                   ],
                 ],
@@ -427,11 +482,16 @@ class _FieldShellState extends State<FieldShell> {
         .where((item) => item.identityId == entry.identityId)
         .firstOrNull;
     if (target == null) return;
-    if (!target.connected) {
-      if (!target.connectable || !_connectionSupported) return;
-      await showConnectionDialog(
+    if (widget.connections.outgoingFor(target.publicKey ?? '') == null) {
+      if (!target.hasPairingEndpoint || !_connectionSupported) return;
+      final connection = await showConnectionDialog(
         context,
         widget.connections,
+        nextActionLabel: action == SessionOperation.watch.name
+            ? '观看该设备屏幕'
+            : action == SessionOperation.cast.name
+            ? '投屏到该设备'
+            : null,
         device: NearbyDevice(
           target.identityId,
           target.name,
@@ -441,12 +501,14 @@ class _FieldShellState extends State<FieldShell> {
           publicKey: target.publicKey,
         ),
       );
-      if (!mounted) return;
-      // The dialog already reported why a connection did not come up.
-      final connected = _directory()
-          .where((item) => item.identityId == entry.identityId)
-          .firstOrNull;
-      if (connected == null || !connected.connected) return;
+      if (!mounted ||
+          connection == null ||
+          connection.isClosed ||
+          connection.peerKey != target.publicKey ||
+          connection.grant?.role != GrantRole.initiator ||
+          !widget.connections.sessions.any((s) => identical(s, connection))) {
+        return;
+      }
     }
     if (action == 'connect') return;
     final live = _directory()
@@ -528,6 +590,62 @@ class _FieldShellState extends State<FieldShell> {
     );
   }
 
+  Future<void> _exit() async {
+    if (await widget.desktop.requestExit() && mounted) {
+      await widget.desktop.finishExit();
+    }
+  }
+
+  List<FieldIssue> _issues() => [
+    if (widget.desktop.error case final String message)
+      FieldIssue('desktop', message, '打开设置', () {
+        name.text = widget.devices.device?.name ?? '';
+        openPanel('设置', settingsPage);
+      }),
+    if (widget.devices.device != null &&
+        widget.targetPlatform == TargetPlatform.macOS &&
+        !widget.devices.permissions.screenRecording)
+      FieldIssue(
+        'screen-permission',
+        '屏幕录制未允许，分享画面前需要授权。',
+        '打开系统设置',
+        () => widget.devices.openSettings('screenRecording'),
+      ),
+    if (widget.devices.discovery.state == 'failed')
+      FieldIssue(
+        'discovery',
+        widget.devices.error ??
+            widget.devices.discovery.message ??
+            '发现设备失败，请重试。',
+        '重试发现',
+        widget.devices.retryDiscovery,
+      ),
+    if (widget.devices.error != null &&
+        widget.devices.discovery.state != 'failed')
+      FieldIssue(
+        'device',
+        widget.devices.error!,
+        widget.devices.device == null ? '重新加载本机' : '打开设置',
+        widget.devices.device == null
+            ? widget.devices.initialize
+            : () {
+                name.text = widget.devices.device?.name ?? '';
+                openPanel('设置', settingsPage);
+              },
+      ),
+    if (widget.connections.problem case final String message)
+      FieldIssue('connection', message, '查看连接', localActions),
+    if (!widget.remote.occupied && widget.remote.error != null)
+      FieldIssue('media', widget.remote.error!, '查看本机', localActions),
+    if (widget.appearance.error case final String message)
+      FieldIssue(
+        'appearance',
+        message,
+        widget.appearance.retryLabel,
+        widget.appearance.retry,
+      ),
+  ];
+
   Widget settingsPage() => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
@@ -545,6 +663,23 @@ class _FieldShellState extends State<FieldShell> {
           if (v != null) widget.appearance.select(v);
         },
       ),
+      if (widget.appearance.error case final String message) ...[
+        const SizedBox(height: 8),
+        Semantics(
+          liveRegion: true,
+          child: Text(
+            message,
+            key: const ValueKey('settings-appearance-error'),
+          ),
+        ),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton(
+            onPressed: widget.appearance.retry,
+            child: Text(widget.appearance.retryLabel),
+          ),
+        ),
+      ],
       const SizedBox(height: 24),
       TextField(
         key: const ValueKey('device-name'),
@@ -574,7 +709,6 @@ class _FieldShellState extends State<FieldShell> {
             onPressed: widget.devices.refreshPermissions,
             child: const Text('刷新权限'),
           ),
-          TextButton(onPressed: localActions, child: const Text('允许连接与短接码')),
         ],
       ),
       Text(
@@ -584,7 +718,32 @@ class _FieldShellState extends State<FieldShell> {
             ? '屏幕录制已允许'
             : '屏幕录制未允许',
       ),
+      if (widget.devices.error case final String message) ...[
+        const SizedBox(height: 8),
+        Semantics(
+          liveRegion: true,
+          child: Text(message, key: const ValueKey('settings-device-error')),
+        ),
+      ],
       const Text('Windows、macOS 无需激活或激活码。远控提示、网络文件和剪贴板设置在对应能力交付后开放。'),
+      const SizedBox(height: 24),
+      const Divider(),
+      if (widget.desktop.error case final String message)
+        Semantics(
+          liveRegion: true,
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Text(message, key: const ValueKey('settings-exit-error')),
+          ),
+        ),
+      Align(
+        alignment: Alignment.centerLeft,
+        child: OutlinedButton.icon(
+          onPressed: widget.desktop.exiting ? null : _exit,
+          icon: const Icon(Icons.logout),
+          label: const Text('退出'),
+        ),
+      ),
     ],
   );
 }

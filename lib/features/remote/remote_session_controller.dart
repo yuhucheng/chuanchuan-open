@@ -55,8 +55,9 @@ class RemoteSessionController extends ChangeNotifier {
   final MediaSessionBudget budget;
 
   final MediaCapabilities _capabilities;
-  final _links = <String, RemotePictureLink>{};
-  final _linkGenerations = <String, String>{};
+  // Two devices can hold independently authorized connections in both
+  // directions. A peer key is identity, not a transport/receiver owner.
+  final _links = <TrustedConnection, RemotePictureLink>{};
   _Attempt? _attempt;
   Timer? _deadline;
   Timer? _permissionTimer;
@@ -69,6 +70,25 @@ class RemoteSessionController extends ChangeNotifier {
   RemotePhase _phase = RemotePhase.idle;
   String? _error;
   bool _cleanupFailed = false;
+  List<CaptureSource> _sourceChoices = const [];
+  String? _sourceError;
+  List<CaptureSource> get sourceChoices => _sourceChoices;
+  String? get sourceError => _sourceError;
+  bool get sourceBusy =>
+      (_attempt?.loadingSources ?? false) ||
+      (_attempt?.changingSource ?? false);
+  CaptureSource? get localSource => switch (session) {
+    SourceSelectableRemotePicture picture when picture.sends =>
+      picture.localSource,
+    _ => null,
+  };
+  bool get supportsSourceSelection =>
+      sending && session is SourceSelectableRemotePicture;
+  bool get canChangeSource =>
+      supportsSourceSelection &&
+      !sourceBusy &&
+      !_stopping &&
+      (_phase == RemotePhase.active || _phase == RemotePhase.paused);
 
   /// Operations this build can offer. The peer's own support is confirmed by
   /// the session; a refusal is shown as a refusal, never as success.
@@ -83,6 +103,9 @@ class RemoteSessionController extends ChangeNotifier {
           operation.name,
     };
   }
+
+  Set<String> operationsFor(String peerKey) =>
+      connections.outgoingFor(peerKey) != null ? offeredOperations : const {};
 
   RemotePicture? get session => _attempt?.picture;
   SessionOperation? get operation => _attempt?.operation;
@@ -117,7 +140,6 @@ class RemoteSessionController extends ChangeNotifier {
       unawaited(link.close().catchError((Object _) {}));
     }
     _links.clear();
-    _linkGenerations.clear();
     connections.removeListener(_reconcile);
     super.dispose();
   }
@@ -150,13 +172,17 @@ class RemoteSessionController extends ChangeNotifier {
       _fail('本机预览正在进行，请先停止预览再开始远端画面。');
       return;
     }
-    final connection = _liveConnection(peerKey);
+    final connection = connections.outgoingFor(peerKey);
     if (connection == null) {
-      _fail('该设备尚未完成身份验证；请先输入 6 位短接码连接。');
+      _fail(
+        connections.sessions.any((s) => !s.isClosed && s.peerKey == peerKey)
+            ? '当前连接方向不允许该操作，请输入对方的短接码建立反向连接。'
+            : '该设备尚未完成身份验证；请先输入 6 位短接码连接。',
+      );
       return;
     }
     final token = ++_generation;
-    final attempt = _Attempt(token, peerKey, operation, label: label)
+    final attempt = _Attempt(token, connection, operation, label: label)
       ..sessionId = 'remote-${++_sessionCounter}';
     _attempt = attempt;
     _busy = true;
@@ -165,17 +191,24 @@ class RemoteSessionController extends ChangeNotifier {
     _phase = RemotePhase.connecting;
     _notify();
     try {
-      final started = await _linkFor(
-        connection,
-      ).start(operation, attempt.sessionId);
+      final started = await _linkFor(connection)
+          .start(operation, attempt.sessionId);
       if (_disposed || attempt.cancelled || token != _generation) {
         // A cancelled or superseded start must not leave a live session behind.
-        await _silentStop(started);
+        if (!_disposed && identical(_attempt, attempt)) {
+          // Adoption may have been refused after cancellation. Keep its late
+          // owner reachable until cleanup succeeds, including a failed retry.
+          attempt.picture ??= started;
+          attempt.cancelled = true;
+        } else {
+          await _silentStop(started);
+        }
         return;
       }
       attempt.picture ??= started;
       if (attempt.picture!.stopped) {
-        await _finishAttempt(attempt);
+        // stopped gates callbacks; it does not prove native cleanup succeeded.
+        attempt.cancelled = true;
         return;
       }
       if (!attempt.firstFrame) _armFirstFrameDeadline(attempt);
@@ -184,16 +217,13 @@ class RemoteSessionController extends ChangeNotifier {
         _phase = RemotePhase.failed;
         _error = _failureMessage(failure);
       }
-      // A refused start owns nothing, so it must not keep the picture budget.
+      // Admission can fail after acquiring native resources. An adopted owner
+      // must remain reachable until stop confirms that cleanup completed.
       attempt.cancelled = true;
     } finally {
       _busy = false;
       if (attempt.cancelled && identical(_attempt, attempt)) {
-        await _cancelEvents(attempt);
-        final picture = attempt.picture;
-        if (picture != null) await _silentStop(picture);
-        _attempt = null;
-        if (_phase != RemotePhase.failed) _phase = RemotePhase.idle;
+        await stop(reason: _error, failed: _phase == RemotePhase.failed);
       }
       _notify();
     }
@@ -205,7 +235,7 @@ class RemoteSessionController extends ChangeNotifier {
 
   Future<void> pause() async {
     final picture = _attempt?.picture;
-    if (_disposed || picture == null) return;
+    if (_disposed || picture == null || sourceBusy) return;
     try {
       await picture.pause();
     } catch (failure) {
@@ -218,8 +248,11 @@ class RemoteSessionController extends ChangeNotifier {
   Future<void> resume() async {
     final attempt = _attempt;
     final picture = attempt?.picture;
-    if (_disposed || attempt == null || picture == null) return;
+    if (_disposed || attempt == null || picture == null || sourceBusy) return;
     try {
+      attempt.firstFrame = false;
+      attempt.transportReady = false;
+      attempt.minimumRevision = picture.mediaRevision + 1;
       _phase = RemotePhase.connecting;
       _notify();
       await picture.resume();
@@ -239,6 +272,8 @@ class RemoteSessionController extends ChangeNotifier {
     final attempt = _attempt;
     if (_disposed || attempt == null || _stopping) return;
     _stopping = true;
+    _sourceChoices = const [];
+    _sourceError = null;
     // Late frames, receipts and remote signals of this attempt are now stale.
     _generation++;
     _deadline?.cancel();
@@ -274,73 +309,65 @@ class RemoteSessionController extends ChangeNotifier {
 
   void _reconcile() {
     if (_disposed) return;
-    final live = <String, TrustedConnection>{};
-    for (final connection in connections.sessions) {
-      if (!connection.isClosed) live[connection.peerKey] = connection;
-    }
-    for (final key in _links.keys.toList()) {
-      final connection = live[key];
-      if (connection == null ||
-          _linkGenerations[key] != connection.sessionId) {
-        final link = _links.remove(key);
-        _linkGenerations.remove(key);
+    final live = connections.sessions.where((c) => !c.isClosed).toSet();
+    for (final connection in _links.keys.toList()) {
+      if (!live.contains(connection)) {
+        final link = _links.remove(connection);
         if (link != null) unawaited(link.close().catchError((Object _) {}));
       }
     }
-    // Every live connection owns a receiver, so a peer-initiated operation is
-    // routed and visible instead of being dropped by the transport.
-    for (final connection in live.values) {
+    // Each authenticated transport keeps its receiver, even for the same peer.
+    for (final connection in live) {
       _linkFor(connection);
     }
     final attempt = _attempt;
-    if (attempt != null && !live.containsKey(attempt.peerKey)) {
+    if (attempt != null && !live.contains(attempt.connection)) {
       unawaited(stop(reason: '连接已断开，远端画面已停止并释放。', failed: true));
     }
   }
 
-  TrustedConnection? _liveConnection(String peerKey) {
-    for (final connection in connections.sessions) {
-      if (!connection.isClosed && connection.peerKey == peerKey) {
-        return connection;
-      }
-    }
-    return null;
-  }
-
   RemotePictureLink _linkFor(TrustedConnection connection) {
-    final key = connection.peerKey;
-    final existing = _links[key];
-    if (existing != null && _linkGenerations[key] == connection.sessionId) {
-      return existing;
-    }
+    final existing = _links[connection];
+    if (existing != null) return existing;
     final link = factory.create(
       transport: connection,
       budget: budget,
       resolveSource: _resolveLocalSource,
-      onSession: (session) => _adopt(key, session),
-      onFailure: (sessionId, code) => _onLinkFailure(key, sessionId, code),
+      onSession: (session) => _adopt(connection, session),
+      onFailure: (sessionId, code) =>
+          _onLinkFailure(connection, sessionId, code),
     );
-    _links[key] = link;
-    _linkGenerations[key] = connection.sessionId;
+    _links[connection] = link;
     return link;
   }
 
   // ------------------------------------------------------------------ routing
 
-  void _adopt(String peerKey, RemotePicture session) {
-    if (_disposed) {
+  void _adopt(TrustedConnection connection, RemotePicture session) {
+    if (_disposed ||
+        connection.isClosed ||
+        !connections.sessions.contains(connection)) {
       unawaited(_silentStop(session));
       return;
     }
+    if (localCaptureActive?.call() ?? false) {
+      // The SDK reports admission before resolving or capturing a source.
+      // stop gates this unstarted session synchronously before its next await;
+      // an incoming request cannot bypass local preview's occupied budget.
+      unawaited(_silentStop(session, reason: VideoEndReason.busy));
+      return;
+    }
     var attempt = _attempt;
-    if (attempt != null && attempt.peerKey != peerKey) {
+    if (attempt != null &&
+        (!identical(attempt.connection, connection) ||
+            attempt.sessionId != session.id)) {
       // The single picture budget is already spent on another peer.
-      unawaited(_silentStop(session));
+      unawaited(_silentStop(session, reason: VideoEndReason.busy));
       return;
     }
     if (attempt == null) {
       // Peer-initiated: own it here so it stays visible and stoppable.
-      attempt = _Attempt(++_generation, peerKey, session.operation)
+      attempt = _Attempt(++_generation, connection, session.operation)
         ..sessionId = session.id;
       _attempt = attempt;
       _phase = RemotePhase.connecting;
@@ -349,6 +376,11 @@ class RemoteSessionController extends ChangeNotifier {
       _notify();
     } else if (attempt.cancelled || attempt.picture != null) {
       // One session per operation, and never for a cancelled one.
+      if (attempt.cancelled && attempt.picture == null) {
+        // SDK admission may throw after this callback, with no returned owner.
+        // Retain only the cleanup handle; never subscribe or revive playback.
+        attempt.picture = session;
+      }
       unawaited(_silentStop(session));
       return;
     }
@@ -360,12 +392,18 @@ class RemoteSessionController extends ChangeNotifier {
     _notify();
   }
 
-  void _onLinkFailure(String peerKey, String sessionId, String code) {
+  void _onLinkFailure(
+    TrustedConnection connection,
+    String sessionId,
+    String code,
+  ) {
     if (_disposed || _stopping) return;
     final attempt = _attempt;
-    if (attempt == null || attempt.peerKey != peerKey) return;
-    final picture = attempt.picture;
-    if (picture != null && picture.id != sessionId) return;
+    if (attempt == null ||
+        !identical(attempt.connection, connection) ||
+        attempt.sessionId != sessionId) {
+      return;
+    }
     _deadline?.cancel();
     _deadline = null;
     _phase = RemotePhase.failed;
@@ -378,6 +416,12 @@ class RemoteSessionController extends ChangeNotifier {
         !identical(_attempt, attempt) ||
         attempt.token != _generation) {
       return;
+    }
+    if (event.mediaRevision < attempt.minimumRevision) return;
+    if (event.mediaRevision > attempt.minimumRevision) {
+      attempt.firstFrame = false;
+      attempt.transportReady = false;
+      attempt.minimumRevision = event.mediaRevision;
     }
     switch (event.kind) {
       case MediaEventKind.connecting:
@@ -397,11 +441,15 @@ class RemoteSessionController extends ChangeNotifier {
         _phase = RemotePhase.active;
         break;
       case MediaEventKind.paused:
+        attempt.firstFrame = false;
+        attempt.transportReady = false;
         _deadline?.cancel();
         _deadline = null;
         _phase = RemotePhase.paused;
         break;
       case MediaEventKind.sourceChanged:
+        // Selection/negotiation is not a remote presentation receipt.
+        break;
       case MediaEventKind.statistics:
         break;
       case MediaEventKind.ended:
@@ -442,6 +490,8 @@ class RemoteSessionController extends ChangeNotifier {
     // finished operation still occupying it.
     if (identical(_attempt, attempt)) {
       _attempt = null;
+      _sourceChoices = const [];
+      _sourceError = null;
       _notify();
     }
     await _cancelEvents(attempt);
@@ -507,6 +557,88 @@ class RemoteSessionController extends ChangeNotifier {
 
   // ------------------------------------------------------------------- source
 
+  /// Explicit user action only: merely opening the app or hovering a node
+  /// never enumerates sources. Results belong to the current sharing operation.
+  Future<void> loadSourceChoices() async {
+    final attempt = _attempt;
+    if (attempt == null || !canChangeSource) return;
+    attempt.loadingSources = true;
+    _sourceError = null;
+    _notify();
+    try {
+      final found = await listSources();
+      if (_isCurrent(attempt)) _sourceChoices = List.unmodifiable(found);
+    } catch (_) {
+      if (_isCurrent(attempt)) _sourceError = '无法读取本机画面来源，请重试。';
+    } finally {
+      attempt.loadingSources = false;
+      _notify();
+    }
+  }
+
+  bool _isCurrent(_Attempt attempt) =>
+      !_disposed &&
+      identical(_attempt, attempt) &&
+      attempt.token == _generation &&
+      !attempt.cancelled;
+
+  Future<void> changeSource(CaptureSource selected) async {
+    final attempt = _attempt;
+    final picture = attempt?.picture;
+    if (attempt == null ||
+        picture is! SourceSelectableRemotePicture ||
+        !canChangeSource) {
+      return;
+    }
+    var changingRevision = false;
+    attempt.changingSource = true;
+    _sourceError = null;
+    _notify();
+    try {
+      // A stale picker selection is never replaced by the first/primary item.
+      if (!(await platform.permissions()).screenRecording) {
+        throw const SessionFailure('permission_unavailable');
+      }
+      final found = await listSources();
+      if (!_isCurrent(attempt)) return;
+      final matching = found.where(
+        (s) => s.id == selected.id && s.type == selected.type,
+      );
+      if (matching.length != 1) {
+        throw const SessionFailure('source_unavailable');
+      }
+      _sourceChoices = List.unmodifiable(found);
+      attempt.firstFrame = false;
+      attempt.transportReady = false;
+      attempt.minimumRevision = picture.mediaRevision + 1;
+      _deadline?.cancel();
+      _phase = RemotePhase.connecting;
+      _notify();
+      changingRevision = true;
+      await picture.changeSource(matching.single);
+      if (_isCurrent(attempt) && !attempt.firstFrame) {
+        _armFirstFrameDeadline(attempt);
+      }
+    } catch (failure) {
+      if (_isCurrent(attempt)) {
+        _sourceError =
+            failure is SessionFailure && failure.code == 'source_unavailable'
+            ? '所选来源已不可用，未切换到其他来源。请重新选择。'
+            : _failureMessage(failure);
+        // Once the old revision was gated, failure must end capture rather than
+        // leave an unobservable old source running or silently fall back.
+        if (changingRevision ||
+            (failure is SessionFailure &&
+                failure.code == 'permission_unavailable')) {
+          await stop(reason: _sourceError, failed: true);
+        }
+      }
+    } finally {
+      attempt.changingSource = false;
+      _notify();
+    }
+  }
+
   /// Resolves the sharing endpoint's own current primary screen, once per
   /// operation. It never falls back: an unidentifiable or missing primary
   /// screen fails the operation instead of capturing something else.
@@ -568,7 +700,7 @@ class RemoteSessionController extends ChangeNotifier {
     'media_signal_backlog' => '对端信令积压，本次操作已拒绝。',
     'media_start_failed' => '远端画面启动失败，请重试。',
     'permission_unavailable' => '屏幕录制权限不可用，未开始采集。',
-    'source_unavailable' => '无法确认当前主屏，未开始采集。',
+    'source_unavailable' => '共享来源不可用，未改采其他来源。',
     _ => '远端画面失败（${code ?? '未测'}）。',
   };
 
@@ -589,9 +721,12 @@ class RemoteSessionController extends ChangeNotifier {
 
   /// Stops a session nothing in the field owns. The operation is already
   /// isolated, so a failure here cannot be retried and is not surfaced.
-  Future<void> _silentStop(RemotePicture session) async {
+  Future<void> _silentStop(
+    RemotePicture session, {
+    VideoEndReason reason = VideoEndReason.stopped,
+  }) async {
     try {
-      await session.stop();
+      await session.stop(reason: reason);
     } catch (_) {
       /* Nobody owns this session any more. */
     }
@@ -603,9 +738,10 @@ class RemoteSessionController extends ChangeNotifier {
 }
 
 class _Attempt {
-  _Attempt(this.token, this.peerKey, this.operation, {this.label});
+  _Attempt(this.token, this.connection, this.operation, {this.label});
   final int token;
-  final String peerKey;
+  final TrustedConnection connection;
+  String get peerKey => connection.peerKey;
   final SessionOperation operation;
   final String? label;
   String sessionId = '';
@@ -613,5 +749,7 @@ class _Attempt {
   StreamSubscription<MediaSessionEvent>? events;
   bool transportReady = false;
   bool firstFrame = false;
+  int minimumRevision = 0;
+  bool loadingSources = false, changingSource = false;
   bool cancelled = false;
 }

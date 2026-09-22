@@ -391,7 +391,7 @@ packages:
       path: "packages/share_hub_media_api"
       relative: true
     source: path
-    version: "0.2.0"
+    version: "0.3.0"
   share_hub_media_sdk:
     dependency: "direct main"
     description:

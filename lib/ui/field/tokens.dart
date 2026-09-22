@@ -29,6 +29,19 @@ abstract final class FieldTokens {
   static const panelRadius = 20.0;
   static const appiconRadius = 40.0;
   static const nodeRadius = 12.0;
+  static const bodyFontFamily = 'Source Han Sans CN';
+  static const bodyFontFallback = <String>[
+    'Noto Sans SC',
+    'PingFang SC',
+    'Microsoft YaHei UI',
+    'sans-serif',
+  ];
+  static const monoFontFamily = 'Noto Sans Mono';
+  static const monoFontFallback = <String>[
+    'SF Mono',
+    'Cascadia Code',
+    'monospace',
+  ];
   static const displayStyle = TextStyle(
     fontSize: 36.0,
     height: 1.2222222222222223,
@@ -68,7 +81,73 @@ abstract final class FieldTokens {
     fontSize: 18.0,
     height: 1.3333333333333333,
     fontWeight: FontWeight.w500,
+    fontFamily: monoFontFamily,
+    fontFamilyFallback: monoFontFallback,
   );
+  static const spaceUnit = 8.0;
+  static const space4 = 4.0;
+  static const space8 = 8.0;
+  static const space12 = 12.0;
+  static const space16 = 16.0;
+  static const space24 = 24.0;
+  static const space32 = 32.0;
+  static const space40 = 40.0;
+  static const space48 = 48.0;
+  static const space64 = 64.0;
   static const nodeWidth = 150.0;
+  static const nodePadding = 16.0;
+  static const touchTargetMin = 48.0;
+  static const toolbarTarget = 40.0;
+  static const focusWidth = 2.0;
+  static const focusOffset = 2.0;
   static const holdDuration = Duration(milliseconds: 600);
+  static const lightTheme = FieldThemeColors(
+    background: paper,
+    surface: paperRaised,
+    raised: paperGroup,
+    text: ink,
+    secondaryText: inkSecondary,
+    weakText: muted,
+    decoration: line,
+    link: cyanText,
+    self: amberText,
+    focus: cyanText,
+  );
+  static const darkTheme = FieldThemeColors(
+    background: ink,
+    surface: surfaceDark,
+    raised: surfaceDarkHigh,
+    text: paper,
+    secondaryText: mutedDark,
+    decoration: lineDark,
+    link: cyan,
+    self: amber,
+    focus: cyan,
+  );
+}
+
+/// Only roles explicitly supplied by the design palette are represented.
+class FieldThemeColors {
+  const FieldThemeColors({
+    required this.background,
+    required this.surface,
+    required this.raised,
+    required this.text,
+    required this.secondaryText,
+    required this.decoration,
+    required this.link,
+    required this.self,
+    required this.focus,
+    this.weakText,
+  });
+  final Color background;
+  final Color surface;
+  final Color raised;
+  final Color text;
+  final Color secondaryText;
+  final Color decoration;
+  final Color link;
+  final Color self;
+  final Color focus;
+  final Color? weakText;
 }

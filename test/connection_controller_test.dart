@@ -37,15 +37,22 @@ void main() {
     bPlatform.seed.complete(bIdentity);
     await b.open();
     final port = bPlatform.advertisements.whereType<int>().last;
-    await a.connect(
+    final established = await a.connect(
       '127.0.0.1',
       port,
       b.code!,
       expectedPeerKey: bIdentity.encodedKey,
     );
+    expect(established, same(a.sessions.single));
+    expect(a.outgoingFor(bIdentity.encodedKey), same(established));
+    expect(b.outgoingFor(aIdentity.encodedKey), isNull);
     expect(a.accepting, isFalse); // Admission off still permits outbound.
     expect(a.sessions.single.peerKey, bIdentity.encodedKey);
     expect(b.sessions.single.peerKey, aIdentity.encodedKey);
+    expect(a.notice?.kind, ConnectionNoticeKind.status);
+    expect(b.notice?.kind, ConnectionNoticeKind.status);
+    expect(a.problem, isNull);
+    expect(b.problem, isNull);
     final outgoing = a.sessions.single;
     final initiator = outgoing.grant!;
     final receiver = b.sessions.single.grant!;
@@ -73,33 +80,41 @@ void main() {
     expect(b.code, matches(RegExp(r'^\d{6}$')));
   });
 
-  test('closing admission refuses new inbound even with the old code', () async {
-    final bPlatform = FakeConnectionPlatform();
-    final b = ConnectionController(bPlatform);
-    final bIdentity = await DeviceIdentity.fromSeed(List.filled(32, 41));
-    bPlatform.seed.complete(bIdentity);
-    await b.open();
-    final port = bPlatform.advertisements.whereType<int>().last;
-    final code = b.code!;
-    await b.disconnectAll();
-    expect(b.accepting, isFalse);
-    expect(b.code, isNull);
-    final cPlatform = FakeConnectionPlatform();
-    final c = ConnectionController(cPlatform);
-    addTearDown(() {
-      c.dispose();
-      b.dispose();
-    });
-    cPlatform.seed.complete(await DeviceIdentity.fromSeed(List.filled(32, 42)));
-    await c.connect(
-      '127.0.0.1',
-      port,
-      code,
-      expectedPeerKey: bIdentity.encodedKey,
-    );
-    expect(c.sessions, isEmpty);
-    expect(c.message, contains('连接未建立'));
-  });
+  test(
+    'closing admission refuses new inbound even with the old code',
+    () async {
+      final bPlatform = FakeConnectionPlatform();
+      final b = ConnectionController(bPlatform);
+      final bIdentity = await DeviceIdentity.fromSeed(List.filled(32, 41));
+      bPlatform.seed.complete(bIdentity);
+      await b.open();
+      final port = bPlatform.advertisements.whereType<int>().last;
+      final code = b.code!;
+      await b.disconnectAll();
+      expect(b.accepting, isFalse);
+      expect(b.code, isNull);
+      final cPlatform = FakeConnectionPlatform();
+      final c = ConnectionController(cPlatform);
+      addTearDown(() {
+        c.dispose();
+        b.dispose();
+      });
+      cPlatform.seed.complete(
+        await DeviceIdentity.fromSeed(List.filled(32, 42)),
+      );
+      final rejected = await c.connect(
+        '127.0.0.1',
+        port,
+        code,
+        expectedPeerKey: bIdentity.encodedKey,
+      );
+      expect(rejected, isNull);
+      expect(c.sessions, isEmpty);
+      expect(c.message, contains('连接未建立'));
+      expect(c.notice?.kind, ConnectionNoticeKind.problem);
+      expect(c.problem, c.message);
+    },
+  );
   test(
     'cancel while loading identity cannot start listener from late result',
     () async {
@@ -111,6 +126,8 @@ void main() {
       await opening;
       expect(controller.accepting, isFalse);
       expect(controller.code, isNull);
+      expect(controller.notice?.kind, ConnectionNoticeKind.status);
+      expect(controller.problem, isNull);
       expect(platform.advertisements.whereType<int>(), isEmpty);
       controller.dispose();
     },
@@ -135,7 +152,7 @@ void main() {
       final connecting = controller.connect('127.0.0.1', 12345, '123456');
       controller.cancel();
       platform.seed.complete(await DeviceIdentity.fromSeed(List.filled(32, 6)));
-      await connecting;
+      expect(await connecting, isNull);
       expect(controller.sessions, isEmpty);
       expect(controller.busy, isFalse);
       expect(controller.message, '已取消连接。');

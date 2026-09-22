@@ -18,9 +18,13 @@ class DeviceController extends ChangeNotifier {
   StreamSubscription<DiscoverySnapshot>? _subscription;
 
   Future<void> initialize() => _perform(() async {
-    device = await platform.loadDevice();
-    permissions = await platform.permissions();
+    final loadedDevice = await platform.loadDevice();
+    final loadedPermissions = await platform.permissions();
     if (_disposed) return;
+    // Publish initialization prerequisites together: a permission-query failure
+    // must not look like a ready device whose discovery has never been started.
+    device = loadedDevice;
+    permissions = loadedPermissions;
     _subscription ??= platform.discoveryEvents.listen(
       (event) {
         if (_disposed) return;

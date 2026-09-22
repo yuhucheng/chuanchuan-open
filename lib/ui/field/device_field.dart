@@ -7,7 +7,7 @@ import '../../features/devices/device_directory.dart';
 import 'tokens.dart';
 
 /// Arrival order is retained, including offline slots, for this field's lifetime.
-/// Network updates never change a focused node's position or identity.
+/// Network updates never change a focused node's slot or identity.
 class DeviceField extends StatefulWidget {
   const DeviceField({
     super.key,
@@ -77,6 +77,23 @@ class _DeviceFieldState extends State<DeviceField> {
     return entry.online ? '${entry.platform} · 已验证 · 未连接' : '已保存资料 · 需重新输码';
   }
 
+  String _detail(DirectoryDevice entry, bool present) {
+    final peers = _known.values.where((d) => d.name == entry.name);
+    final status = describe(entry, present: present);
+    if (peers.length < 2) return status;
+    final suffix = deviceAddressSuffix(entry);
+    final collision =
+        peers
+            .where(
+              (d) =>
+                  d.platform == entry.platform &&
+                  deviceAddressSuffix(d) == suffix,
+            )
+            .length >
+        1;
+    return '${entry.platform} · $suffix${collision ? ' · ${deviceIdentitySuffix(entry)}' : ''} · $status';
+  }
+
   @override
   Widget build(BuildContext context) {
     final online = widget.entries
@@ -98,7 +115,6 @@ class _DeviceFieldState extends State<DeviceField> {
           constraints.maxWidth,
           FieldTokens.nodeWidth * math.max<double>(1.0, scale),
         );
-        final nodeHeight = 164.0 * math.max<double>(1.0, scale);
         final items = <Widget>[
           _node(
             context,
@@ -114,10 +130,7 @@ class _DeviceFieldState extends State<DeviceField> {
               context,
               key: ValueKey('device-${entry.identityId}'),
               name: entry.name,
-              detail: describe(
-                entry,
-                present: online.contains(entry.identityId),
-              ),
+              detail: _detail(entry, online.contains(entry.identityId)),
               icon: Icons.devices,
               focus: _focus[entry.identityId],
               onPressed: online.contains(entry.identityId)
@@ -156,6 +169,36 @@ class _DeviceFieldState extends State<DeviceField> {
         }
 
         final rows = (items.length / columns).ceil();
+        Widget buildRow(int row) {
+          final slots = List<Widget?>.filled(columns, null);
+          for (
+            var i = row * columns;
+            i < math.min(items.length, (row + 1) * columns);
+            i++
+          ) {
+            slots[column(i)] = Padding(
+              padding: EdgeInsets.only(top: (i % 2) * 24),
+              child: items[i],
+            );
+          }
+          // Keep the center-outward field slots and their stagger, while the
+          // tallest actual node determines the row's height. Identity/status
+          // text must never be clipped to make a fixed-height node fit.
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 48),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (var slot = 0; slot < columns; slot++) ...[
+                  if (slot != 0) const SizedBox(width: 48),
+                  SizedBox(width: nodeWidth, child: slots[slot]),
+                ],
+              ],
+            ),
+          );
+        }
+
         return Column(
           children: [
             if (_expanded)
@@ -172,26 +215,8 @@ class _DeviceFieldState extends State<DeviceField> {
                   label: const Text('返回设备场'),
                 ),
               ),
-            SizedBox(
-              height: rows * (nodeHeight + 48) + 32,
-              child: Stack(
-                children: [
-                  for (var i = 0; i < items.length; i++)
-                    Positioned(
-                      left:
-                          (constraints.maxWidth -
-                                  columns * nodeWidth -
-                                  (columns - 1) * 48) /
-                              2 +
-                          column(i) * (nodeWidth + 48),
-                      top: (i ~/ columns) * (nodeHeight + 48) + (i % 2) * 24,
-                      width: nodeWidth,
-                      height: nodeHeight,
-                      child: items[i],
-                    ),
-                ],
-              ),
-            ),
+            for (var row = 0; row < rows; row++) buildRow(row),
+            const SizedBox(height: 32),
             if (filtered.isEmpty)
               Text(widget.query.isEmpty ? '还没有发现其他设备' : '没有匹配的设备'),
           ],
@@ -241,6 +266,7 @@ class _DeviceFieldState extends State<DeviceField> {
         ),
       ),
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Icon(icon, size: 32),
@@ -255,8 +281,6 @@ class _DeviceFieldState extends State<DeviceField> {
           Text(
             detail,
             textAlign: TextAlign.center,
-            maxLines: 3,
-            overflow: TextOverflow.ellipsis,
             style: Theme.of(context).textTheme.bodySmall,
           ),
         ],

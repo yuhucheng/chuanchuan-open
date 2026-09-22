@@ -1,3 +1,7 @@
+import 'dart:convert';
+
+import 'package:crypto/crypto.dart';
+
 import '../../platform/client_platform.dart';
 
 /// Trust is only ever granted by a completed identity verification in this
@@ -22,9 +26,9 @@ class VerifiedPeer {
   final String? name;
   final bool connected;
 
-  /// Capability keys reported by the *current* authenticated peer. The set is
-  /// empty until a media/input/file contract is delivered and accepted, so the
-  /// field never offers an operation the peer did not negotiate.
+  /// Operations this build can attempt under the current authorization
+  /// direction. The peer's actual support is confirmed by the session handshake,
+  /// not inferred from discovery or from this presentation projection.
   final Set<String> capabilities;
 }
 
@@ -50,16 +54,17 @@ class DirectoryDevice {
 
   /// An unverified discovery record: reachable, unknown identity, no
   /// operations. It is never treated as trusted material.
-  factory DirectoryDevice.fromDiscovered(NearbyDevice device) => DirectoryDevice(
-    identityId: device.publicKey ?? device.id,
-    name: device.name,
-    platform: device.platform,
-    trust: DeviceTrust.unverified,
-    reachability: DeviceReachability.reachable,
-    publicKey: device.publicKey,
-    host: device.host,
-    port: device.port,
-  );
+  factory DirectoryDevice.fromDiscovered(NearbyDevice device) =>
+      DirectoryDevice(
+        identityId: device.publicKey ?? device.id,
+        name: device.name,
+        platform: device.platform,
+        trust: DeviceTrust.unverified,
+        reachability: DeviceReachability.reachable,
+        publicKey: device.publicKey,
+        host: device.host,
+        port: device.port,
+      );
 
   /// Stable per identity: the claimed key when one is advertised, otherwise the
   /// discovery identifier. Never the display name.
@@ -84,8 +89,10 @@ class DirectoryDevice {
 
   /// Only a record that carries a verifiable endpoint may be asked to prove its
   /// identity; the proof is still the short-code handshake, not this flag.
-  bool get connectable =>
-      !connected && host != null && port != null && publicKey != null;
+  bool get hasPairingEndpoint =>
+      host != null && port != null && publicKey != null;
+
+  bool get connectable => !connected && hasPairingEndpoint;
 
   /// A verified identity that is not currently reachable. Kept as a reminder
   /// only: reconnecting requires a new short code.
@@ -111,7 +118,8 @@ List<DirectoryDevice> buildDeviceDirectory({
     entries.add(
       DirectoryDevice(
         identityId: peer.publicKey,
-        name: match?.name ?? peer.name ?? '设备 ${peer.publicKey.substring(0, 8)}',
+        name:
+            match?.name ?? peer.name ?? '设备 ${peer.publicKey.substring(0, 8)}',
         platform: match?.platform ?? 'unknown',
         trust: DeviceTrust.verified,
         reachability: peer.connected || match != null
@@ -130,3 +138,30 @@ List<DirectoryDevice> buildDeviceDirectory({
   }
   return List.unmodifiable(entries);
 }
+
+/// A display-only digest; neither a friendly name nor this abbreviation grants trust.
+String deviceFingerprint(String? key) {
+  if (key == null) return '未提供';
+  try {
+    final bytes = base64Url.decode(base64Url.normalize(key));
+    if (bytes.length != 32) return '未提供';
+    return sha256.convert(bytes).toString().substring(0, 8);
+  } on FormatException {
+    return '未提供';
+  }
+}
+
+String deviceAddressSuffix(DirectoryDevice device) {
+  final host = device.host;
+  if (host == null || host.isEmpty) {
+    return '地址未提供 · ${sha256.convert(utf8.encode(device.identityId)).toString().substring(0, 8)}';
+  }
+  final parts = host.split('.');
+  if (parts.length == 4 && parts.every((p) => int.tryParse(p) != null)) {
+    return '…${parts.skip(2).join('.')}';
+  }
+  return host.length > 16 ? '…${host.substring(host.length - 16)}' : host;
+}
+
+String deviceIdentitySuffix(DirectoryDevice device) =>
+    sha256.convert(utf8.encode(device.identityId)).toString().substring(0, 8);

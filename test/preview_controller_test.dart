@@ -13,10 +13,16 @@ void main() {
   late FakePlatform platform;
   late FakePreviewEngine engine;
   late PreviewController controller;
+  var remoteBusy = false;
   setUp(() {
     platform = FakePlatform();
     engine = FakePreviewEngine();
-    controller = PreviewController(platform, engine);
+    remoteBusy = false;
+    controller = PreviewController(
+      platform,
+      engine,
+      blockedByRemotePicture: () => remoteBusy,
+    );
   });
   tearDown(() async {
     controller.dispose();
@@ -28,6 +34,46 @@ void main() {
     await controller.loadSources();
     controller.select(controller.sources.first);
   }
+
+  test(
+    'remote occupancy after a permission await prevents local capture',
+    () async {
+      platform.permissionCompleter = Completer<bool>();
+      final starting = controller.start();
+      expect(controller.occupiesPicture, isTrue);
+      remoteBusy = true;
+      platform.permissionCompleter!.complete(true);
+      await starting;
+      expect(engine.starts, 0);
+      expect(controller.active, isFalse);
+      expect(controller.occupiesPicture, isFalse);
+      expect(controller.error, contains('单画面预算'));
+    },
+  );
+
+  test(
+    'remote occupancy after source enumeration prevents local capture',
+    () async {
+      controller.dispose();
+      final delayed = _DelayedSources();
+      engine = delayed;
+      platform.status = const PermissionStatus(screenRecording: true);
+      controller = PreviewController(
+        platform,
+        engine,
+        blockedByRemotePicture: () => remoteBusy,
+      );
+      final starting = controller.start();
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.occupiesPicture, isTrue);
+      remoteBusy = true;
+      delayed.ready.complete();
+      await starting;
+      expect(engine.starts, 0);
+      expect(controller.occupiesPicture, isFalse);
+      expect(controller.error, contains('单画面预算'));
+    },
+  );
 
   test('start resolves primary only after explicit action and preserves a chosen source', () async {
     platform.status = const PermissionStatus(screenRecording: true);
@@ -224,4 +270,13 @@ void main() {
     expect(controller.active, false);
     expect(controller.error, contains('权限已关闭'));
   });
+}
+
+class _DelayedSources extends FakePreviewEngine {
+  final ready = Completer<void>();
+  @override
+  Future<List<CaptureSource>> sources() async {
+    await ready.future;
+    return super.sources();
+  }
 }

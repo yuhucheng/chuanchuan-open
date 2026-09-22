@@ -16,6 +16,11 @@ Future<void> openFieldTool(WidgetTester tester, String label) async {
     await tester.tap(local);
     await tester.pumpAndSettle();
   }
-  await tester.tap(find.widgetWithText(TextButton, label));
+  final button = find.ancestor(
+    of: find.text(label),
+    matching: find.byWidgetPredicate((w) => w is ButtonStyleButton),
+  );
+  await tester.ensureVisible(button);
+  await tester.tap(button);
   await tester.pumpAndSettle();
 }
