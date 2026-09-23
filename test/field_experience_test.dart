@@ -138,7 +138,7 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
       final platform = FakePlatform();
-      final engine = FakePreviewEngine();
+      final engine = DialogRemotePreviewEngine();
       await tester.pumpWidget(
         ShareHubApp(
           targetPlatform: TargetPlatform.macOS,

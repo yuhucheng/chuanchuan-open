@@ -854,8 +854,9 @@ const _previewChannel = MethodChannel('dev.sharehub.client/preview');
 
 Future<Map<String, dynamic>> _windowState() async {
   try {
-    return await _desktopChannel
-            .invokeMapMethod<String, dynamic>('window.state') ??
+    return await _desktopChannel.invokeMapMethod<String, dynamic>(
+          'window.state',
+        ) ??
         <String, dynamic>{};
   } catch (error) {
     return <String, dynamic>{'error': error.toString()};
@@ -876,8 +877,7 @@ Future<Map<String, dynamic>> _windowAction(String action) async {
 
 Future<Map<String, dynamic>> _captureStats() async {
   try {
-    return await _previewChannel
-            .invokeMapMethod<String, dynamic>('stats') ??
+    return await _previewChannel.invokeMapMethod<String, dynamic>('stats') ??
         <String, dynamic>{};
   } catch (error) {
     return <String, dynamic>{'error': error.toString()};
@@ -976,11 +976,12 @@ Future<void> _backgroundScenario(
   final platform = MethodChannelClientPlatform();
   final preview = PreviewController(platform, engine);
   final transfers = TransferQueue(MethodChannelFileAccess());
-  // The shipped background owner, wired exactly as the client wires it.
+  // The shipped background owner with only this probe's local preview.
   final desktop = DesktopLifecycle(
     devices: DeviceController(platform),
     connections: ConnectionController(MethodChannelConnectionPlatform()),
     preview: preview,
+    stopRemote: () async {}, // This probe creates no remote media owner.
     transfers: transfers,
     connectionSupported: false,
   );
@@ -1080,8 +1081,9 @@ Future<void> _backgroundScenario(
         ),
       );
       // Reaching the native side again proves the process survived the close.
-      report['processAliveAfterClose'] = !(await _windowState())
-          .containsKey('error');
+      report['processAliveAfterClose'] = !(await _windowState()).containsKey(
+        'error',
+      );
       report['controllerAfterClose'] = <String, dynamic>{
         'active': preview.active,
         'firstFrame': preview.firstFrame,
@@ -1092,9 +1094,8 @@ Future<void> _backgroundScenario(
       // Marker for the runner: it wakes the app through LaunchServices (the
       // same path as clicking the Dock icon), which must run
       // `applicationShouldHandleReopen` without any accessibility permission.
-      await File(
-        '$home/acceptance-reopen-request',
-      ).writeAsString(DateTime.now().toIso8601String());
+      await File('$home/acceptance-reopen-request')
+          .writeAsString(DateTime.now().toIso8601String());
       final external = await _waitUntilAsync(() async {
         final state = await _windowState();
         return state['visible'] == true && state['miniaturized'] != true;

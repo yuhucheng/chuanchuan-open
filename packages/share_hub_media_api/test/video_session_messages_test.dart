@@ -39,6 +39,121 @@ void main() {
     b.revoke();
   });
 
+  test(
+    'frame probes bind authority, revision, role and bounded typed evidence',
+    () async {
+      final slot = await MediaSessionBudget(
+        MediaCapabilities(
+          protocolVersion: 2,
+          operations: {SessionOperation.cast},
+          maxVideoSessions: 1,
+        ),
+        grants: GrantRegistry()..register(a),
+      ).reserve(local);
+      addTearDown(slot.release);
+      Future<VideoFrameProbe> receive(String body, {int revision = 2}) async =>
+          VideoFrameProbe.receive(
+            await a.openSignal(local, await b.sealSignal(remote, body)),
+            slot: slot,
+            expectedRevision: revision,
+            peerStage: MediaFrameStage.receiver,
+          );
+      final sample = MediaFrameProgress(
+        stage: MediaFrameStage.receiver,
+        active: true,
+        sequence: 4,
+        age: const Duration(seconds: 1),
+        consumedSequence: 3,
+        consumedFrameAge: const Duration(seconds: 2),
+      );
+      final reply = VideoFrameProbe(revision: 2, probe: 1, progress: sample);
+      expect((await receive(reply.encode())).progress!.consumedSequence, 3);
+      expect(
+        (await receive(VideoFrameProbe(revision: 2, probe: 2).encode()))
+            .isReply,
+        false,
+      );
+      expect(
+        (await receive(
+          VideoFrameProbe(
+            revision: 2,
+            probe: 3,
+            progress: const MediaFrameProgress.unknown(
+              MediaFrameStage.receiver,
+            ),
+          ).encode(),
+        )).progress!.age,
+        isNull,
+      );
+      final valid = jsonDecode(reply.encode()) as Map<String, dynamic>;
+      for (final invalid in [
+        {...valid, 'probe': 0},
+        {...valid, 'probe': 1.0},
+        {...valid, 'version': 1.0},
+        {...valid, 'revision': 3},
+        {...valid, 'source': 'other'},
+        {
+          ...valid,
+          'progress': {...valid['progress'], 'stage': 'capture'},
+        },
+        {
+          ...valid,
+          'progress': {...valid['progress'], 'age': -1},
+        },
+        {
+          ...valid,
+          'progress': {...valid['progress'], 'age': 1.0},
+        },
+        {
+          ...valid,
+          'progress': {...valid['progress'], 'consumedSequence': 5},
+        },
+        {
+          ...valid,
+          'progress': {...valid['progress'], 'active': null},
+        },
+      ]) {
+        await expectLater(
+          receive(jsonEncode(invalid)),
+          throwsA(isA<SessionFailure>()),
+        );
+      }
+      await expectLater(receive('x' * 1025), throwsA(isA<SessionFailure>()));
+      final signal = await a.openSignal(
+        local,
+        await b.sealSignal(remote, reply.encode()),
+      );
+      final foreignSlot = await MediaSessionBudget(
+        MediaCapabilities(
+          protocolVersion: 2,
+          operations: {SessionOperation.cast},
+          maxVideoSessions: 1,
+        ),
+        grants: GrantRegistry()..register(b),
+      ).reserve(remote);
+      await expectLater(
+        VideoFrameProbe.receive(
+          signal,
+          slot: foreignSlot,
+          expectedRevision: 2,
+          peerStage: MediaFrameStage.receiver,
+        ),
+        throwsA(isA<SessionFailure>()),
+      );
+      foreignSlot.release();
+      a.revoke();
+      await expectLater(
+        VideoFrameProbe.receive(
+          signal,
+          slot: slot,
+          expectedRevision: 2,
+          peerStage: MediaFrameStage.receiver,
+        ),
+        throwsA(isA<SessionFailure>()),
+      );
+    },
+  );
+
   test('playback control is bounded, authenticated and carries an integer revision', () async {
     for (final action in VideoPlaybackAction.values) {
       final signal = await a.openSignal(
@@ -110,7 +225,8 @@ void main() {
     for (final body in [
       '',
       '{"version":1,"kind":"video"}',
-      '{"version":2.0,"kind":"video"}',
+      '{"version":2,"kind":"video"}',
+      '{"version":3.0,"kind":"video"}',
       '{"version":2,"kind":"video","source":"entire-screen"}',
       '{"version":2,"kind":"audio"}',
       'x' * 513,

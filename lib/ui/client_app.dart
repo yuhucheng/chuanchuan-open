@@ -24,6 +24,9 @@ class ShareHubApp extends StatefulWidget {
     required this.previewEngine,
     this.fileAccess,
     this.remoteMedia,
+    this.setAuxiliaryNeeded,
+    this.relayCredentialAvailable,
+    this.stopAuxiliary,
     this.targetPlatform,
     this.appTitle = 'Share Hub',
   });
@@ -31,9 +34,12 @@ class ShareHubApp extends StatefulWidget {
   final PreviewEngine previewEngine;
   final FileAccess? fileAccess;
 
-  /// Remote send/watch implementation. Defaults to the media SDK adapter; tests
+  /// Remote send/watch implementation. Defaults to the optional public SDK port; tests
   /// inject a fake so no capture device or peer is needed.
   final RemotePictureFactory? remoteMedia;
+  final void Function(bool)? setAuxiliaryNeeded;
+  final bool Function()? relayCredentialAvailable;
+  final void Function()? stopAuxiliary;
   final TargetPlatform? targetPlatform;
   final String appTitle;
 
@@ -57,20 +63,23 @@ class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
   late final PreviewController _preview = PreviewController(
     _platform,
     _engine,
-    blockedByRemotePicture: () => _remote.occupied,
+    blockedByRemotePicture: () => _remote.shuttingDown || _remote.occupied,
   );
   late final RemoteSessionController _remote = RemoteSessionController(
     connections: _connections,
     platform: _platform,
-    factory: widget.remoteMedia ?? RtcRemotePictureFactory(),
+    factory: widget.remoteMedia ?? remotePicturesFor(_engine),
     listSources: _engine.sources,
     localCaptureActive: () => _preview.occupiesPicture,
+    relayCredentialAvailable: widget.relayCredentialAvailable,
   );
   late final _transfers = TransferQueue(_fileAccess);
   late final _desktop = DesktopLifecycle(
     devices: _devices,
     connections: _connections,
     preview: _preview,
+    stopRemote: _remote.shutdown,
+    stopAuxiliary: widget.stopAuxiliary,
     transfers: _transfers,
     connectionSupported: connectionHostSupported(
       widget.targetPlatform ?? defaultTargetPlatform,
@@ -81,9 +90,19 @@ class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _connections.addListener(_connectionChanged);
+    _connectionChanged();
     unawaited(_appearance.load());
     unawaited(_devices.initialize());
     unawaited(_desktop.initialize());
+  }
+
+  void _connectionChanged() {
+    widget.setAuxiliaryNeeded?.call(
+      _connections.connecting ||
+          _connections.sessions.any((session) => !session.isClosed) ||
+          _connections.recoveringCount > 0,
+    );
   }
 
   @override
@@ -102,12 +121,15 @@ class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _connections.removeListener(_connectionChanged);
+    widget.setAuxiliaryNeeded?.call(false);
     _appearance.dispose();
     _desktop.dispose();
     _devices.dispose();
     _connections.dispose();
     _preview.dispose();
     _remote.dispose();
+    widget.stopAuxiliary?.call();
     _transfers.dispose();
     super.dispose();
   }

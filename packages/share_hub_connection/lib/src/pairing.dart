@@ -18,6 +18,7 @@ import 'package:cryptography/cryptography.dart' as crypto;
 import 'package:share_hub_session_api/share_hub_session_api.dart';
 
 const offerLifetime = Duration(minutes: 5);
+
 /// Default budget for one handshake attempt. Hosts and tests may shorten it;
 /// an expired attempt is cancelled, never completed late.
 const defaultHandshakeTimeout = Duration(seconds: 30);
@@ -96,23 +97,42 @@ class PairingHost {
     required this.onConnection,
     this.protocolVersion = 1,
     this.handshakeTimeout = defaultHandshakeTimeout,
+    this.enableRecovery = false,
   }) {
     if (protocolVersion != 1 && protocolVersion != 2) {
       throw ArgumentError.value(protocolVersion);
     }
   }
   final int protocolVersion;
+  final bool enableRecovery;
   final Duration handshakeTimeout;
   final DeviceIdentity identity;
   final ContinuousClock clock;
   final void Function(TrustedConnection) onConnection;
   final _pending = <WireChannel>{};
   final _sessions = <TrustedConnection>{};
+  final _recovery = <String, TrustedConnection>{};
+  final _revocations = <String, StreamSubscription<void>>{};
   ServerSocket? _server;
   PairingOffer? _offer;
   int _generation = 0;
   PairingOffer? get offer => _offer;
   int? get port => _server?.port;
+
+  /// Rotate only admission material; keep the authenticated recovery route and
+  /// established grants. Old pairing attempts fail their offer identity check.
+  Future<void> refreshOffer() async {
+    final generation = _generation;
+    final server = _server;
+    if (server == null) throw const ConnectionFailure('admission_closed');
+    _offer?.revoke();
+    _offer = null;
+    final now = await clock();
+    if (generation != _generation || !identical(server, _server)) {
+      throw const ConnectionFailure('cancelled');
+    }
+    _offer = PairingOffer(now);
+  }
 
   Future<void> open({InternetAddress? address}) async {
     await stopAccepting();
@@ -142,11 +162,32 @@ class PairingHost {
   Future<void> _accept(WireChannel wire, int generation) async {
     final timeout = Timer(handshakeTimeout, wire.close);
     TrustedConnection? connection;
+    final offer = _offer;
+    var reserved = false, recovery = false;
     try {
-      final offer = _offer;
-      if (offer == null) throw const ConnectionFailure('offer_unavailable');
-      offer.reserve(await clock());
       final hello = await wire.next();
+      if (hello['type'] == 'resume-hello') {
+        recovery = true;
+        if (!enableRecovery ||
+            protocolVersion != 2 ||
+            hello['grant'] is! String) {
+          throw const ConnectionFailure('recovery_unavailable');
+        }
+        final previous = _recovery[hello['grant']];
+        if (previous == null) {
+          throw const ConnectionFailure('recovery_unavailable');
+        }
+        connection = await previous.acceptRecovery(wire, hello, () {
+          if (generation != _generation || _server == null) {
+            throw const ConnectionFailure('cancelled');
+          }
+        });
+        _publish(connection);
+        return;
+      }
+      if (offer == null) throw const ConnectionFailure('offer_unavailable');
+      reserved = true;
+      offer.reserve(await clock());
       _message(hello, 'hello', protocolVersion);
       final peer = encodeBytes(decodeBytes(hello['key'], 32));
       final nonce = encodeBytes(decodeBytes(hello['nonce'], 32));
@@ -223,11 +264,17 @@ class PairingHost {
       // Atomic consumption, with no await between generation check and consume.
       offer.consume(now);
       final lease = SessionLease(startedMicros: now);
+      final recoverable =
+          enableRecovery &&
+          protocolVersion == 2 &&
+          ready['recovery'] is int &&
+          ready['recovery'] == 1;
       connection = TrustedConnection(
         cipher,
         peer,
         lease,
         clock,
+        enableRecovery: recoverable,
         grant: protocolVersion == 2
             ? await _grant(
                 cipher,
@@ -247,31 +294,76 @@ class PairingHost {
       await cipher.send({
         'type': 'connected',
         'lifetimeSeconds': connectionLifetime.inSeconds,
+        if (recoverable) 'recovery': 1,
       });
       if (connection.grant case final endpoint?) {
         await _activateGrant(cipher, endpoint);
       }
-      if (generation != _generation) throw const ConnectionFailure('cancelled');
-      _sessions.add(connection);
-      connection.startMonitoring();
-      final established = connection;
-      unawaited(
-        established.whenClosed.then((_) => _sessions.remove(established)),
-      );
-      onConnection(established);
+      if (generation != _generation || !identical(offer, _offer)) {
+        throw const ConnectionFailure('cancelled');
+      }
+      _publish(connection);
     } catch (_) {
       connection?.close('handshake_failed');
       wire.close();
     } finally {
+      // A silent or malformed new-pairing socket still consumes a reservation.
+      // A recovery preface never guesses or consumes a short code.
+      if (!reserved && !recovery && offer != null) {
+        try {
+          offer.reserve(await clock());
+        } catch (_) {}
+      }
       timeout.cancel();
       _pending.remove(wire);
     }
+  }
+
+  void _publish(TrustedConnection connection) {
+    _sessions.add(connection);
+    if (connection.enableRecovery) {
+      final grant = connection.grant!;
+      final id = grant.binding.encodedId;
+      unawaited(_revocations.remove(id)?.cancel());
+      _recovery[id] = connection;
+      _revocations[id] = grant.invalidated.listen((_) {
+        if (grant.phase == GrantPhase.revoked &&
+            identical(_recovery[id], connection)) {
+          _recovery.remove(id);
+          unawaited(_revocations.remove(id)?.cancel());
+        }
+      });
+    }
+    connection.startMonitoring();
+    unawaited(
+      connection.whenClosed.then((_) {
+        _sessions.remove(connection);
+        if (!connection.canRecover &&
+            connection.grant != null &&
+            identical(
+              _recovery[connection.grant!.binding.encodedId],
+              connection,
+            )) {
+          _recovery.remove(connection.grant!.binding.encodedId);
+        }
+      }),
+    );
+    onConnection(connection);
   }
 
   Future<void> stopAccepting() async {
     _generation++;
     _offer?.revoke();
     _offer = null;
+    for (final connection in _recovery.values.toList()) {
+      if (connection.isClosed) connection.close('revoked');
+    }
+    _recovery.clear();
+    final subscriptions = _revocations.values.toList();
+    _revocations.clear();
+    for (final subscription in subscriptions) {
+      unawaited(subscription.cancel());
+    }
     for (final wire in _pending.toList()) {
       wire.close();
     }
@@ -296,12 +388,14 @@ class PairingAttempt {
     required this.clock,
     this.protocolVersion = 1,
     this.handshakeTimeout = defaultHandshakeTimeout,
+    this.enableRecovery = false,
   }) {
     if (protocolVersion != 1 && protocolVersion != 2) {
       throw ArgumentError.value(protocolVersion);
     }
   }
   final int protocolVersion;
+  final bool enableRecovery;
   final Duration handshakeTimeout;
   final DeviceIdentity identity;
   final ContinuousClock clock;
@@ -412,7 +506,10 @@ class PairingAttempt {
       // Conservative local deadline: the host commits only AFTER this message.
       // No peer-supplied wall clock or latency can extend the host's eight hours.
       final localStart = await clock();
-      await cipher.send({'type': 'ready'});
+      await cipher.send({
+        'type': 'ready',
+        if (enableRecovery && protocolVersion == 2) 'recovery': 1,
+      });
       final grant = await cipher.next();
       if (grant['type'] != 'connected' ||
           grant['lifetimeSeconds'] != connectionLifetime.inSeconds) {
@@ -424,6 +521,11 @@ class PairingAttempt {
         peer,
         SessionLease(startedMicros: localStart),
         clock,
+        enableRecovery:
+            enableRecovery &&
+            protocolVersion == 2 &&
+            grant['recovery'] is int &&
+            grant['recovery'] == 1,
         grant: protocolVersion == 2
             ? await _grant(
                 cipher,

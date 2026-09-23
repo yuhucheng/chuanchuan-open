@@ -30,6 +30,8 @@ flutter build windows --debug --no-pub
 
 脚本只建立 SDK 包目录链接并执行 pub get，不复制私有源码，不修改 manifest，不生成另一套 main。已有 SDK 目录或冲突链接不会被覆盖。缺少 SDK 属于依赖未安装，需先准备 SDK；不会退回缺功能版本。已按标准目录解压包时可直接运行 `flutter pub get`。
 
+若配置在 `pub get` 阶段失败或中断，已建立的正确 SDK 链接会保留，不回滚删除 SDK。处理依赖错误后，以同一 `-SdkPath` 重试即可；切换其他包前脚本仍会拒绝覆盖原链接。可运行 `pwsh -File tool/test_configure_media_sdk.ps1` 验证临时目录中的重复配置、中文/空格路径、失败和中断恢复；该测试使用模拟包及命令，不证明正式二进制或平台加载已验收。
+
 若 Flutter 不在 PATH，可传 `-FlutterCommand` 指定完整路径。Windows 插件 symlink 权限不足时运行 `tool/prepare_windows_plugins.ps1`，再重试配置；不需改变系统安全策略。SDK 更新后建议清理旧构建产物，再获取依赖。
 
 Windows 开发 SDK 还需按 SDK 包内说明准备匹配的原生依赖。构建钩子检查 DLL、版本锁和补丁输入，缺失或不匹配时停止构建；当前没有正式二进制下载包。SDK 的真实窗口图案验收可从本客户端执行 `pwsh -File tool/test_media_sdk_windows.ps1`，脚本结束后恢复普通客户端 Debug 构建。
@@ -60,3 +62,6 @@ macOS 反复调试可按[本机开发签名](docs/development/macos-local-signin
 验证见 [统一 SDK 构建记录](docs/validation.md) 和 [Mac 合并与主线收敛记录](docs/validation.md)。开源远程地址为 `git@github.com:yuhucheng/chuanchuan-open.git`。
 
 短接码使用、密码协议及验证边界见[本地连接协议与 v2 接入](docs/protocols/short-code-connection.md)。连接授权不等于媒体、输入或文件权限。
+
+
+SDK 源码消费的兼容边界、旧预览实现及公共远端入口验证见[消费矩阵](docs/sdk/consumption-matrix.md)。公共 API 0.8.0 使用可选组合端口，缺能力不呈现永久禁用入口；该验证不代表正式 SDK 二进制已交付。

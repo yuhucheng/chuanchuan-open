@@ -1,0 +1,46 @@
+{
+  "schema": "sharehub-sdk-release-index-draft-1",
+  "exampleOnly": true,
+  "sdkVersion": "0.1.0-layout-example.1",
+  "channel": "internal-candidate",
+  "matrixComplete": false,
+  "intendedTargets": [
+    {
+      "os": "windows",
+      "architectures": [
+        "x86_64"
+      ]
+    },
+    {
+      "os": "windows",
+      "architectures": [
+        "arm64"
+      ]
+    },
+    {
+      "os": "macos",
+      "architectures": [
+        "arm64",
+        "x86_64"
+      ]
+    }
+  ],
+  "artifacts": [
+    {
+      "artifactId": "native-windows-x64-example",
+      "kind": "native",
+      "archiveName": "sharehub-media-native-0.1.0-layout-example.1-windows-x64.zip",
+      "sizeBytes": null,
+      "sha256": null,
+      "manifestSha256": null
+    },
+    {
+      "artifactId": "flutter-windows-x64-example",
+      "kind": "flutter",
+      "archiveName": "sharehub-media-flutter-0.1.0-layout-example.1-windows-x64.zip",
+      "sizeBytes": null,
+      "sha256": null,
+      "manifestSha256": null
+    }
+  ]
+}

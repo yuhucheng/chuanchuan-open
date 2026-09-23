@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 136" width="384" height="136" role="img" aria-label="串串 chuanchuan">
+  <title>串串 chuanchuan · 横版锁定组合</title>
+  <!-- 标志：真矢量，与 logo-primary 同源 -->
+  <g transform="translate(6 8)">
+    <path d="M18 64 V55 L25 48 H75 L82 55 V64" fill="none" stroke="#12161A" stroke-width="7" stroke-linejoin="miter"/>
+    <path d="M50 22 V50" fill="none" stroke="#12161A" stroke-width="7"/>
+    <rect x="6" y="64" width="24" height="24" rx="5" fill="none" stroke="#12161A" stroke-width="7"/>
+    <rect x="70" y="64" width="24" height="24" rx="5" fill="none" stroke="#12161A" stroke-width="7"/>
+    <rect x="43" y="8" width="14" height="14" rx="3" fill="#F26A2E"/>
+  </g>
+  <!-- 字标：以下为实时文本，需系统安装对应字体；交付印刷前请转为轮廓 -->
+  <text x="136" y="86" font-family="Source Han Sans CN, Noto Sans SC, PingFang SC, sans-serif" font-weight="900" font-size="92" letter-spacing="2" fill="#12161A">串串</text>
+  <text x="139" y="120" font-family="Inter Tight, Inter, sans-serif" font-weight="500" font-size="26" letter-spacing="9" fill="#68737A">chuanchuan</text>
+</svg>

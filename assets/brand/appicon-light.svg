@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 176 176" width="176" height="176" role="img" aria-label="串串 chuanchuan">
+  <title>串串 chuanchuan · 应用图标（亮底）</title>
+  <rect x="0.5" y="0.5" width="175" height="175" rx="40" fill="#F5F7F7" stroke="#DCE4E4" stroke-width="1"/>
+  <g transform="translate(33 33) scale(1.1)">
+    <path d="M18 64 V55 L25 48 H75 L82 55 V64" fill="none" stroke="#12161A" stroke-width="7" stroke-linejoin="miter"/>
+    <path d="M50 22 V50" fill="none" stroke="#12161A" stroke-width="7"/>
+    <rect x="6" y="64" width="24" height="24" rx="5" fill="none" stroke="#12161A" stroke-width="7"/>
+    <rect x="70" y="64" width="24" height="24" rx="5" fill="none" stroke="#12161A" stroke-width="7"/>
+    <rect x="43" y="8" width="14" height="14" rx="3" fill="#F26A2E"/>
+  </g>
+</svg>

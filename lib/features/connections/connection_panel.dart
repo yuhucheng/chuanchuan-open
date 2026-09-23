@@ -5,6 +5,7 @@ import 'package:share_hub_media_api/share_hub_media_api.dart' show GrantRole;
 
 import '../../platform/client_platform.dart';
 import 'connection_controller.dart';
+import 'grant_status_text.dart';
 
 class ConnectionPanel extends StatelessWidget {
   const ConnectionPanel({super.key, required this.controller, this.peerName});
@@ -78,6 +79,12 @@ class ConnectionPanel extends StatelessWidget {
               padding: EdgeInsets.symmetric(vertical: 12),
               child: Text('当前没有已接入会话'),
             ),
+          for (final connection in controller.recoveringConnections)
+            ConnectionRecoveryStatus(
+              controller: controller,
+              connection: connection,
+              peerName: peerName?.call(connection.peerKey),
+            ),
           for (final connection in controller.sessions.where(
             (s) => !s.isClosed,
           ))
@@ -93,6 +100,11 @@ class ConnectionPanel extends StatelessWidget {
                         ? '本机发起的连接'
                         : '对方发起的连接',
                   ),
+                  GrantStatusText(
+                    key: ValueKey('local-grant-${connection.sessionId}'),
+                    grant: connection.grant,
+                    connectionClosed: connection.isClosed,
+                  ),
                   Align(
                     alignment: Alignment.centerRight,
                     child: TextButton(
@@ -105,6 +117,43 @@ class ConnectionPanel extends StatelessWidget {
             ),
         ],
       ),
+    ),
+  );
+}
+
+/// Recovery is pending authorization, not an active connection. Keep its
+/// cancellation reachable from both the local context and the device panel.
+class ConnectionRecoveryStatus extends StatelessWidget {
+  const ConnectionRecoveryStatus({
+    super.key,
+    required this.controller,
+    required this.connection,
+    this.peerName,
+  });
+  final ConnectionController controller;
+  final TrustedConnection connection;
+  final String? peerName;
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 12),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(peerName ?? '已验证设备'),
+        Text('指纹 ${connection.peerId.substring(0, 8)} · 连接暂时中断'),
+        Text(
+          connection.grant?.role == GrantRole.initiator
+              ? '正在重新认证本机发起的连接，原授权截止时间不变。'
+              : '正在等待对方重新认证，原授权截止时间不变。',
+        ),
+        Align(
+          alignment: Alignment.centerRight,
+          child: TextButton(
+            onPressed: () => controller.cancelRecovery(connection),
+            child: const Text('取消恢复并断开'),
+          ),
+        ),
+      ],
     ),
   );
 }

@@ -16,6 +16,8 @@ class DesktopLifecycle extends ChangeNotifier {
     required this.devices,
     required this.connections,
     required this.preview,
+    required this.stopRemote,
+    this.stopAuxiliary,
     required this.transfers,
     required this.connectionSupported,
     MethodChannel? channel,
@@ -23,10 +25,16 @@ class DesktopLifecycle extends ChangeNotifier {
   final DeviceController devices;
   final ConnectionController connections;
   final PreviewController preview;
+
+  /// Must synchronously reject new remote operations before returning its
+  /// cleanup future. Completion means all remote media resources are released.
+  final Future<void> Function() stopRemote;
+  final void Function()? stopAuxiliary;
   final TransferQueue transfers;
   final bool connectionSupported;
   final MethodChannel channel;
   Future<bool>? _exit;
+  final _pendingExitSteps = <String, Future<void>>{};
   bool exiting = false, exited = false, _disposed = false, _ready = false;
   String? error;
   Future<void> initialize() async {
@@ -92,21 +100,48 @@ class DesktopLifecycle extends ChangeNotifier {
     }
   }
 
-  Future<bool> requestExit() => _exit ??= _shutdown().whenComplete(() {
-    _exit = null;
-  });
+  Future<bool> requestExit() {
+    final pending = _exit;
+    if (pending != null) return pending;
+    final completion = Completer<bool>();
+    // Publish the transaction before shutdown synchronously notifies listeners.
+    // A listener requesting exit again must join this very same future.
+    _exit = completion.future;
+    completion.complete(
+      _shutdown().whenComplete(() {
+        _exit = null;
+      }),
+    );
+    return completion.future;
+  }
+
   Future<bool> _shutdown() async {
     if (exited) return true;
     exiting = true;
     error = null;
     _notify();
     try {
-      // Revoke authorization synchronously before any native cleanup await.
-      final disconnect = connections.disconnectAll();
-      await _exitStep('stop-capture+disconnect', () => Future.wait([preview.stop(), disconnect]));
+      await _exitStep('stop-media+disconnect', () {
+        // Block new media first, then revoke grants before any cleanup await.
+        // Capture a synchronous callback failure without skipping revocation.
+        final remote = Future<void>.sync(stopRemote);
+        final disconnect = Future<void>.sync(connections.shutdown);
+        final auxiliary = Future<void>.sync(() => stopAuxiliary?.call());
+        return Future.wait<void>([
+          remote,
+          disconnect,
+          auxiliary,
+          Future<void>.sync(preview.stop),
+        ]).then<void>((_) {});
+      });
       if (preview.cleanupFailed) throw StateError('capture cleanup');
       // Cancel a native picker before waiting for its queued result/releases.
-      if (_ready) await _exitStep('cancel-picker', () => channel.invokeMethod<void>('prepareExit'));
+      if (_ready) {
+        await _exitStep(
+          'cancel-picker',
+          () => channel.invokeMethod<void>('prepareExit'),
+        );
+      }
       await _exitStep('close-transfers', () => transfers.close());
       if (transfers.items.isNotEmpty) throw StateError('file cleanup');
       await _exitStep('stop-discovery', () => devices.stopForExit());
@@ -128,13 +163,21 @@ class DesktopLifecycle extends ChangeNotifier {
   Future<void> _exitStep(String name, Future<void> Function() action) async {
     _exitLog('begin $name');
     try {
-      await action().timeout(const Duration(seconds: 10));
+      // A timeout does not cancel native work. Keep its original future so a
+      // retry never starts a second release while the first is still pending.
+      final pending = _pendingExitSteps.putIfAbsent(
+        name,
+        () => Future<void>.sync(action).whenComplete(() {
+          _pendingExitSteps.remove(name);
+        }),
+      );
+      await pending.timeout(const Duration(seconds: 10));
       _exitLog('done  $name');
     } on TimeoutException {
       _exitLog('TIMEOUT $name');
       rethrow;
     } catch (error) {
-      _exitLog('fail  $name: $error');
+      _exitLog('fail  $name (${error.runtimeType})');
       rethrow;
     }
   }
@@ -144,10 +187,11 @@ class DesktopLifecycle extends ChangeNotifier {
     try {
       final temp = Platform.environment['TEMP'] ?? Platform.environment['TMP'];
       if (temp == null) return;
-      File('$temp${Platform.pathSeparator}share_hub_exit.log').writeAsStringSync(
-        '${DateTime.now().toIso8601String()} $message\n',
-        mode: FileMode.append,
-      );
+      File('$temp${Platform.pathSeparator}share_hub_exit.log')
+          .writeAsStringSync(
+            '${DateTime.now().toIso8601String()} $message\n',
+            mode: FileMode.append,
+          );
     } catch (_) {
       /* Logging must never break the quit path. */
     }

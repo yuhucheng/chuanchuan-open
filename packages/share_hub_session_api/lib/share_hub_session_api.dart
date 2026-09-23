@@ -255,21 +255,29 @@ final class GrantEndpoint {
   final _cipher = AesGcm.with256bits();
 
   Future<void> _check(int epoch, GrantPhase expected) async {
+    void requireEpoch() {
+      if (_epoch != epoch || _phase != expected || _root == null) {
+        throw const SessionFailure('stale_or_revoked');
+      }
+    }
+
+    requireEpoch();
     int now;
     try {
       now = await clock();
     } catch (_) {
+      // An abandoned transport's late clock failure cannot revoke a freshly
+      // authenticated generation. The current owner audits the same deadline.
+      requireEpoch();
       revoke();
       rethrow;
     }
+    requireEpoch();
     if (now < _lastMicros || now >= expiresMicros) {
       revoke();
       throw const SessionFailure('expired_or_clock_rollback');
     }
     _lastMicros = now;
-    if (_epoch != epoch || _phase != expected || _root == null) {
-      throw const SessionFailure('stale_or_revoked');
-    }
   }
 
   void _invalidate(GrantPhase next) {

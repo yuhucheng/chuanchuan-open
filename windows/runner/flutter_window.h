@@ -12,6 +12,7 @@
 #include <shellapi.h>
 
 #include "win32_window.h"
+#include "tray_icon_policy.h"
 
 namespace share_hub { class PlatformBridge; }
 
@@ -42,6 +43,9 @@ class FlutterWindow : public Win32Window {
 
  private:
   void InstallTray();
+  void RemoveTray();
+  void RefreshTrayIcon();
+  bool UpdateTrayIcon(bool installing);
   void ShowMainWindow();
   void RequestQuit();
   void TrayMenu();
@@ -52,6 +56,11 @@ class FlutterWindow : public Win32Window {
   flutter::EncodableValue WindowState();
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> desktop_;
   NOTIFYICONDATAW tray_{};
+  // LoadImage without LR_SHARED gives this window ownership of the handle.
+  HICON tray_icon_ = nullptr;
+  int tray_icon_resource_ = 0, tray_icon_width_ = 0, tray_icon_height_ = 0;
+  share_hub::TrayIconUpdateGate tray_updates_;
+  bool tray_requested_ = false;
   bool desktop_ready_ = false, tray_installed_ = false, quit_pending_ = false;
   bool allow_connections_ = false, connection_supported_ = false;
   bool exit_approved_ = false;

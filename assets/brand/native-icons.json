@@ -1,0 +1,23 @@
+{
+  "renderer": "rsvg-convert version 2.60.0",
+  "sources": {
+    "assets/brand/appicon-light.svg": "878f34ccf987bc51d59efa2b79b2f3fcd695e5e809a3105f8108408157ca66bb",
+    "assets/brand/logo-mono-ink.svg": "ff6605bf0d4d8458961fab4ec409d3b1febe42fb5c8f439e1bf82a028aaf371c",
+    "assets/brand/logo-mono-white.svg": "02c5e3ff717fa40dc05a0a81fbf838e56a07b7b23ad3bff534777affed73fa99"
+  },
+  "outputs": {
+    "macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_16.png": "161ea817ecb17b32e3bfe7e1ef7f891c35d506ebae755364b1548149dd94e2af",
+    "macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_32.png": "cf4473679b34ce0db2f4ad27bb6f70d7436b35da9fd51ab711ea8438c14c470e",
+    "macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_64.png": "adb6658d38abe95827a26fe2cece35f54209b67b15f9777cebe2e1b1bfba225c",
+    "macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_128.png": "6d2b2251ed120331112d1795e9c86a7d8703ff5be94dc6e51c59a3e1248c403b",
+    "macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_256.png": "e680c42b50c5bdf46d9f920dbffa205732a58f2df9540b17eef16c978afd9130",
+    "macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png": "848eae81a463c5559a523be12f6f5fe8244b765aaa25e4d72c1aa817ad79a1a5",
+    "macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_1024.png": "5db9f7c1f5a93a1d5578637df0318908616cf9623dc3735cedd9824f7a3c640f",
+    "windows/runner/resources/app_icon.ico": "23872e52c3483d834539c301bf945c27a2e3128632a99d9dbe2f08813af4d06d",
+    "windows/runner/resources/tray_ink.ico": "e436c571096dab5d3348b684a1aa6d392e6c9ca87c52bf79ce29cb1314a8811a",
+    "macos/Runner/Assets.xcassets/TrayIcon.imageset/tray_icon_16.png": "d24c107302a62847172139261504fe547e4e82ab4cc186afe3cb6e4e41b57ac3",
+    "macos/Runner/Assets.xcassets/TrayIcon.imageset/tray_icon_32.png": "0bff179151529d7a538f883f5234ef68842bc37eae524ce3d3981311000b8492",
+    "macos/Runner/Assets.xcassets/TrayIcon.imageset/Contents.json": "6e507e62f4bd91f6e3ac2ed792ffe56ee3e607967140d8b24d72c273961bad86",
+    "windows/runner/resources/tray_white.ico": "9f8ebcd68c96499e80d996f160ae236f4254f718866c85d45985f87b5d731d74"
+  }
+}

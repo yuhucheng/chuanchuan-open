@@ -24,6 +24,50 @@ class LegacyEngine implements PreviewEngine {
 }
 
 void main() {
+  test('optional sanitized statistics preserve unknown and measured zero', () {
+    MediaSessionEvent sample({
+      MediaTransportPath? path,
+      Duration? rtt,
+      int? rate,
+      int? width,
+      int? height,
+    }) => MediaSessionEvent(
+      grantId: 'grant',
+      sessionId: 'session',
+      transportGeneration: 1,
+      kind: MediaEventKind.statistics,
+      transportPath: path,
+      roundTripTime: rtt,
+      bitsPerSecond: rate,
+      frameWidth: width,
+      frameHeight: height,
+    );
+    expect(sample().transportPath, isNull);
+    expect(sample().roundTripTime, isNull);
+    expect(sample().bitsPerSecond, isNull);
+    expect(sample().frameWidth, isNull);
+    expect(sample().frameHeight, isNull);
+    final frame = sample(width: 640, height: 360);
+    expect(frame.frameWidth, 640);
+    expect(frame.frameHeight, 360);
+    expect(() => sample(width: 640), throwsArgumentError);
+    expect(() => sample(height: 360), throwsArgumentError);
+    expect(() => sample(width: 0, height: 360), throwsArgumentError);
+    expect(() => sample(width: 640, height: 65536), throwsArgumentError);
+    final measured = sample(
+      path: MediaTransportPath.direct,
+      rtt: Duration.zero,
+      rate: 0,
+    );
+    expect(measured.transportPath, MediaTransportPath.direct);
+    expect(measured.roundTripTime, Duration.zero);
+    expect(measured.bitsPerSecond, 0);
+    expect(() => sample(rate: -1), throwsArgumentError);
+    expect(
+      () => sample(rtt: const Duration(microseconds: -1)),
+      throwsArgumentError,
+    );
+  });
   late GrantEndpoint a, b;
   Future<int> Function()? clockRead;
   final caps = MediaCapabilities(

@@ -1,0 +1,191 @@
+{
+  "schema": "sharehub-sdk-package-draft-1",
+  "exampleOnly": true,
+  "sdkVersion": "0.1.0-layout-example.1",
+  "productTarget": "0.1.0",
+  "channel": "internal-candidate",
+  "target": {
+    "os": "windows",
+    "architectures": [
+      "x86_64"
+    ],
+    "minimumOs": null,
+    "runtimeDependencies": [],
+    "runtimeInspectionComplete": false
+  },
+  "apiCompatibility": [
+    {
+      "package": "share_hub_media_api",
+      "minInclusive": "0.7.0",
+      "maxExclusive": "0.8.0",
+      "testedVersions": []
+    },
+    {
+      "package": "share_hub_session_api",
+      "minInclusive": "0.1.0",
+      "maxExclusive": "0.2.0",
+      "testedVersions": []
+    }
+  ],
+  "nativeAbi": {
+    "family": "sharehub-media-c",
+    "stability": "draft",
+    "draftRevision": 2,
+    "requiredFeatures": []
+  },
+  "capabilities": [],
+  "signing": {
+    "status": "unverified",
+    "reportPath": null
+  },
+  "licenseFiles": [
+    "licenses/LICENSE.sdk.txt",
+    "licenses/THIRD_PARTY_NOTICES.txt"
+  ],
+  "validationFile": "metadata/validation.json",
+  "inventoryComplete": false,
+  "artifactId": "flutter-windows-x64-example",
+  "kind": "flutter",
+  "nativePayload": {
+    "artifactId": "native-windows-x64-example",
+    "directory": "native/windows-x64",
+    "manifestSha256": null
+  },
+  "publicSnapshots": [
+    {
+      "package": "share_hub_media_api",
+      "version": "0.7.0",
+      "directory": "public_api/share_hub_media_api",
+      "publicRevision": null,
+      "sourceDigest": null
+    },
+    {
+      "package": "share_hub_session_api",
+      "version": "0.1.0",
+      "directory": "public_api/share_hub_session_api",
+      "publicRevision": null,
+      "sourceDigest": null
+    }
+  ],
+  "files": [
+    {
+      "type": "file",
+      "path": "lib/share_hub_media_sdk.dart",
+      "role": "public-bridge",
+      "sizeBytes": null,
+      "sha256": null
+    },
+    {
+      "type": "file",
+      "path": "licenses/LICENSE.sdk.txt",
+      "role": "license",
+      "sizeBytes": null,
+      "sha256": null
+    },
+    {
+      "type": "file",
+      "path": "licenses/THIRD_PARTY_NOTICES.txt",
+      "role": "license",
+      "sizeBytes": null,
+      "sha256": null
+    },
+    {
+      "type": "file",
+      "path": "metadata/validation.json",
+      "role": "validation-metadata",
+      "sizeBytes": null,
+      "sha256": null
+    },
+    {
+      "type": "file",
+      "path": "native/windows-x64/bin/libwebrtc.dll",
+      "role": "upstream-binary",
+      "sizeBytes": null,
+      "sha256": null
+    },
+    {
+      "type": "file",
+      "path": "native/windows-x64/bin/sharehub_media.dll",
+      "role": "private-core-binary",
+      "sizeBytes": null,
+      "sha256": null
+    },
+    {
+      "type": "file",
+      "path": "native/windows-x64/include/share_hub_media.h",
+      "role": "public-header",
+      "sizeBytes": null,
+      "sha256": null
+    },
+    {
+      "type": "file",
+      "path": "native/windows-x64/lib/sharehub_media.lib",
+      "role": "import-library",
+      "sizeBytes": null,
+      "sha256": null
+    },
+    {
+      "type": "file",
+      "path": "native/windows-x64/licenses/LICENSE.sdk.txt",
+      "role": "license",
+      "sizeBytes": null,
+      "sha256": null
+    },
+    {
+      "type": "file",
+      "path": "native/windows-x64/licenses/THIRD_PARTY_NOTICES.txt",
+      "role": "license",
+      "sizeBytes": null,
+      "sha256": null
+    },
+    {
+      "type": "file",
+      "path": "native/windows-x64/metadata/build.json",
+      "role": "build-metadata",
+      "sizeBytes": null,
+      "sha256": null
+    },
+    {
+      "type": "file",
+      "path": "native/windows-x64/metadata/validation.json",
+      "role": "validation-metadata",
+      "sizeBytes": null,
+      "sha256": null
+    },
+    {
+      "type": "file",
+      "path": "native/windows-x64/sdk-manifest.json",
+      "role": "nested-manifest",
+      "sizeBytes": null,
+      "sha256": null
+    },
+    {
+      "type": "file",
+      "path": "public_api/share_hub_media_api/pubspec.yaml",
+      "role": "public-contract",
+      "sizeBytes": null,
+      "sha256": null
+    },
+    {
+      "type": "file",
+      "path": "public_api/share_hub_session_api/pubspec.yaml",
+      "role": "public-contract",
+      "sizeBytes": null,
+      "sha256": null
+    },
+    {
+      "type": "file",
+      "path": "pubspec.yaml",
+      "role": "bridge-metadata",
+      "sizeBytes": null,
+      "sha256": null
+    },
+    {
+      "type": "file",
+      "path": "windows/CMakeLists.txt",
+      "role": "public-bridge",
+      "sizeBytes": null,
+      "sha256": null
+    }
+  ]
+}

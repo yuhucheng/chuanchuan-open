@@ -33,6 +33,7 @@ Future<void> main() async {
     devices: DeviceController(platform),
     connections: ConnectionController(MethodChannelConnectionPlatform()),
     preview: preview,
+    stopRemote: () async {}, // This probe creates no remote media owner.
     transfers: transfers,
     connectionSupported: true,
   );

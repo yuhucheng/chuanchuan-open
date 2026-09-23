@@ -5,6 +5,8 @@ import 'package:flutter/services.dart';
 import 'package:share_hub_connection/share_hub_connection.dart';
 import 'package:share_hub_media_api/share_hub_media_api.dart';
 
+import 'connection_recovery.dart';
+
 /// Identity, a continuous clock and the discovery advertisement come from the
 /// platform channel. macOS and Windows implement the same channel, so this is
 /// not a per-platform implementation in the product sense.
@@ -50,8 +52,26 @@ class ConnectionNotice {
 }
 
 class ConnectionController extends ChangeNotifier {
-  ConnectionController(this.platform);
+  ConnectionController(
+    this.platform, {
+    this.recoveryWindow = const Duration(seconds: 30),
+    this.recoveryBackoff = const [
+      Duration(seconds: 1),
+      Duration(seconds: 2),
+      Duration(seconds: 4),
+    ],
+    this.recoveryAttemptTimeout = const Duration(seconds: 5),
+  });
   final ConnectionPlatform platform;
+  final Duration recoveryWindow, recoveryAttemptTimeout;
+  final List<Duration> recoveryBackoff;
+  final _recoveries = <GrantEndpoint, ConnectionRecovery>{};
+  final _routes = <GrantEndpoint, RecoveryRoute>{};
+  final _pendingRecoveries = <Future<void>>{};
+  final _transportClosures = <Future<void>>{};
+  int get recoveringCount => _recoveries.length;
+  List<TrustedConnection> get recoveringConnections =>
+      _recoveries.values.map((r) => r.previous).toList(growable: false);
 
   /// Process-local authority shared with SDK resource owners. Only completed
   /// authenticated connections may register grants; never restore from storage.
@@ -62,8 +82,13 @@ class ConnectionController extends ChangeNotifier {
   Timer? _timer;
   bool _disposed = false;
   bool _disconnecting = false;
+  bool _shutdownRequested = false;
+  final _pendingStarts = <Future<dynamic>>{};
+  Future<void>? _shutdownPending;
   int _generation = 0;
   bool busy = false;
+  bool _connecting = false;
+  bool get connecting => _connecting;
   String? code;
   String? address;
   ConnectionNotice? _notice;
@@ -96,9 +121,25 @@ class ConnectionController extends ChangeNotifier {
   Future<DeviceIdentity> _loadIdentity() async =>
       _identity ??= await platform.identity();
 
-  Future<void> open() async {
-    if (busy || _disposed || _disconnecting) return;
-    if (_sessions.length >= 8) {
+  Future<void> open() =>
+      _shutdownRequested ? Future<void>.value() : _startTracked<void>(_open);
+
+  Future<T> _startTracked<T>(Future<T> Function() action) {
+    final completion = Completer<T>();
+    // Register before the action can notify listeners: a listener may request
+    // process shutdown synchronously from its first busy notification.
+    _pendingStarts.add(completion.future);
+    completion.complete(
+      Future<T>.sync(action).whenComplete(() {
+        _pendingStarts.remove(completion.future);
+      }),
+    );
+    return completion.future;
+  }
+
+  Future<void> _open() async {
+    if (busy || _disposed || _disconnecting || _shutdownRequested) return;
+    if (_sessions.length + _recoveries.length >= 8) {
       _notice = const ConnectionNotice.problem('连接数量已达上限，请先断开一个连接。');
       _emit();
       return;
@@ -112,38 +153,53 @@ class ConnectionController extends ChangeNotifier {
     PairingHost? opening;
     try {
       final identity = await _loadIdentity();
-      if (_disposed || generation != _generation) return;
-      await _host?.stopAccepting();
-      if (_disposed || generation != _generation) return;
+      if (_disposed || _shutdownRequested || generation != _generation) return;
       await _clearAdvertisement();
-      if (_disposed || generation != _generation) return;
-      final host = opening = PairingHost(
-        identity: identity,
-        clock: platform.now,
-        protocolVersion: 2,
-        onConnection: (connection) {
-          if (_disposed || _disconnecting || !accepting) {
-            connection.close();
-            return;
-          }
-          if (!_track(connection)) return;
-          code = null;
-          _notice = const ConnectionNotice.status(
-            '连接已建立，短接码已消费。授权有效 8 小时，可随时断开。',
-          );
-          unawaited(_clearAdvertisement());
-          _emit();
-        },
-      );
+      if (_disposed || _shutdownRequested || generation != _generation) return;
+      final existing = _host;
+      final host = opening = existing?.port != null
+          ? existing!
+          : PairingHost(
+              identity: identity,
+              clock: platform.now,
+              protocolVersion: 2,
+              enableRecovery: true,
+              onConnection: (connection) {
+                if (_disposed ||
+                    _disconnecting ||
+                    _shutdownRequested ||
+                    !accepting) {
+                  _close(connection, 'admission_rejected');
+                  return;
+                }
+                if (connection.grant!.generation > 1) {
+                  unawaited(
+                    _startTracked<void>(() => _acceptRecovered(connection)),
+                  );
+                  return;
+                }
+                if (!_track(connection)) return;
+                code = null;
+                _notice = const ConnectionNotice.status(
+                  '连接已建立，短接码已消费。授权有效 8 小时，可随时断开。',
+                );
+                unawaited(_clearAdvertisement());
+                _emit();
+              },
+            );
       _host = host;
-      await host.open();
-      if (_disposed || generation != _generation) {
+      if (host.port != null) {
+        await host.refreshOffer();
+      } else {
+        await host.open();
+      }
+      if (_disposed || _shutdownRequested || generation != _generation) {
         await host.stopAccepting();
         if (identical(_host, host)) await _clearAdvertisement();
         return;
       }
       final hostname = await platform.advertise(host.port, identity.encodedKey);
-      if (_disposed || generation != _generation) {
+      if (_disposed || _shutdownRequested || generation != _generation) {
         await host.stopAccepting();
         if (identical(_host, host)) await _clearAdvertisement();
         return;
@@ -168,12 +224,14 @@ class ConnectionController extends ChangeNotifier {
 
   bool _ticking = false;
   Future<void> _tick() async {
-    if (_disposed || _ticking) return;
+    if (_disposed || _shutdownRequested || _ticking) return;
     _ticking = true;
     try {
       final offer = _host?.offer;
       final now = await platform.now();
-      if (_disposed || !identical(offer, _host?.offer)) return;
+      if (_disposed || _shutdownRequested || !identical(offer, _host?.offer)) {
+        return;
+      }
       if (code != null && (offer == null || !offer.reservable(now))) {
         code = null;
         _notice = const ConnectionNotice.problem('短接码已失效或尝试次数已用完，请重新生成。');
@@ -181,8 +239,9 @@ class ConnectionController extends ChangeNotifier {
       }
       _emit();
     } catch (_) {
+      _cancelRecoveries();
       for (final session in _sessions.toList()) {
-        session.close('clock_unavailable');
+        _close(session, 'clock_unavailable');
       }
       await stopAccepting();
     } finally {
@@ -201,6 +260,7 @@ class ConnectionController extends ChangeNotifier {
   Future<void> stopAccepting() async {
     final generation = ++_generation;
     busy = false;
+    _connecting = false;
     _attempt?.cancel();
     _attempt = null;
     code = null;
@@ -214,16 +274,48 @@ class ConnectionController extends ChangeNotifier {
   Future<void> disconnectAll() async {
     _disconnecting = true;
     grants.revokeAll();
+    _cancelRecoveries();
     _timer?.cancel();
     _timer = null;
     for (final session in _sessions.toList()) {
-      session.close('revoked');
+      _close(session, 'revoked');
     }
     try {
       await stopAccepting();
+      await Future.wait(_transportClosures.toList());
     } finally {
       _disconnecting = false;
     }
+  }
+
+  /// Permanently closes admission for this process before awaiting cleanup.
+  /// Unlike the reversible allow-connections switch, an exit retry must never
+  /// create new grants while its original media release is still pending.
+  Future<void> shutdown() {
+    _shutdownRequested = true;
+    final pending = _shutdownPending;
+    if (pending != null) return pending;
+    final completion = Completer<void>();
+    _shutdownPending = completion.future;
+    final disconnect = Future<void>.sync(disconnectAll);
+    // Cancellation can finish before a pending bind/connect returns its socket.
+    // Await those owners too, so their late resources are closed before exit.
+    completion.complete(
+      Future.wait<dynamic>([
+            disconnect,
+            ..._pendingStarts,
+            ..._pendingRecoveries,
+          ])
+          .then<void>((_) async {
+            while (_transportClosures.isNotEmpty) {
+              await Future.wait(_transportClosures.toList());
+            }
+          })
+          .whenComplete(() {
+            _shutdownPending = null;
+          }),
+    );
+    return completion.future;
   }
 
   Future<TrustedConnection?> connect(
@@ -231,24 +323,40 @@ class ConnectionController extends ChangeNotifier {
     int port,
     String shortCode, {
     String? expectedPeerKey,
+  }) => _shutdownRequested
+      ? Future<TrustedConnection?>.value()
+      : _startTracked<TrustedConnection?>(
+          () =>
+              _connect(host, port, shortCode, expectedPeerKey: expectedPeerKey),
+        );
+
+  Future<TrustedConnection?> _connect(
+    String host,
+    int port,
+    String shortCode, {
+    String? expectedPeerKey,
   }) async {
-    if (busy || _disposed || _disconnecting) return null;
-    if (_sessions.length >= 8) {
+    if (busy || _disposed || _disconnecting || _shutdownRequested) return null;
+    if (_sessions.length + _recoveries.length >= 8) {
       _notice = const ConnectionNotice.problem('连接数量已达上限，请先断开一个连接。');
       _emit();
       return null;
     }
     final generation = ++_generation;
     busy = true;
+    _connecting = true;
     _notice = const ConnectionNotice.status('正在验证短接码和对端身份…');
     _emit();
     try {
       final identity = await _loadIdentity();
-      if (_disposed || generation != _generation) return null;
+      if (_disposed || _shutdownRequested || generation != _generation) {
+        return null;
+      }
       final attempt = _attempt = PairingAttempt(
         identity: identity,
         clock: platform.now,
         protocolVersion: 2,
+        enableRecovery: true,
       );
       final connection = await attempt.connect(
         host,
@@ -256,12 +364,16 @@ class ConnectionController extends ChangeNotifier {
         shortCode,
         expectedPeerKey: expectedPeerKey,
       );
-      if (_disposed || generation != _generation) {
-        connection.close('cancelled');
+      if (_disposed || _shutdownRequested || generation != _generation) {
+        _close(connection, 'cancelled');
         return null;
       }
       _attempt = null;
-      if (!_track(connection)) return null;
+      _routes[connection.grant!] = (host: host, port: port);
+      if (!_track(connection)) {
+        _routes.remove(connection.grant);
+        return null;
+      }
       _notice = const ConnectionNotice.status('身份验证通过，已建立本地直连。授权有效 8 小时。');
       return connection;
     } catch (error) {
@@ -277,6 +389,7 @@ class ConnectionController extends ChangeNotifier {
     } finally {
       if (generation == _generation) {
         busy = false;
+        _connecting = false;
         _attempt = null;
       }
       _emit();
@@ -289,24 +402,57 @@ class ConnectionController extends ChangeNotifier {
     _attempt?.cancel();
     _attempt = null;
     busy = false;
+    _connecting = false;
     _notice = const ConnectionNotice.status('已取消连接。');
     _emit();
   }
 
+  void _observeClosure(TrustedConnection connection) {
+    final closure = connection.whenTransportClosed;
+    if (_transportClosures.add(closure)) {
+      unawaited(closure.whenComplete(() => _transportClosures.remove(closure)));
+    }
+  }
+
+  void _close(TrustedConnection connection, String reason) {
+    connection.close(reason);
+    _observeClosure(connection);
+  }
+
   bool _track(TrustedConnection connection) {
+    if (_disposed || _disconnecting || _shutdownRequested) {
+      _close(connection, 'admission_rejected');
+      return false;
+    }
     final grant = connection.grant;
-    if (connection.isClosed || grant == null || _sessions.length >= 8) {
-      connection.close('admission_rejected');
+    final replacing = _recoveries.containsKey(grant);
+    if (connection.isClosed ||
+        grant == null ||
+        grant.phase != GrantPhase.active ||
+        _sessions.length + _recoveries.length - (replacing ? 1 : 0) >= 8) {
+      _close(connection, 'admission_rejected');
       _notice = const ConnectionNotice.problem('连接未接入：授权不可用或连接数量已达上限。');
       _emit();
       return false;
     }
     grants.register(grant);
+    _recoveries.remove(grant)?.cancel(revoke: false);
     _sessions.add(connection);
     unawaited(
       connection.whenClosed.then((reason) {
-        grants.revoke(grant);
+        _observeClosure(connection);
         _sessions.remove(connection);
+        if (reason == 'transport_suspended' &&
+            connection.canRecover &&
+            (grant.role == GrantRole.initiator || accepting) &&
+            !_disposed &&
+            !_disconnecting &&
+            !_shutdownRequested) {
+          _beginRecovery(connection);
+          return;
+        }
+        grants.revoke(grant);
+        _routes.remove(grant);
         if (!_disposed) {
           _notice = reason == 'revoked' || reason == 'cancelled'
               ? const ConnectionNotice.status('连接已断开；再次连接需输入有效短接码。')
@@ -323,15 +469,129 @@ class ConnectionController extends ChangeNotifier {
     return true;
   }
 
+  Future<void> _verifyRecoveryIdentity() async {
+    final identity = await platform.identity();
+    if (_disposed ||
+        _disconnecting ||
+        _shutdownRequested ||
+        identity.encodedKey != _identity?.encodedKey) {
+      throw const ConnectionFailure('identity_mismatch');
+    }
+  }
+
+  Future<void> _acceptRecovered(TrustedConnection connection) async {
+    // Host authentication has already produced a socket, but platform identity
+    // validation can still be pending. Revocation must close this candidate now,
+    // not only after that platform Future eventually returns.
+    final invalidation = connection.grant!.invalidated.listen((_) {
+      if (connection.grant!.phase == GrantPhase.revoked) {
+        _close(connection, 'revoked');
+      }
+    });
+    try {
+      final owner = _recoveries[connection.grant];
+      if (owner == null || owner.cancelled) {
+        throw const ConnectionFailure('recovery_unavailable');
+      }
+      await _verifyRecoveryIdentity();
+      await owner.checkCurrent();
+      if (!identical(_recoveries[connection.grant], owner) ||
+          owner.cancelled ||
+          !accepting) {
+        throw const ConnectionFailure('cancelled');
+      }
+      if (_track(connection)) {
+        _notice = const ConnectionNotice.status('连接已认证恢复，原授权截止时间不变。');
+        _emit();
+      }
+    } catch (_) {
+      _close(connection, 'recovery_rejected');
+    } finally {
+      await invalidation.cancel();
+      if (connection.isClosed) await connection.whenTransportClosed;
+    }
+  }
+
+  void _beginRecovery(TrustedConnection previous) {
+    final grant = previous.grant!;
+    late ConnectionRecovery recovery;
+    recovery = ConnectionRecovery(
+      previous: previous,
+      route: grant.role == GrantRole.initiator ? _routes[grant] : null,
+      clock: platform.now,
+      verifyIdentity: _verifyRecoveryIdentity,
+      window: recoveryWindow,
+      backoff: recoveryBackoff,
+      attemptTimeout: recoveryAttemptTimeout,
+      onRecovered: (connection) {
+        if (!identical(_recoveries[grant], recovery) || recovery.cancelled) {
+          return false;
+        }
+        final accepted = _track(connection);
+        if (accepted) {
+          _notice = const ConnectionNotice.status('连接已认证恢复，原授权截止时间不变。');
+          _emit();
+        }
+        return accepted;
+      },
+      onFailed: () {
+        if (!identical(_recoveries[grant], recovery)) return;
+        _recoveries.remove(grant);
+        _routes.remove(grant);
+        grants.revoke(grant);
+        if (!_disposed && !_disconnecting && !_shutdownRequested) {
+          _notice = const ConnectionNotice.problem('连接恢复未完成，请重新输入短接码连接。');
+          _emit();
+        }
+      },
+    );
+    _recoveries[grant] = recovery;
+    final completion = Completer<void>();
+    _pendingRecoveries.add(completion.future);
+    completion.complete(
+      recovery.run().whenComplete(
+        () => _pendingRecoveries.remove(completion.future),
+      ),
+    );
+    _notice = const ConnectionNotice.status('连接暂时中断，正在核验原授权并恢复…');
+    _emit();
+  }
+
+  void cancelRecovery(TrustedConnection previous) {
+    final grant = previous.grant;
+    if (grant == null) return;
+    final recovery = _recoveries.remove(grant);
+    recovery?.cancel();
+    _routes.remove(grant);
+    grants.revoke(grant);
+    for (final connection
+        in _sessions.where((s) => identical(s.grant, grant)).toList()) {
+      _close(connection, 'cancelled');
+    }
+    _notice = const ConnectionNotice.status('已取消恢复；再次连接需输入有效短接码。');
+    _emit();
+  }
+
+  void _cancelRecoveries() {
+    final pending = _recoveries.values.toList();
+    _recoveries.clear();
+    for (final recovery in pending) {
+      _routes.remove(recovery.previous.grant);
+      recovery.cancel();
+      grants.revoke(recovery.previous.grant!);
+    }
+  }
+
   @override
   void dispose() {
     _disposed = true;
     _generation++;
     _attempt?.cancel();
     _timer?.cancel();
+    _cancelRecoveries();
     grants.revokeAll();
     for (final session in _sessions.toList()) {
-      session.close();
+      _close(session, 'revoked');
     }
     unawaited(_host?.close() ?? Future.value());
     unawaited(_clearAdvertisement());

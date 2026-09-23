@@ -59,10 +59,7 @@ Future<Map<String, dynamic>> _windowAction(String action) async {
   }
 }
 
-Future<Map<String, dynamic>> _stage(
-  String stage,
-  Duration settle,
-) async {
+Future<Map<String, dynamic>> _stage(String stage, Duration settle) async {
   await Future<void>.delayed(settle);
   return <String, dynamic>{
     'stage': stage,
@@ -80,7 +77,7 @@ Future<void> main() async {
     'capturedFramesMeasured': false,
     'framesNotMeasuredReason':
         'Windows has no counterpart to the mac-only preview bridge that serves '
-            'runtime capture statistics.',
+        'runtime capture statistics.',
   };
   final stages = <Map<String, dynamic>>[];
   DesktopLifecycle? desktop;
@@ -93,6 +90,7 @@ Future<void> main() async {
       devices: DeviceController(platform),
       connections: ConnectionController(MethodChannelConnectionPlatform()),
       preview: preview,
+      stopRemote: () async {}, // This probe creates no remote media owner.
       transfers: transfers,
       connectionSupported: true,
     );
@@ -143,15 +141,13 @@ Future<void> main() async {
       'transfersRemaining': transfers.items.length,
     };
     report['outcome'] = 'complete';
-    File(_reportPath).writeAsStringSync(
-      const JsonEncoder.withIndent('  ').convert(report),
-    );
+    File(_reportPath)
+        .writeAsStringSync(const JsonEncoder.withIndent('  ').convert(report));
     if (allowed) await desktop.finishExit();
   } catch (error) {
     report['error'] = error.toString();
     report['stages'] = stages;
-    File(_reportPath).writeAsStringSync(
-      const JsonEncoder.withIndent('  ').convert(report),
-    );
+    File(_reportPath)
+        .writeAsStringSync(const JsonEncoder.withIndent('  ').convert(report));
   }
 }

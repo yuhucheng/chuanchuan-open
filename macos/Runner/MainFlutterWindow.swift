@@ -198,8 +198,12 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
 
   private func installStatusItem() {
     guard statusItem == nil else { return }
+    guard let image = NSImage(named: NSImage.Name("TrayIcon")) else { return }
+    image.isTemplate = true
+    image.size = NSSize(width: 16, height: 16)
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-    item.button?.image = NSImage(systemSymbolName: "display.2", accessibilityDescription: "串串")
+    item.button?.image = image
+    item.button?.setAccessibilityLabel("串串")
     item.button?.toolTip = "串串 · 后台连接与会话"
     let menu = NSMenu()
     func entry(_ title: String, _ action: Selector) -> NSMenuItem {

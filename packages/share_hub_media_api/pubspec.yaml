@@ -1,6 +1,6 @@
 name: share_hub_media_api
 description: Public media contracts for Share Hub client and SDK implementations.
-version: 0.3.0
+version: 0.8.0
 publish_to: none
 environment:
   sdk: '>=3.13.2 <4.0.0'

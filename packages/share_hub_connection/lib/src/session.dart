@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:crypto/crypto.dart' as hashes;
 import 'package:cryptography/cryptography.dart';
@@ -32,10 +33,19 @@ class SessionLease {
 }
 
 class CipherChannel {
-  CipherChannel._(this.wire, this._sendKey, this._receiveKey, this.sessionId);
+  CipherChannel._(
+    this.wire,
+    this._sendKey,
+    this._receiveKey,
+    this.sessionId, {
+    SecretKey? baseSendKey,
+    SecretKey? baseReceiveKey,
+  }) : _baseSendKey = baseSendKey ?? _sendKey,
+       _baseReceiveKey = baseReceiveKey ?? _receiveKey;
   final WireChannel wire;
   final SecretKey _sendKey;
   final SecretKey _receiveKey;
+  final SecretKey _baseSendKey, _baseReceiveKey;
   final String sessionId;
   int _sent = 0;
   int _received = 0;
@@ -68,6 +78,51 @@ class CipherChannel {
       host ? toClient : toHost,
       host ? toHost : toClient,
       encodeBytes(digest),
+    );
+  }
+
+  /// The PAKE-established directional keys are retained only in this process.
+  /// Derive from that stable base, not the last attempt: a lost final ack must
+  /// not leave the peers on incompatible key chains. Grant proofs authorize
+  /// this path; fresh challenges/generation separate every transport's keys.
+  Future<CipherChannel> _recover(
+    WireChannel wire,
+    GrantEndpoint endpoint,
+    ResumeResponse response,
+  ) async {
+    await endpoint.checkValidity();
+    if (endpoint.phase != GrantPhase.active) {
+      throw const ConnectionFailure('recovery_unavailable');
+    }
+    final transcript = utf8.encode(
+      jsonEncode([
+        'chuanchuan.connection.resume.v1',
+        endpoint.binding.encodedId,
+        response.hello.generation,
+        encodeBytes(response.hello.challenge),
+        encodeBytes(response.challenge),
+      ]),
+    );
+    final hkdf = Hkdf(hmac: Hmac.sha256(), outputLength: 32);
+    Future<SecretKey> derive(SecretKey base) => hkdf.deriveKey(
+      secretKey: base,
+      nonce: transcript,
+      info: utf8.encode('chuanchuan.connection.resume.v1'),
+    );
+    final send = await derive(_baseSendKey),
+        receive = await derive(_baseReceiveKey);
+    await endpoint.checkValidity();
+    if (endpoint.phase != GrantPhase.active ||
+        endpoint.generation != response.hello.generation) {
+      throw const ConnectionFailure('recovery_unavailable');
+    }
+    return CipherChannel._(
+      wire,
+      send,
+      receive,
+      encodeBytes(hashes.sha256.convert(transcript).bytes),
+      baseSendKey: _baseSendKey,
+      baseReceiveKey: _baseReceiveKey,
     );
   }
 
@@ -158,10 +213,24 @@ class TrustedConnection implements SessionTransport {
     this.lease,
     this._clock, {
     this.grant,
+    this.enableRecovery = false,
   });
 
   /// Opt-in v2 contract material. No remote media capabilities are implied.
   final GrantEndpoint? grant;
+
+  /// Transport-level opt-in; callers must retain/revoke suspended grants and
+  /// supply bounded retry policy. False preserves legacy terminal-close rules.
+  final bool enableRecovery;
+  bool _recovering = false, _replaced = false;
+  int _recoverySerial = 0;
+  bool get canRecover =>
+      enableRecovery &&
+      !_replaced &&
+      _reason == 'transport_suspended' &&
+      !lease.revoked &&
+      grant != null &&
+      grant!.phase != GrantPhase.revoked;
   final CipherChannel _channel;
   final String peerKey;
   final SessionLease lease;
@@ -178,6 +247,8 @@ class TrustedConnection implements SessionTransport {
       hashes.sha256.convert(decodeBytes(peerKey, 32)).toString();
   Future<String> get whenClosed => _closed.future;
   bool get isClosed => _reason != null;
+  Future<void>? _closingTransport;
+  Future<void> get whenTransportClosed => _closingTransport ?? Future.value();
   // No remote media/input/file implementation has been accepted yet.
   Set<String> get capabilities => const {};
 
@@ -278,7 +349,7 @@ class TrustedConnection implements SessionTransport {
       await _channel.send(packet);
     } catch (_) {
       // An inner sequence was already reserved. Never continue with a gap.
-      close('operation_transport_failed');
+      _transportLost();
       rethrow;
     }
   }
@@ -364,7 +435,7 @@ class TrustedConnection implements SessionTransport {
         () => unawaited(_armDeadline()),
       );
     } catch (_) {
-      close('clock_unavailable');
+      if (!isClosed) close('clock_unavailable');
     }
   }
 
@@ -373,7 +444,15 @@ class TrustedConnection implements SessionTransport {
     if (_checking) return false;
     _checking = true;
     try {
-      if (!lease.check(await _clock())) {
+      int now;
+      try {
+        now = await _clock();
+      } catch (_) {
+        if (!isClosed) close('clock_unavailable');
+        return false;
+      }
+      if (isClosed) return false;
+      if (!lease.check(now)) {
         close('expired');
         return false;
       }
@@ -386,8 +465,14 @@ class TrustedConnection implements SessionTransport {
         }
       }
       return !isClosed;
-    } catch (_) {
-      close('clock_or_transport_failed');
+    } catch (error) {
+      if (isClosed) return false;
+      if (error is ConnectionFailure && error.code == 'disconnected' ||
+          error is SocketException) {
+        _transportLost();
+      } else {
+        close('transport_failed');
+      }
       return false;
     } finally {
       _checking = false;
@@ -400,7 +485,21 @@ class TrustedConnection implements SessionTransport {
         final message = await _channel.next().timeout(
           const Duration(seconds: 10),
         );
-        if (!lease.check(await _clock())) {
+        int now;
+        try {
+          now = await _clock();
+        } catch (_) {
+          if (!isClosed) close('clock_unavailable');
+          return;
+        }
+        if (isClosed) return;
+        if (enableRecovery &&
+            message.length == 1 &&
+            message['type'] == 'revoked') {
+          close('peer_revoked');
+          return;
+        }
+        if (!lease.check(now)) {
           close('expired');
           return;
         }
@@ -414,20 +513,355 @@ class TrustedConnection implements SessionTransport {
           return;
         }
       }
-    } catch (_) {
-      close('disconnected');
+    } catch (error) {
+      if (isClosed) return;
+      if (error is TimeoutException ||
+          error is SocketException ||
+          error is ConnectionFailure && error.code == 'disconnected') {
+        _transportLost();
+      } else {
+        close('authentication_or_protocol_failed');
+      }
     }
   }
 
   void close([String reason = 'revoked']) {
-    if (isClosed) return;
+    if (isClosed) {
+      _timer?.cancel();
+      _deadline?.cancel();
+      if (!_replaced) {
+        grant?.revoke();
+        lease.revoke();
+      }
+      return;
+    }
     _reason = reason;
     detachReceiver();
     grant?.revoke();
     lease.revoke();
     _timer?.cancel();
     _deadline?.cancel();
-    _channel.wire.close();
+    if (enableRecovery && reason != 'peer_revoked') {
+      // Authority is already revoked. Bound the final authenticated notice and
+      // flush so the peer distinguishes an explicit close from transient loss.
+      _closingTransport = () async {
+        try {
+          await _channel
+              .send({'type': 'revoked'})
+              .timeout(const Duration(milliseconds: 500));
+          await _channel.wire.socket.flush().timeout(
+            const Duration(milliseconds: 500),
+          );
+        } catch (_) {
+        } finally {
+          _channel.wire.close();
+        }
+      }();
+    } else {
+      _channel.wire.close();
+    }
     _closed.complete(reason);
+  }
+
+  void _transportLost() {
+    if (isClosed) return;
+    if (!enableRecovery ||
+        grant == null ||
+        grant!.phase != GrantPhase.active ||
+        lease.revoked) {
+      close('disconnected');
+      return;
+    }
+    _reason = 'transport_suspended';
+    detachReceiver();
+    grant!.suspend(); // Synchronous barrier for all operation owners.
+    _timer?.cancel();
+    _deadline?.cancel();
+    _channel.wire.close();
+    _timer = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => _checkSuspended(),
+    );
+    _closed.complete(_reason!);
+  }
+
+  void _checkSuspended() {
+    if (!canRecover) {
+      _timer?.cancel();
+      return;
+    }
+    if (_checking || _recovering) return;
+    _checking = true;
+    final serial = _recoverySerial;
+    unawaited(() async {
+      try {
+        await grant!.checkValidity();
+        final now = await _clock();
+        if (serial == _recoverySerial &&
+            !_recovering &&
+            !_replaced &&
+            !lease.check(now)) {
+          close('expired');
+        }
+      } catch (_) {
+        if (serial == _recoverySerial && !_recovering && !_replaced) {
+          close('expired');
+        }
+      } finally {
+        _checking = false;
+      }
+    }());
+  }
+
+  void _reserveRecovery(GrantRole role) {
+    if (!canRecover ||
+        _recovering ||
+        grant!.phase != GrantPhase.suspended ||
+        grant!.role != role) {
+      throw const ConnectionFailure('recovery_unavailable');
+    }
+    _recovering = true;
+    _recoverySerial++;
+  }
+
+  Future<void> _checkRecovery() async {
+    if (!canRecover || !_recovering) {
+      throw const ConnectionFailure('recovery_unavailable');
+    }
+    await grant!.checkValidity();
+    if (!canRecover || !lease.check(await _clock())) {
+      close('expired');
+      throw const ConnectionFailure('recovery_unavailable');
+    }
+  }
+
+  /// Used by the authenticated host's bounded socket dispatcher. The routing
+  /// id is only a lookup hint; the grant's proof authenticates both identities.
+  Future<TrustedConnection> acceptRecovery(
+    WireChannel wire,
+    Map<String, dynamic> hello,
+    void Function() requireAdmission,
+  ) async {
+    _reserveRecovery(GrantRole.receiver);
+    void current() {
+      requireAdmission();
+      if (wire.isClosed) throw const ConnectionFailure('cancelled');
+    }
+
+    try {
+      requireAdmission();
+      await _checkRecovery();
+      if (hello.length != 5 ||
+          hello['v'] is! int ||
+          hello['v'] != 2 ||
+          hello['type'] != 'resume-hello' ||
+          hello['grant'] != grant!.binding.encodedId ||
+          hello['generation'] is! int) {
+        throw const ConnectionFailure('invalid_message');
+      }
+      final response = await grant!.answerResume(
+        ResumeHello(hello['generation'], decodeBytes(hello['challenge'], 32)),
+      );
+      requireAdmission();
+      await _checkRecovery();
+      wire.send({
+        'v': 2,
+        'type': 'resume-response',
+        'generation': response.hello.generation,
+        'challenge': encodeBytes(response.challenge),
+        'proof': encodeBytes(response.proof),
+      });
+      final finish = await wire.next();
+      if (finish.length != 3 ||
+          finish['v'] is! int ||
+          finish['v'] != 2 ||
+          finish['type'] != 'resume-finish') {
+        throw const ConnectionFailure('invalid_message');
+      }
+      requireAdmission();
+      await _checkRecovery();
+      await grant!.acceptResume(ResumeFinish(decodeBytes(finish['proof'], 32)));
+      final cipher = await _channel._recover(wire, grant!, response);
+      requireAdmission();
+      await _checkRecovery();
+      cipher.enableSessionFrames();
+      await cipher.send({
+        'type': 'resume-active',
+        'generation': grant!.generation,
+      });
+      requireAdmission();
+      await _checkRecovery();
+      current();
+      _replaced = true;
+      _timer?.cancel();
+      return TrustedConnection(
+        cipher,
+        peerKey,
+        lease,
+        _clock,
+        grant: grant,
+        enableRecovery: true,
+      );
+    } catch (_) {
+      wire.close();
+      if (canRecover) grant!.suspend();
+      rethrow;
+    } finally {
+      _recovering = false;
+    }
+  }
+}
+
+/// One cancellable socket recovery attempt. It never pairs again or renews a
+/// lease. The process owner supplies retry/backoff and revokes abandoned grants.
+class ConnectionRecoveryAttempt {
+  ConnectionRecoveryAttempt(
+    this.previous, {
+    this.timeout = const Duration(seconds: 5),
+  });
+  final TrustedConnection previous;
+  final Duration timeout;
+  WireChannel? _wire;
+  TrustedConnection? _connection;
+  bool _started = false, _cancelled = false;
+  Completer<TrustedConnection>? _completion;
+  Future<void>? _settled;
+
+  /// Platform calls cannot be cancelled. Exit/cleanup owners can await their
+  /// settlement; the caller-facing timeout does not release this reservation.
+  Future<void> get settled => _settled ?? Future.value();
+  void cancel() {
+    _abort(true);
+  }
+
+  void _abort(bool explicit) {
+    _cancelled = true;
+    final connection = _connection;
+    if (connection == null) {
+      _wire?.close();
+    } else {
+      // A completed handshake owns its final authenticated close and flush.
+      connection.close('cancelled');
+    }
+    // Explicit cancellation is terminal; a timeout is handled separately below.
+    if (explicit) {
+      previous.close('cancelled');
+    } else if (previous.canRecover) {
+      previous.grant!.suspend();
+    }
+    final completion = _completion;
+    if (completion != null && !completion.isCompleted) {
+      completion.completeError(
+        ConnectionFailure(explicit ? 'cancelled' : 'recovery_timeout'),
+      );
+    }
+  }
+
+  void _current() {
+    if (_cancelled || (_wire?.isClosed ?? false)) {
+      throw const ConnectionFailure('cancelled');
+    }
+  }
+
+  Future<TrustedConnection> connect(String address, int port) {
+    if (_started) {
+      return Future.error(StateError('An attempt cannot be reused.'));
+    }
+    final completion = _completion = Completer<TrustedConnection>();
+    final work = _connect(address, port);
+    _settled = work.then<void>(
+      (connection) {
+        if (!completion.isCompleted) completion.complete(connection);
+      },
+      onError: (Object error, StackTrace stack) {
+        if (!completion.isCompleted) completion.completeError(error, stack);
+      },
+    );
+    return completion.future;
+  }
+
+  Future<TrustedConnection> _connect(String address, int port) async {
+    if (_started) throw StateError('An attempt cannot be reused.');
+    _started = true;
+    if (port < 1 || port > 65535 || timeout <= Duration.zero) {
+      throw const ConnectionFailure('invalid_input');
+    }
+    _current();
+    previous._reserveRecovery(GrantRole.initiator);
+    final deadline = Timer(timeout, () => _abort(false));
+    try {
+      await previous._checkRecovery();
+      _current();
+      final socket = await Socket.connect(address, port, timeout: timeout);
+      final wire = _wire = WireChannel(socket);
+      _current();
+      await previous._checkRecovery();
+      final endpoint = previous.grant!;
+      final hello = await endpoint.beginResume();
+      _current();
+      await previous._checkRecovery();
+      wire.send({
+        'v': 2,
+        'type': 'resume-hello',
+        'grant': endpoint.binding.encodedId,
+        'generation': hello.generation,
+        'challenge': encodeBytes(hello.challenge),
+      });
+      final reply = await wire.next();
+      if (reply.length != 5 ||
+          reply['v'] is! int ||
+          reply['v'] != 2 ||
+          reply['type'] != 'resume-response' ||
+          reply['generation'] is! int ||
+          reply['generation'] != hello.generation) {
+        throw const ConnectionFailure('invalid_message');
+      }
+      final response = ResumeResponse(
+        hello,
+        decodeBytes(reply['challenge'], 32),
+        decodeBytes(reply['proof'], 32),
+      );
+      final finish = await endpoint.finishResume(response);
+      _current();
+      await previous._checkRecovery();
+      final cipher = await previous._channel._recover(wire, endpoint, response);
+      _current();
+      await previous._checkRecovery();
+      wire.send({
+        'v': 2,
+        'type': 'resume-finish',
+        'proof': encodeBytes(finish.proof),
+      });
+      cipher.enableSessionFrames();
+      final active = await cipher.next();
+      if (active.length != 2 ||
+          active['type'] != 'resume-active' ||
+          active['generation'] is! int ||
+          active['generation'] != hello.generation) {
+        throw const ConnectionFailure('invalid_message');
+      }
+      _current();
+      await previous._checkRecovery();
+      _current();
+      final result = _connection = TrustedConnection(
+        cipher,
+        previous.peerKey,
+        previous.lease,
+        previous._clock,
+        grant: endpoint,
+        enableRecovery: true,
+      );
+      previous._replaced = true;
+      previous._timer?.cancel();
+      result.startMonitoring();
+      return result;
+    } catch (_) {
+      _wire?.close();
+      if (previous.canRecover) previous.grant!.suspend();
+      rethrow;
+    } finally {
+      deadline.cancel();
+      previous._recovering = false;
+    }
   }
 }

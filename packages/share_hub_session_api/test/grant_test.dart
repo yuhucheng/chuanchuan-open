@@ -361,4 +361,42 @@ void main() {
     await first;
     await expectLater(b.open(frame), throwsA(isA<SessionFailure>()));
   });
+  for (final lateFailure in [false, true]) {
+    test(
+      'old epoch clock ${lateFailure ? "failure" : "rollback"} cannot revoke a recovered grant',
+      () async {
+        Completer<int>? pending;
+        a = endpoint(
+          GrantRole.initiator,
+          clock: () => pending?.future ?? Future.value(now),
+        );
+        await resume();
+        final old = await a.authorizeLocal(SessionOperation.watch, 'old', '');
+        pending = Completer<int>();
+        final check = old.check();
+        final rejected = expectLater(check, throwsA(isA<SessionFailure>()));
+        final blocked = pending;
+        pending = null;
+        a.suspend();
+        b.suspend();
+        now = 1000;
+        await resume();
+        final fresh = await a.authorizeLocal(
+          SessionOperation.watch,
+          'fresh',
+          '',
+        );
+        if (lateFailure) {
+          blocked.completeError(StateError('old clock'));
+        } else {
+          blocked.complete(100);
+        }
+        await rejected;
+        expect(a.phase, GrantPhase.active);
+        expect(a.generation, 2);
+        await fresh.check();
+        fresh.requireCurrent();
+      },
+    );
+  }
 }

@@ -186,6 +186,7 @@ void main() {
       devices: devices,
       connections: connections,
       preview: preview,
+      stopRemote: remote.shutdown,
       transfers: transfers,
       connectionSupported: true,
     );
@@ -299,7 +300,15 @@ void main() {
       expect(find.text('连接并观看'), findsNothing);
       expect(find.text('断开该设备并撤销全部授权'), findsOneWidget);
       await tester.ensureVisible(find.text('断开该设备并撤销全部授权'));
-      await tester.tap(find.text('断开该设备并撤销全部授权'));
+      // This action now flushes an authenticated terminal notice over the real
+      // fixture sockets; do not park its I/O in the widget's fake timer zone.
+      await tester.runAsync(() async {
+        await tester.tap(find.text('断开该设备并撤销全部授权'));
+        await Future.wait([
+          incoming.whenTransportClosed,
+          outgoing.whenTransportClosed,
+        ]);
+      });
       expect(incoming.isClosed, isTrue);
       expect(outgoing.isClosed, isTrue);
       await tester.pumpWidget(const SizedBox());

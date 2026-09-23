@@ -74,6 +74,7 @@ class FakePreviewEngine implements PreviewEngine {
   bool released = false;
   bool closed = false;
   bool failStart = false;
+
   /// Raised from [start] before [failStart] applies, so platform failures can
   /// be reproduced with their real error code.
   Object? startError;
@@ -117,4 +118,34 @@ class FakePreviewEngine implements PreviewEngine {
 
   @override
   Widget get view => const ColoredBox(color: Color(0xFF30594C));
+}
+
+/// Explicit remote declaration for discovery/dialog tests. It must never create
+/// a media link; source-only FakePreviewEngine intentionally stays preview-only.
+class DialogRemotePreviewEngine extends FakePreviewEngine
+    implements RemoteMediaProvider {
+  @override
+  final RemoteMediaFactory remoteMedia = _DialogRemoteFactory();
+}
+
+class _DialogRemoteFactory implements RemoteMediaFactory {
+  @override
+  MediaCapabilities get capabilities => MediaCapabilities(
+    protocolVersion: sessionProtocolVersion,
+    operations: {SessionOperation.watch, SessionOperation.cast},
+    maxVideoSessions: 1,
+  );
+  @override
+  RemoteMediaLink createLink({
+    required SessionTransport transport,
+    required MediaSessionBudget budget,
+    required Future<CaptureSource> Function() resolveSource,
+    required void Function(RemoteVideoSession session) onSession,
+    required void Function(String sessionId, String code) onFailure,
+    Future<VideoRecoveryAdmission> Function(
+      SessionAuthorization,
+      VideoRecoveryRequest,
+    )?
+    authorizeRecovery,
+  }) => throw StateError('Dialog fixture must not allocate media');
 }

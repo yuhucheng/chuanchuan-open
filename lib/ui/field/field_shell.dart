@@ -3,6 +3,7 @@ import 'package:share_hub_connection/share_hub_connection.dart';
 
 import '../../features/connections/connection_controller.dart';
 import '../../features/connections/connection_panel.dart';
+import '../../features/connections/grant_status_text.dart';
 import '../../features/desktop/desktop_lifecycle.dart';
 import '../../features/devices/device_controller.dart';
 import '../../features/devices/device_directory.dart';
@@ -15,6 +16,7 @@ import '../../platform/client_platform.dart';
 import '../remote/remote_panel.dart';
 import 'appearance.dart';
 import 'brand_mark.dart';
+import 'brand_wordmark.dart';
 import 'device_field.dart';
 import 'issue_banner.dart';
 
@@ -151,10 +153,7 @@ class _FieldShellState extends State<FieldShell> {
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     const BrandMark(),
-                    Text(
-                      '串串',
-                      style: Theme.of(context).textTheme.headlineSmall,
-                    ),
+                    const BrandWordmark(),
                     SizedBox(
                       width: 240,
                       child: TextField(
@@ -223,8 +222,29 @@ class _FieldShellState extends State<FieldShell> {
                             query: search.text,
                             onLocal: localActions,
                             onDevice: deviceActions,
+                            thumbnailBuilder: (_, entry) {
+                              final key = entry.publicKey;
+                              final picture = key == null
+                                  ? null
+                                  : widget.remote.thumbnailFor(key);
+                              if (picture == null) return null;
+                              return Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  IgnorePointer(
+                                    child: ExcludeSemantics(
+                                      child: AspectRatio(
+                                        aspectRatio: 16 / 9,
+                                        child: picture.thumbnailView,
+                                      ),
+                                    ),
+                                  ),
+                                  Text(picture.sends ? '本机分享画面' : '已接收的画面'),
+                                ],
+                              );
+                            },
                           ),
-                          const Text('设备名称不是身份凭证 · 时延未测'),
+                          const Text('设备名称不是身份凭证'),
                         ],
                       ),
                     ],
@@ -329,9 +349,47 @@ class _FieldShellState extends State<FieldShell> {
           final live = _directory()
               .where((item) => item.identityId == entry.identityId)
               .firstOrNull;
-          if (live == null) return const SizedBox.shrink();
+          if (live == null || !live.online) {
+            // Discovery may withdraw or replace an entry while its route is
+            // open. Keep a way out without retargeting by name or address.
+            return AlertDialog(
+              title: Text(selected.name),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text('${selected.platform} · ${selected.host ?? '地址未提供'}'),
+                    Text('指纹摘要：${deviceFingerprint(selected.publicKey)}'),
+                    const SizedBox(height: 16),
+                    Semantics(
+                      liveRegion: true,
+                      child: const Text('该设备当前不可达，请刷新发现后重试。'),
+                    ),
+                    const SizedBox(height: 12),
+                    TextButton(
+                      onPressed: widget.devices.busy
+                          ? null
+                          : widget.devices.retryDiscovery,
+                      child: const Text('刷新设备'),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('取消'),
+                ),
+              ],
+            );
+          }
           final canInitiate =
               widget.connections.outgoingFor(live.publicKey ?? '') != null;
+          final mediaRtt =
+              live.publicKey != null && widget.remote.peerKey == live.publicKey
+              ? widget.remote.roundTripTime
+              : null;
           return AlertDialog(
             title: Text(live.name),
             content: SingleChildScrollView(
@@ -348,12 +406,49 @@ class _FieldShellState extends State<FieldShell> {
                   ),
                   Text('${live.platform} · ${live.host ?? '地址未提供'}'),
                   Text('指纹摘要：${deviceFingerprint(live.publicKey)}'),
+                  for (final connection in widget.connections.sessions.where(
+                    (session) =>
+                        !session.isClosed && session.peerKey == live.publicKey,
+                  ))
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Text(
+                            connection.grant?.role == GrantRole.initiator
+                                ? '本机发起的连接'
+                                : '对方发起的连接',
+                          ),
+                          GrantStatusText(
+                            key: ValueKey(
+                              'device-grant-${connection.sessionId}',
+                            ),
+                            grant: connection.grant,
+                            connectionClosed: connection.isClosed,
+                          ),
+                        ],
+                      ),
+                    ),
+                  for (final connection
+                      in widget.connections.recoveringConnections.where(
+                        (session) => session.peerKey == live.publicKey,
+                      ))
+                    ConnectionRecoveryStatus(
+                      controller: widget.connections,
+                      connection: connection,
+                      peerName: live.name,
+                    ),
                   const Text('名称与网络可见性都不是身份凭证。'),
                   const SizedBox(height: 16),
                   const Divider(),
                   Text('会话操作', style: Theme.of(context).textTheme.titleMedium),
                   const SizedBox(height: 12),
-                  const Text('时延未测。'),
+                  Text(
+                    mediaRtt == null
+                        ? '媒体往返时延：未测'
+                        : '媒体往返时延：${(mediaRtt.inMicroseconds / 1000).toStringAsFixed(1)} ms',
+                  ),
                   if (widget.remote.offeredOperations.isEmpty)
                     const Text('本构建未提供观看或投屏能力。'),
                   if (live.connected && !canInitiate)

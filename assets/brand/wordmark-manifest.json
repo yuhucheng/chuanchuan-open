@@ -1,0 +1,143 @@
+{
+  "schemaVersion": 1,
+  "generator": "tool/generate_wordmark.py",
+  "dependencies": {
+    "fonttools": "4.65.0",
+    "uharfbuzz": "0.56.2"
+  },
+  "fonts": {
+    "han-heavy": {
+      "filename": "SourceHanSansCN-Heavy.otf",
+      "family": "Source Han Sans CN",
+      "weight": 900,
+      "version": "2.005",
+      "sha256": "88c749b0a54a0800124ded6544e399302ed224aa49992ea364b88769f825c54c",
+      "url": "https://raw.githubusercontent.com/adobe-fonts/source-han-sans/6c709ca72d3d7c46ab42ebecc1a26e7d69595a37/SubsetOTF/CN/SourceHanSansCN-Heavy.otf",
+      "license": "LICENSES/SourceHanSans-OFL-1.1.txt"
+    },
+    "han-regular": {
+      "filename": "SourceHanSansCN-Regular.otf",
+      "family": "Source Han Sans CN",
+      "weight": 400,
+      "version": "2.005",
+      "sha256": "e2bc8a2e7f37474b774fff8db758681ece40bb6947a90d571bce9dd60671a8e4",
+      "url": "https://raw.githubusercontent.com/adobe-fonts/source-han-sans/6c709ca72d3d7c46ab42ebecc1a26e7d69595a37/SubsetOTF/CN/SourceHanSansCN-Regular.otf",
+      "license": "LICENSES/SourceHanSans-OFL-1.1.txt"
+    },
+    "inter-medium": {
+      "filename": "InterTight-wght.ttf",
+      "family": "Inter Tight",
+      "weight": 500,
+      "version": "3.004",
+      "variations": {
+        "wght": 500
+      },
+      "sha256": "b81b73dcb64df3c230cabade7df6c5773bf863233f24c9ee51087519f1f88b6f",
+      "url": "https://raw.githubusercontent.com/google/fonts/0b58fb370093f9a9f4ff785d94405710b79de67c/ofl/intertight/InterTight%5Bwght%5D.ttf",
+      "license": "LICENSES/InterTight-OFL-1.1.txt"
+    }
+  },
+  "licenses": {
+    "LICENSES/SourceHanSans-OFL-1.1.txt": {
+      "sha256": "fcac737e761ec63dbfbdce11030a1780161920d80315edba9c8beff1c2bac5a2",
+      "url": "https://raw.githubusercontent.com/adobe-fonts/source-han-sans/6c709ca72d3d7c46ab42ebecc1a26e7d69595a37/LICENSE.txt"
+    },
+    "LICENSES/InterTight-OFL-1.1.txt": {
+      "sha256": "50240ab035cf1b6b3307940235481d515c4b6de3ab1fa843dbe59e7892cb9d58",
+      "url": "https://raw.githubusercontent.com/google/fonts/0b58fb370093f9a9f4ff785d94405710b79de67c/ofl/intertight/OFL.txt"
+    }
+  },
+  "layouts": {
+    "lockup-horizontal.svg": {
+      "source": "tool/generate_wordmark_sources/lockup-horizontal.svg",
+      "sourceSha256": "82c68dd7095d0f9b81e7e618100ca29d952d918fd5b8d202fbcf68fb83ea6fd7",
+      "viewBox": "0 0 384 136",
+      "runs": [
+        {
+          "text": "串串",
+          "font": "han-heavy",
+          "advance": 188.0,
+          "paintBounds": [
+            143.728,
+            7.432,
+            315.008,
+            94.832
+          ]
+        },
+        {
+          "text": "chuanchuan",
+          "font": "inter-medium",
+          "advance": 231.806641,
+          "paintBounds": [
+            139.665234,
+            101.083984,
+            360.486328,
+            120.309766
+          ]
+        }
+      ]
+    },
+    "lockup-vertical.svg": {
+      "source": "tool/generate_wordmark_sources/lockup-vertical.svg",
+      "sourceSha256": "6231de94e98c9350c03947d3c40f637a08fa26d6796db9d39ba765f9dacf5ace",
+      "viewBox": "0 0 260 264",
+      "runs": [
+        {
+          "text": "串串",
+          "font": "han-heavy",
+          "advance": 144.0,
+          "paintBounds": [
+            64.048,
+            108.512,
+            196.528,
+            176.912
+          ]
+        },
+        {
+          "text": "chuanchuan",
+          "font": "inter-medium",
+          "advance": 179.082031,
+          "paintBounds": [
+            40.970703,
+            187.449219,
+            211.525391,
+            202.238281
+          ]
+        },
+        {
+          "text": "让设备，靠近一点",
+          "font": "han-regular",
+          "advance": 160.0,
+          "paintBounds": [
+            50.92,
+            223.14,
+            209.0,
+            242.14
+          ]
+        }
+      ]
+    }
+  },
+  "outputs": {
+    "lib/ui/field/brand_wordmark_paths.dart": {
+      "sha256": "e17778cfa07d8ff71055bf9e808a0b1606202341430f5b9bd07c53c21e588ae7",
+      "bytes": 2866
+    },
+    "assets/brand/lockup-horizontal.svg": {
+      "sha256": "6203e1ad77bd5bd49191379eed060fe2ebaeab00c0b67d53f0c3574ec4a812e0",
+      "bytes": 10213
+    },
+    "assets/brand/lockup-vertical.svg": {
+      "sha256": "29c292279c81f0ea5a4d8eb961c18fa1cd34a3459d98c99761257c4bbdef580c",
+      "bytes": 14857
+    },
+    "assets/brand/wordmark-cn.svg": {
+      "sha256": "9fb0fd3eab02768ace12084cccbe93337fce99cdf6df8517229e670ef3a102b8",
+      "bytes": 854
+    },
+    "assets/brand/wordmark-latin.svg": {
+      "sha256": "06ac85f867e4b35b18a8fce94497848580f02a7bbba3c5f8cc78cab7c046fec2",
+      "bytes": 8957
+    }
+  }
+}

@@ -10,9 +10,70 @@
 namespace {
 constexpr UINT kTrayCallback = WM_APP + 72;
 constexpr UINT kExitApproved = WM_APP + 73;
+constexpr UINT kRefreshTrayIcon = WM_APP + 74;
 constexpr UINT kOpen = 2101, kAllow = 2102, kStopControl = 2103, kQuit = 2104;
 using Value = flutter::EncodableValue;
 using Map = flutter::EncodableMap;
+
+int TrayIconResource() {
+  HIGHCONTRASTW contrast{};
+  contrast.cbSize = sizeof(contrast);
+  const bool high_contrast =
+      SystemParametersInfoW(SPI_GETHIGHCONTRAST, contrast.cbSize, &contrast, 0) &&
+      (contrast.dwFlags & HCF_HIGHCONTRASTON) != 0;
+  // lpszDefaultScheme is borrowed; Windows owns this pointer.
+  DWORD light = 0, bytes = sizeof(light);
+  std::optional<bool> system_light;
+  if (RegGetValueW(HKEY_CURRENT_USER,
+                  L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                  L"SystemUsesLightTheme", RRF_RT_REG_DWORD, nullptr, &light,
+                  &bytes) == ERROR_SUCCESS && light <= 1) {
+    system_light = light == 1;
+  }
+  const auto color = GetSysColor(COLOR_WINDOW);
+  const auto rgb = (static_cast<std::uint32_t>(GetRValue(color)) << 16) |
+                   (static_cast<std::uint32_t>(GetGValue(color)) << 8) |
+                   GetBValue(color);
+  return share_hub::ChooseTrayIconVariant(high_contrast, system_light, rgb) ==
+                 share_hub::TrayIconVariant::ink
+             ? IDI_TRAY_INK
+             : IDI_TRAY_WHITE;
+}
+
+UINT TrayDpi(HWND window, bool installed) {
+  RECT bounds{};
+  if (installed) {
+    NOTIFYICONIDENTIFIER identifier{};
+    identifier.cbSize = sizeof(identifier);
+    identifier.hWnd = window;
+    identifier.uID = 1;
+    if (SUCCEEDED(Shell_NotifyIconGetRect(&identifier, &bounds))) {
+      return FlutterDesktopGetDpiForMonitor(
+          MonitorFromRect(&bounds, MONITOR_DEFAULTTOPRIMARY));
+    }
+  }
+  // The notification area can be on a different screen from the app window.
+  APPBARDATA taskbar{};
+  taskbar.cbSize = sizeof(taskbar);
+  const auto monitor = SHAppBarMessage(ABM_GETTASKBARPOS, &taskbar)
+                           ? MonitorFromRect(&taskbar.rc, MONITOR_DEFAULTTOPRIMARY)
+                           : MonitorFromPoint(POINT{}, MONITOR_DEFAULTTOPRIMARY);
+  return FlutterDesktopGetDpiForMonitor(monitor);
+}
+
+int TrayMetric(int metric, UINT dpi) {
+  using MetricsForDpi = int(WINAPI*)(int, UINT);
+  static const auto metrics_for_dpi = []() {
+    MetricsForDpi function = nullptr;
+    const auto address =
+        GetProcAddress(GetModuleHandleW(L"user32.dll"), "GetSystemMetricsForDpi");
+    static_assert(sizeof(function) == sizeof(address));
+    std::memcpy(&function, &address, sizeof(function));
+    return function;
+  }();
+  return share_hub::TrayIconPixels(metrics_for_dpi ? metrics_for_dpi(metric, dpi) : 0,
+                                   dpi);
+}
 
 bool BooleanField(const Value* value, const char* key) {
   const auto* map = value ? std::get_if<Map>(value) : nullptr;
@@ -44,7 +105,7 @@ std::string Utf8(const std::wstring& text) {
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
 
-FlutterWindow::~FlutterWindow() {}
+FlutterWindow::~FlutterWindow() { RemoveTray(); }
 
 bool FlutterWindow::OnCreate() {
   if (!Win32Window::OnCreate()) {
@@ -79,6 +140,7 @@ bool FlutterWindow::OnCreate() {
       std::unique_ptr<flutter::MethodResult<Value>> result) {
     if (call.method_name() == "initialize") {
       connection_supported_ = BooleanField(call.arguments(), "connectionSupported");
+      tray_requested_ = true;
       InstallTray();
       if (!tray_installed_) { result->Error("tray_unavailable", "Cannot create taskbar entry"); return; }
       desktop_ready_ = true;
@@ -160,8 +222,7 @@ bool FlutterWindow::OnCreate() {
 void FlutterWindow::OnDestroy() {
   TraceAppExit("OnDestroy enter");
   alive_.reset();
-  if (tray_installed_) Shell_NotifyIconW(NIM_DELETE, &tray_);
-  tray_installed_ = false;
+  RemoveTray();
   desktop_.reset();
   TraceAppExit("OnDestroy: bridge+controller teardown begin");
   platform_bridge_.reset();
@@ -178,9 +239,20 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
   if (taskbar_created_ != 0 && message == taskbar_created_) {
+    tray_updates_.Invalidate();
     tray_installed_ = false;
-    InstallTray();
-    if (!tray_installed_) ShowMainWindow();
+    if (tray_requested_ && !exit_approved_) {
+      InstallTray();
+      if (!tray_installed_) ShowMainWindow();
+    }
+    return 0;
+  }
+  if (message == kRefreshTrayIcon) {
+    if (tray_requested_ && !exit_approved_) {
+      if (tray_installed_) RefreshTrayIcon();
+      else InstallTray();
+      if (!tray_installed_) ShowMainWindow();
+    }
     return 0;
   }
   if (message == kExitApproved) {
@@ -197,6 +269,14 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
   }
   if (message == WM_CLOSE) {
     if (desktop_ready_) { CloseToBackground(); return 0; }
+  }
+  if (message == WM_THEMECHANGED || message == WM_SETTINGCHANGE ||
+      message == WM_SYSCOLORCHANGE || message == WM_DPICHANGED ||
+      message == WM_DISPLAYCHANGE) {
+    if (tray_installed_) RefreshTrayIcon();
+    else if (tray_requested_ && !exit_approved_) InstallTray();
+    // Flutter and Win32Window must still receive these messages, particularly
+    // WM_DPICHANGED's suggested window bounds and theme notifications.
   }
   if (platform_bridge_ && platform_bridge_->HandleMessage(message, wparam)) return 0;
   if (message == WM_GETMINMAXINFO) {
@@ -236,14 +316,101 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
 }
 
 void FlutterWindow::InstallTray() {
-  if (tray_installed_) return;
+  if (tray_installed_ || !GetHandle() || exit_approved_) return;
+  if (UpdateTrayIcon(true)) {
+    // Once present, prefer the icon's own monitor over the taskbar fallback.
+    RefreshTrayIcon();
+  }
+}
+
+void FlutterWindow::RemoveTray() {
+  const auto installed = tray_installed_;
+  const auto icon = tray_icon_;
+  auto previous = tray_;
+  // Publish teardown before calling the shell: it may dispatch window messages.
+  tray_updates_.Invalidate();
+  tray_requested_ = false;
+  tray_installed_ = false;
+  desktop_ready_ = false;
+  tray_icon_ = nullptr;
   tray_ = {};
-  tray_.cbSize = sizeof(tray_); tray_.hWnd = GetHandle(); tray_.uID = 1;
-  tray_.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
-  tray_.uCallbackMessage = kTrayCallback;
-  tray_.hIcon = LoadIcon(GetModuleHandle(nullptr), MAKEINTRESOURCE(IDI_APP_ICON));
-  wcscpy_s(tray_.szTip, L"串串 · 后台连接与会话");
-  tray_installed_ = Shell_NotifyIconW(NIM_ADD, &tray_) != FALSE;
+  tray_icon_resource_ = tray_icon_width_ = tray_icon_height_ = 0;
+  if (installed) Shell_NotifyIconW(NIM_DELETE, &previous);
+  if (icon) DestroyIcon(icon);
+}
+
+void FlutterWindow::RefreshTrayIcon() {
+  if (tray_installed_ && !exit_approved_) UpdateTrayIcon(false);
+}
+
+bool FlutterWindow::UpdateTrayIcon(bool installing) {
+  const auto generation = tray_updates_.Begin();
+  if (!generation) return false;
+  const auto window = GetHandle();
+  const std::weak_ptr<int> alive = alive_;
+  const auto current = [&]() {
+    return !alive.expired() && window == GetHandle() && !exit_approved_ &&
+           tray_requested_ && tray_updates_.IsCurrent(*generation);
+  };
+  const bool updated = [&]() {
+    const auto resource = TrayIconResource();
+    const auto reported_dpi = TrayDpi(window, !installing);
+    const auto dpi = reported_dpi == 0 ? 96u : reported_dpi;
+    const auto width = TrayMetric(SM_CXSMICON, dpi);
+    const auto height = TrayMetric(SM_CYSMICON, dpi);
+    if (!current()) return false;
+    if (!installing && resource == tray_icon_resource_ &&
+        width == tray_icon_width_ && height == tray_icon_height_) return true;
+
+    // Each replacement owns a distinct handle, including non-standard DPI sizes.
+    const auto icon = static_cast<HICON>(LoadImageW(
+        GetModuleHandleW(nullptr), MAKEINTRESOURCEW(resource), IMAGE_ICON, width,
+        height, LR_DEFAULTCOLOR));
+    if (!icon) return false;
+    NOTIFYICONDATAW next{};
+    next.cbSize = sizeof(next);
+    next.hWnd = window;
+    next.uID = 1;
+    next.uFlags = NIF_ICON;
+    next.hIcon = icon;
+    if (installing) {
+      next.uFlags |= NIF_MESSAGE | NIF_TIP;
+      next.uCallbackMessage = kTrayCallback;
+      wcscpy_s(next.szTip, L"串串 · 后台连接与会话");
+    }
+    if (!current()) {
+      DestroyIcon(icon);
+      return false;
+    }
+    const bool notified =
+        Shell_NotifyIconW(installing ? NIM_ADD : NIM_MODIFY, &next) != FALSE;
+    if (!current()) {
+      // No nested update can install a replacement while the gate is held.
+      // Remove a late shell result after taskbar recreation or owner teardown.
+      if (notified) Shell_NotifyIconW(NIM_DELETE, &next);
+      DestroyIcon(icon);
+      return false;
+    }
+    if (!notified) {
+      DestroyIcon(icon);
+      return false;  // Preserve the previous entry and its icon on failure.
+    }
+    const auto previous = tray_icon_;
+    tray_icon_ = icon;
+    tray_icon_resource_ = resource;
+    tray_icon_width_ = width;
+    tray_icon_height_ = height;
+    if (installing) tray_ = next;
+    else tray_.hIcon = icon;
+    tray_installed_ = true;
+    if (previous) DestroyIcon(previous);
+    return true;
+  }();
+  if (tray_updates_.End() && !alive.expired() && GetHandle() &&
+      tray_requested_ && !exit_approved_) {
+    PostMessageW(GetHandle(), kRefreshTrayIcon, 0, 0);
+  }
+  return updated;
 }
 void FlutterWindow::ShowMainWindow() {
   ShowWindow(GetHandle(), IsIconic(GetHandle()) ? SW_RESTORE : SW_SHOW);
@@ -278,6 +445,10 @@ flutter::EncodableValue FlutterWindow::WindowState() {
       {Value("onscreen"), Value(visible && !iconic)},
       {Value("trayInstalled"), Value(tray_installed_)},
       {Value("trayButtonAvailable"), Value(tray_installed_)},
+      {Value("trayIconVariant"), Value(!tray_installed_ ? "none" :
+          tray_icon_resource_ == IDI_TRAY_INK ? "ink" : "white")},
+      {Value("trayIconWidth"), Value(tray_installed_ ? tray_icon_width_ : 0)},
+      {Value("trayIconHeight"), Value(tray_installed_ ? tray_icon_height_ : 0)},
       {Value("trayItems"), Value(items)},
       {Value("desktopReady"), Value(desktop_ready_)},
       {Value("terminationApproved"), Value(exit_approved_)},

@@ -1,4 +1,50 @@
-# Share Hub Media API 0.3.0
+# Share Hub Media API 0.8.0
+
+Version 0.8.0 adds optional `RemoteMediaProvider`, `RemoteMediaFactory`,
+`RemoteMediaLink` and `RemoteVideoSession` contracts. The existing SDK preview
+factory remains the entry point: the client discovers remote composition through
+public types and does not require concrete remote SDK exports. Preview-only
+implementations keep working and declare no remote operations. Obtaining the
+factory creates no capture or peer resources. The client supplies the same verified
+transport, shared process budget and local source/recovery policy to every link.
+Closing a link waits for media cleanup without revoking the trusted connection.
+This is a Dart source contract, not a stable native ABI or binary release.
+
+Version 0.7.0 added explicit media-recovery lineage and local admission; ordinary
+requests remain profile 3, recovery uses profile 4. Old SDKs reject recovery
+rather than treating it as a fresh capture. Preview/session interfaces remain
+source compatible. Two-device recovery acceptance is still unfinished; this API
+does not restore video by itself.
+
+Version 0.6.0 added `VideoFrameProbe` and `peerFrameProgress` alongside local
+`frameProgress`. Exhaustive event consumers must handle both kinds. PreviewEngine
+and session method signatures remain unchanged. Ordinary video request intent
+uses **profile 3**, requiring frame-probe parsing; older request profiles are rejected
+before capture or transmission. There is no silent downgrade. The outer
+session protocol 2, SDP profile 2, existing ICE/presentation/playback messages and
+grant lifetime are unchanged. Both endpoints must use compatible media builds.
+
+`frameProbe` version 1 carries exactly `version`, `kind`, `revision`, `probe`
+(positive 31-bit integer) and `progress` (null query, typed sample reply). It is
+accepted only through an authenticated signal for the exact operation/slot,
+current revision and opposite endpoint's assigned stage. Samples contain only
+stage, active, sequence/age, outputSequence/outputAge/sourceUnchanged and
+consumedSequence/consumedFrameAge. Ages are integer microseconds; unknown is all
+null except stage. No source paths, frame contents or authority are carried.
+The maximum body is 1024 bytes. One outstanding probe per direction is matched
+once; expired/duplicate answers cannot refresh evidence. Peer ages include the
+whole local sleep-inclusive round trip, not just time since receipt. This does
+not establish a first-frame receipt or matching frame identity across RTP.
+
+Frame observations are strictly local: capture output (including idle callbacks)
+is distinct from captured images, and decoded frames from texture consumption.
+They neither establish first presentation nor prove end-to-end liveness. Unknown
+samples have null activity/counters/ages, whereas zero counters mean a valid
+native observation with no image yet. The constructor rejects inconsistent stage,
+count and age combinations. Cache redraw does not advance image sequences. Ages
+include sleep and query latency and can only increase while retaining a sample.
+Pause, stop, invalidation and replacement media revisions discard old samples.
+Polling timeout cannot authorize capture or enqueue unbounded native calls.
 
 Apache-2.0 公共契约。客户端和媒体实现共享此包，SDK 不依赖客户端 UI 或平台宿主。产品版本与 API 版本独立。
 
@@ -78,7 +124,7 @@ receipt is the authenticated peer's report, not independent remote attestation.
 ## Video operation intent and termination
 
 `VideoSessionRequest.body` is the authenticated operation payload
-`{"version":2,"kind":"video"}`. The admission layer checks this profile before
+`{"version":3,"kind":"video"}`. The admission layer checks this profile before
 allocating native media. `watch` and `cast` remain distinct grant operations;
 neither payload can select the remote endpoint's source or grant reverse access.
 Unknown versions, extra source fields and non-video operations fail closed.
@@ -142,6 +188,7 @@ product version, grant duration or formal SDK delivery status.
 | `firstFrame` | This revision has presentation evidence | Continuous frame updates forever |
 | `paused` | Media is quiesced; budget and original grant remain | A last frame is live |
 | `sourceChanged` | Sender applied a new local source | Peer has presented the new source |
+| `statistics` | Latest local path/RTT/video bitrate observation | First frame, continuous rendering or end-to-end video delay |
 | `failed` / `ended` | Failure or terminal end; owned resources must be released | Cleanup already succeeded if release failed |
 
 A cast starts with the current local primary source. Changing it to an explicitly
@@ -151,7 +198,7 @@ local; it is not inserted into the remote intent payload. A revision-0 receipt
 cannot mark the new window live. A watch uses the same exchange, with capture and
 source selection on the responder, independent of who assigns the next revision.
 
-Failure examples: adding `source` to `{"version":2,"kind":"video"}` is rejected;
+Failure examples: adding `source` to `{"version":3,"kind":"video"}` is rejected;
 a second budget reservation returns `busy`; reverse local operation authority
 returns `direction_denied`; a receiver invoking `changeSource` returns
 `invalid_media_role`; a disappeared local source is refused instead of selecting
@@ -166,7 +213,8 @@ that timeout is an implementation policy, not a new wire or performance promise.
 | Existing `RemoteMediaSession` without source extension | Pause/resume/stop remain available; source selection unavailable |
 | API 0.3.0 sender implementing `SourceSelectableMediaSession` | Exact local selection via the existing media revision handshake |
 | API 0.3.0 receiver | No local capture source selection, even if its session class implements the extension |
-| Old video profile 1 vs current profile 2 | Explicit rejection, no silent downgrade |
+| API 0.4.0 diagnostics consumer | Optional `transportPath`; older producers keep null, existing interfaces remain source compatible |
+| Old video request profiles 1/2 vs current request profile 3 | Explicit rejection before capture, no silent downgrade; SDP/ICE remain profile 2 |
 
 Executable examples: `test/remote_contract_test.dart` covers legacy engines,
 budget, expiry and revocation; `test/video_session_messages_test.dart` covers
@@ -175,3 +223,98 @@ intent/termination/playback and remote source-field rejection;
 and revision isolation. Client tests additionally exercise directional rejection,
 source selection, failure and first-frame deadlines. These tests do not claim
 Windows/macOS or two-machine delivery acceptance.
+
+## Sanitized local statistics (0.4.0)
+
+`MediaSessionEvent.transportPath` is an optional `MediaTransportPath` (`direct`
+or `relay`). It describes the actual selected ICE candidate pair: either relay
+candidate means relay; both known non-relay candidates mean direct. A configured
+TURN server, a nominated but unselected candidate or an unresolved report does
+not establish a path. Addresses, ports, candidate text and credentials are not
+part of this public diagnostic event.
+
+`roundTripTime` is the selected ICE pair's latest round-trip measurement, not
+one-way screen latency. `bitsPerSecond` is local video RTP payload throughput
+over consecutive native samples: outgoing bytes on the sender, incoming bytes
+on the receiver. It is neither available bandwidth nor remote presentation
+evidence. Missing, ambiguous, reset or invalid observations remain null; a
+measured zero is valid. No frames-per-second or liveness is inferred from idle
+traffic, since a static desktop may produce no new encoded frames.
+
+Each sample replaces the previous one, including null fields, and belongs to
+its exact media revision. Consumers must clear old samples on pause, replacement
+or stop, and expire stale samples. The current client expires them after six
+seconds without a new sample. These are local diagnostics; the addition does
+not change video wire profiles, authorization, product version or SDK delivery
+status.
+
+Optional `frameWidth` and `frameHeight` form a pair of actual local encoded or
+decoded video dimensions from RTP statistics. Both stay null when missing,
+invalid or ambiguous; valid values are 1–65535, matching the presentation
+receipt's encoding bounds without claiming those resolutions are supported.
+They do not replace `SourceGeometry`, describe input coordinates or prove a
+fresh frame. No dimensions are inferred from a chosen screen's nominal size.
+
+## Media recovery admission (0.7.0)
+
+Normal requests still use `VideoSessionRequest.body` (profile 3). Recovery uses
+`VideoSessionRequest.recoveryBody(request)`: exactly `version: 4`, `kind: "video"`
+and `recovery`, whose four fields are `session` (old operation ID, 1–128 UTF-8
+bytes), `generation` (old positive 31-bit transport generation), `revision`
+(old nonnegative 31-bit media revision), and `paused` (boolean). Total request
+body remains at most 512 bytes. Extra fields and non-integer counters fail.
+The new authorization must have a different operation ID and newer transport
+generation. No source ID/name, new permission, grant or deadline crosses this
+boundary. The outer session protocol and grant policy are unchanged.
+
+Each endpoint records `VideoRecoveryIntent` only from its actual admitted
+picture, retaining its sealed old authorization, exact local source (sender
+only), media revision, pause state, and real cleanup Future. A matching fresh
+sealed authorization can claim it only once. The exact original grant object,
+operation, role, old ID/generations, pause state and encoded request must match;
+cleanup must succeed first. Cancel is irreversible and invalidates pending and
+minted admissions; a new grant with the same device names cannot replace it.
+The controller must cancel retained intents on explicit stop, source/permission
+loss, exit, recovery abandonment, or grant revocation. It must not persist them.
+
+The SDK rejects recovery unless the process supplies the local intent claim
+callback. It reserves the shared budget after that claim. The initiating SDK
+sends the new request and waits for an authenticated `recovery-ready` signal
+(exactly `{"version":1,"kind":"recovery-ready"}`) for that new operation before
+constructing native media. `VideoRecoveryAdmission.confirmPeer` verifies this
+signal; `requireStart` prevents a caller from treating local intent as peer
+confirmation. Duplicate/foreign/malformed confirmations fail. The SDK's default
+wait is five seconds; refusal, timeout or close ends the new operation and
+notifies any peer resources already started. Pending platform/native cleanup is
+still owned until it actually settles.
+
+A paused recovery creates a new paused operation with no native peer/capture/renderer
+allocation. Either endpoint may later use the existing explicit playback resume
+handshake. Sending uses the saved exact source, never the primary resolver;
+native source and permission checks run again. A new operation begins with
+media revision zero and fresh frame evidence, independent of its recorded old
+revision. Recovery confirmation is not a channel/first-frame/health receipt.
+
+The production client connects retained-intent lifetime, cancellation and source
+checks through an optional recovery factory. Its default recovery window is 45
+seconds, checked against the continuous clock after asynchronous source lookup.
+It rechecks recording permission without prompting and rejects a missing source
+or changed primary identity. Waiting has a stop action; exit awaits pending work.
+Protocol, SDK simulated-media and client TCP tests do not establish actual screen
+capture, platform sleep, two-device or relay acceptance.
+
+### Native boundary draft
+
+The [native boundary review draft](native/draft/README.md) proposes C declarations
+for trusted provider imports, sources/start/playback/recovery, immutable frame
+leases, presentation/measurements and bounded asynchronous ownership.
+It is unimplemented and is not part of the exported Dart API or a released ABI.
+`python3 tool/check_native_boundary.py` checks declaration/layout compatibility;
+it does not load an SDK or prove native authorization or media behavior.
+
+The [package-layout proposal](native/draft/PACKAGING.md) describes native-only and
+self-contained thin-Flutter artifacts, public API snapshots and exact-byte
+metadata. Its examples are non-installable. Run
+`python3 tool/check_sdk_package_layout.py --flutter /path/to/flutter` to check the
+public dependency graph offline with an SDK fixture; it does not test real SDK
+binaries, signing or installation.

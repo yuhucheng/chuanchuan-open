@@ -26,6 +26,7 @@ class WireChannel {
   List<int> _buffer = [];
   Completer<Map<String, dynamic>>? _waiting;
   bool _closed = false;
+  bool get isClosed => _closed;
   static const maximumFrameBytes = 8192;
   int _frameLimit = maximumFrameBytes;
   void enableSessionFrames() => _frameLimit = 131072;

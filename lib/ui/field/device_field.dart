@@ -16,6 +16,7 @@ class DeviceField extends StatefulWidget {
     required this.allowConnections,
     required this.onLocal,
     required this.onDevice,
+    this.thumbnailBuilder,
     this.query = '',
   });
   final List<DirectoryDevice> entries;
@@ -23,6 +24,10 @@ class DeviceField extends StatefulWidget {
   final bool allowConnections;
   final VoidCallback onLocal;
   final Future<void> Function(DirectoryDevice) onDevice;
+
+  /// Presentation only: the caller may borrow an existing authorized picture.
+  /// It must never start capture or enumerate sources from this callback.
+  final Widget? Function(BuildContext, DirectoryDevice)? thumbnailBuilder;
   @override
   State<DeviceField> createState() => _DeviceFieldState();
 }
@@ -32,6 +37,7 @@ class _DeviceFieldState extends State<DeviceField> {
   final _focus = <String, FocusNode>{};
   final _aggregateFocus = FocusNode(debugLabel: 'aggregate');
   bool _expanded = false;
+  String? _hovered, _focused;
   @override
   void initState() {
     super.initState();
@@ -133,6 +139,15 @@ class _DeviceFieldState extends State<DeviceField> {
               detail: _detail(entry, online.contains(entry.identityId)),
               icon: Icons.devices,
               focus: _focus[entry.identityId],
+              onHover: (value) =>
+                  _interest(entry.identityId, value, hover: true),
+              onFocusChange: (value) => _interest(entry.identityId, value),
+              thumbnail:
+                  online.contains(entry.identityId) &&
+                      (_hovered == entry.identityId ||
+                          _focused == entry.identityId)
+                  ? widget.thumbnailBuilder?.call(context, entry)
+                  : null,
               onPressed: online.contains(entry.identityId)
                   ? () async {
                       await widget.onDevice(entry);
@@ -225,6 +240,23 @@ class _DeviceFieldState extends State<DeviceField> {
     );
   }
 
+  void _interest(String id, bool active, {bool hover = false}) {
+    final current = hover ? _hovered : _focused;
+    final next = active
+        ? id
+        : current == id
+        ? null
+        : current;
+    if (current == next) return;
+    setState(() {
+      if (hover) {
+        _hovered = next;
+      } else {
+        _focused = next;
+      }
+    });
+  }
+
   Widget _node(
     BuildContext context, {
     required Key key,
@@ -233,6 +265,9 @@ class _DeviceFieldState extends State<DeviceField> {
     required IconData icon,
     required VoidCallback? onPressed,
     FocusNode? focus,
+    ValueChanged<bool>? onHover,
+    ValueChanged<bool>? onFocusChange,
+    Widget? thumbnail,
     bool local = false,
   }) => RawGestureDetector(
     gestures: onPressed == null
@@ -251,6 +286,8 @@ class _DeviceFieldState extends State<DeviceField> {
     child: OutlinedButton(
       key: key,
       focusNode: focus,
+      onHover: onHover,
+      onFocusChange: onFocusChange,
       onPressed: onPressed,
       style: OutlinedButton.styleFrom(
         padding: const EdgeInsets.all(16),
@@ -283,6 +320,7 @@ class _DeviceFieldState extends State<DeviceField> {
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodySmall,
           ),
+          if (thumbnail != null) ...[const SizedBox(height: 12), thumbnail],
         ],
       ),
     ),

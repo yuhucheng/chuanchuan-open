@@ -23,7 +23,7 @@ Canonical encoding is UTF-8 JSON **arrays** in the order below, using canonical 
 3. A checks its outstanding challenge and B's proof, then sends HMAC-SHA256(root, JSON `["initiator", base64url(T)]`). B verifies before activation. Role labels prevent reflection; identities, grant and generation are all covered.
 4. Both derive separate 32-byte HKDF-SHA256 keys, salt = T, info = `chuanchuan.transport.v2/initiator-to-receiver` or `chuanchuan.transport.v2/receiver-to-initiator`. Fresh challenges and incremented generations prevent reuse of the previous transport keys. Unauthenticated hello messages do not commit B's generation.
 
-The transport adapter must deliver the final proof before application packets and must invalidate/suspend abandoned attempts. It must bound handshake time, attempts and network buffers; the current pairing handshake retains its 30-second timeout. Background retry/backoff, route selection, reconnect sockets and two-device recovery acceptance remain separate client integration work.
+The transport adapter must deliver the final proof before application packets and must invalidate/suspend abandoned attempts. It must bound handshake time, attempts and network buffers; the current pairing handshake retains its 30-second timeout. The [connection package](../share_hub_connection/README.md) now provides an opt-in socket recovery adapter with final encrypted acknowledgement. The production client now opts in through bounded process-owned retry on the original selected route, with identity rechecks and cancellation/exit cleanup. Two-device recovery acceptance and media resumption remain separate unfinished work; a restored transport never authorizes an old media operation.
 
 ## Authenticated request envelopes
 

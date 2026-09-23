@@ -1,6 +1,8 @@
 import 'package:share_hub_session_api/share_hub_session_api.dart';
 
 import '../share_hub_media_api.dart' show CaptureSource, PreviewEngine;
+import 'frame_progress.dart';
+import 'remote_media_provider.dart';
 
 /// API version and wire protocol version are independent. No capability is
 /// inferred from PreviewEngine.unavailableReason, platform name or UI state.
@@ -52,7 +54,9 @@ abstract interface class BidirectionalRemoteMediaEngine
 }
 
 MediaCapabilities capabilitiesOf(PreviewEngine engine) =>
-    engine is RemoteMediaEngine
+    engine is RemoteMediaProvider
+    ? engine.remoteMedia.capabilities
+    : engine is RemoteMediaEngine
     ? engine.mediaCapabilities
     : MediaCapabilities.previewOnly();
 
@@ -96,10 +100,18 @@ enum MediaEventKind {
   ended,
   failed,
   statistics,
+  frameProgress,
+  peerFrameProgress,
 }
+
+/// The actual selected ICE candidate pair, without addresses or credentials.
+/// A relay configuration or an unselected candidate cannot establish a path.
+enum MediaTransportPath { direct, relay }
 
 /// Transport readiness and firstFrame are independent events from the actual
 /// implementation. Unmeasured metrics are null, never synthesized as zero.
+/// Statistics are local observations, not presentation or frame-liveness proof.
+/// A new statistics event replaces the previous sample, including null fields.
 final class MediaSessionEvent {
   MediaSessionEvent({
     required this.grantId,
@@ -108,17 +120,27 @@ final class MediaSessionEvent {
     required this.kind,
     this.mediaRevision = 0,
     this.geometry,
+    this.transportPath,
     this.roundTripTime,
     this.bitsPerSecond,
+    this.frameWidth,
+    this.frameHeight,
     this.failureCode,
+    this.frameProgress,
   }) {
-    if (grantId.isEmpty ||
+    if ((kind == MediaEventKind.frameProgress ||
+                kind == MediaEventKind.peerFrameProgress) !=
+            (frameProgress != null) ||
+        grantId.isEmpty ||
         sessionId.isEmpty ||
         transportGeneration < 1 ||
         mediaRevision < 0 ||
         mediaRevision > 0x7fffffff ||
         (roundTripTime != null && roundTripTime!.isNegative) ||
-        (bitsPerSecond != null && bitsPerSecond! < 0)) {
+        (bitsPerSecond != null && bitsPerSecond! < 0) ||
+        (frameWidth == null) != (frameHeight == null) ||
+        (frameWidth != null && (frameWidth! < 1 || frameWidth! > 65535)) ||
+        (frameHeight != null && (frameHeight! < 1 || frameHeight! > 65535))) {
       throw ArgumentError('Invalid media event');
     }
   }
@@ -127,9 +149,23 @@ final class MediaSessionEvent {
   final int mediaRevision;
   final MediaEventKind kind;
   final SourceGeometry? geometry;
+  final MediaTransportPath? transportPath;
+
+  /// Latest selected ICE pair round-trip measurement; not one-way video delay.
   final Duration? roundTripTime;
+
+  /// Video RTP payload bitrate over consecutive native samples: outbound for
+  /// the sender, inbound for the receiver. It is not available bandwidth or
+  /// evidence of remote rendering. Missing/reset counters yield null.
   final int? bitsPerSecond;
+
+  /// Actual local encoded/decoded video dimensions from the same sample.
+  /// Both are null when unknown. These do not describe source coordinates or
+  /// confer input authority. Bounds match the presentation receipt, not a
+  /// supported-resolution guarantee.
+  final int? frameWidth, frameHeight;
   final String? failureCode;
+  final MediaFrameProgress? frameProgress;
 }
 
 abstract interface class RemoteMediaSession {

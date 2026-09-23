@@ -44,13 +44,14 @@ void main() {
     final remote = RemoteSessionController(
       connections: connections,
       platform: platform,
-      factory: RtcRemotePictureFactory(),
+      factory: remotePicturesFor(engine),
       listSources: engine.sources,
     );
     final desktop = DesktopLifecycle(
       devices: devices,
       connections: connections,
       preview: preview,
+      stopRemote: remote.shutdown,
       transfers: transfers,
       connectionSupported: true,
     );

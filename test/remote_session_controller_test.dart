@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:share_hub_connection/share_hub_connection.dart';
 import 'package:share_hub_media_api/share_hub_media_api.dart';
@@ -10,6 +11,8 @@ import 'package:share_hub_open/features/remote/remote_media.dart';
 import 'package:share_hub_open/features/remote/remote_session_controller.dart';
 import 'package:share_hub_open/platform/client_platform.dart';
 import 'package:share_hub_open/ui/remote/remote_panel.dart';
+import 'package:share_hub_open/ui/field/device_field.dart';
+import 'package:share_hub_open/features/devices/device_directory.dart';
 
 import 'fakes.dart';
 
@@ -30,7 +33,8 @@ class _FakeConnectionPlatform implements ConnectionPlatform {
   }
 }
 
-class _FakePicture implements SourceSelectableRemotePicture {
+class _FakePicture
+    implements SourceSelectableRemotePicture, ThumbnailRemotePicture {
   _FakePicture({
     required this.id,
     required this.operation,
@@ -43,6 +47,7 @@ class _FakePicture implements SourceSelectableRemotePicture {
   @override
   final bool sends;
   final _events = StreamController<MediaSessionEvent>.broadcast(sync: true);
+  Stream<MediaSessionEvent>? eventStreamOverride;
   VideoEndReason? endedBy;
   bool failStop = false;
   final stopReasons = <VideoEndReason>[];
@@ -50,16 +55,22 @@ class _FakePicture implements SourceSelectableRemotePicture {
   bool stoppedFlag = false;
 
   @override
-  Stream<MediaSessionEvent> get events => _events.stream;
+  Stream<MediaSessionEvent> get events => eventStreamOverride ?? _events.stream;
   @override
   Widget get view =>
       const SizedBox(key: ValueKey('remote-view'), width: 8, height: 8);
+  @override
+  Widget get thumbnailView =>
+      const SizedBox(key: ValueKey('borrowed-thumbnail'), height: 90);
   @override
   int mediaRevision = 0;
   @override
   CaptureSource? localSource;
   final changes = <CaptureSource>[];
   Completer<void>? changeGate;
+  Completer<void>? playbackGate;
+  Completer<void>? stopGate;
+  bool failPlayback = false;
   bool failChange = false;
   @override
   Future<void> changeSource(CaptureSource source) async {
@@ -77,7 +88,17 @@ class _FakePicture implements SourceSelectableRemotePicture {
   @override
   VideoEndReason? get remoteEndReason => endedBy;
 
-  void emit(MediaEventKind kind, {String? failureCode, int? revision}) {
+  void emit(
+    MediaEventKind kind, {
+    String? failureCode,
+    int? revision,
+    MediaTransportPath? transportPath,
+    Duration? roundTripTime,
+    int? bitsPerSecond,
+    int? frameWidth,
+    int? frameHeight,
+    MediaFrameProgress? frameProgress,
+  }) {
     if (_events.isClosed) return;
     _events.add(
       MediaSessionEvent(
@@ -87,6 +108,12 @@ class _FakePicture implements SourceSelectableRemotePicture {
         mediaRevision: revision ?? mediaRevision,
         kind: kind,
         failureCode: failureCode,
+        transportPath: transportPath,
+        roundTripTime: roundTripTime,
+        bitsPerSecond: bitsPerSecond,
+        frameWidth: frameWidth,
+        frameHeight: frameHeight,
+        frameProgress: frameProgress,
       ),
     );
   }
@@ -96,9 +123,15 @@ class _FakePicture implements SourceSelectableRemotePicture {
   }
 
   @override
-  Future<void> pause() async {}
+  Future<void> pause() async {
+    if (playbackGate != null) await playbackGate!.future;
+    if (failPlayback) throw StateError('playback failed');
+  }
+
   @override
   Future<void> resume() async {
+    if (playbackGate != null) await playbackGate!.future;
+    if (failPlayback) throw StateError('playback failed');
     resumes++;
     mediaRevision++;
     emit(MediaEventKind.waitingFirstFrame);
@@ -108,10 +141,71 @@ class _FakePicture implements SourceSelectableRemotePicture {
   Future<void> stop({VideoEndReason reason = VideoEndReason.stopped}) async {
     stops++;
     stopReasons.add(reason);
+    if (stopGate != null) await stopGate!.future;
     if (failStop) throw StateError('cleanup failed');
     stoppedFlag = true;
     finish();
   }
+}
+
+/// Tracks real subscriptions, optionally failing the first native detach while
+/// its listener remains owned until cancellation is retried.
+class _CancelOnceStream<T> extends Stream<T> {
+  _CancelOnceStream(this.source, {this.failFirstCancel = true});
+  final Stream<T> source;
+  final bool failFirstCancel;
+  int listeners = 0, cancellations = 0;
+
+  @override
+  bool get isBroadcast => source.isBroadcast;
+
+  @override
+  StreamSubscription<T> listen(
+    void Function(T event)? onData, {
+    Function? onError,
+    void Function()? onDone,
+    bool? cancelOnError,
+  }) {
+    listeners++;
+    return _CancelOnceSubscription(
+      this,
+      source.listen(
+        onData,
+        onError: onError,
+        onDone: onDone,
+        cancelOnError: cancelOnError,
+      ),
+    );
+  }
+}
+
+class _CancelOnceSubscription<T> implements StreamSubscription<T> {
+  _CancelOnceSubscription(this.owner, this.delegate);
+  final _CancelOnceStream<T> owner;
+  final StreamSubscription<T> delegate;
+
+  @override
+  Future<void> cancel() async {
+    if (++owner.cancellations == 1 && owner.failFirstCancel) {
+      throw StateError('subscription cleanup');
+    }
+    await delegate.cancel();
+  }
+
+  @override
+  void onData(void Function(T data)? handleData) => delegate.onData(handleData);
+  @override
+  void onError(Function? handleError) => delegate.onError(handleError);
+  @override
+  void onDone(void Function()? handleDone) => delegate.onDone(handleDone);
+  @override
+  void pause([Future<void>? resumeSignal]) => delegate.pause(resumeSignal);
+  @override
+  void resume() => delegate.resume();
+  @override
+  bool get isPaused => delegate.isPaused;
+  @override
+  Future<E> asFuture<E>([E? futureValue]) => delegate.asFuture<E>(futureValue);
 }
 
 class _FakeLink {
@@ -121,12 +215,18 @@ class _FakeLink {
   final void Function(String, String) onFailure;
   final starts = <SessionOperation>[];
   Completer<void>? gate;
+  Completer<void>? closeGate, pictureStopGate;
   bool failStartAfterAdoption = false, failStop = false;
+  bool failClose = false;
+  int closeCalls = 0;
   bool closed = false;
   _FakePicture? picture;
 
   Future<void> close() async {
+    closeCalls++;
     closed = true;
+    if (closeGate != null) await closeGate!.future;
+    if (failClose) throw StateError('link cleanup failed');
     picture?.finish();
   }
 }
@@ -144,6 +244,7 @@ class _FakeFactory implements RemotePictureFactory {
   final links = <_FakeLink>[];
   final delivered = <RemotePicture>[];
   final failures = <String>[];
+  bool failNextEventCancellation = false;
 
   @override
   MediaCapabilities get capabilities => declared;
@@ -217,11 +318,18 @@ class _GrantCheckedLink implements RemotePictureLink {
         rethrow;
       }
     }
-    final picture = _FakePicture(
-      id: sessionId,
-      operation: operation,
-      sends: operation == SessionOperation.cast,
-    )..failStop = _link.failStop;
+    final picture =
+        _FakePicture(
+            id: sessionId,
+            operation: operation,
+            sends: operation == SessionOperation.cast,
+          )
+          ..failStop = _link.failStop
+          ..stopGate = _link.pictureStopGate;
+    if (_factory.failNextEventCancellation) {
+      _factory.failNextEventCancellation = false;
+      picture.eventStreamOverride = _CancelOnceStream(picture.events);
+    }
     _link.picture = picture;
     _factory.deliver(picture, via: _link);
     if (_link.failStartAfterAdoption) {
@@ -241,6 +349,16 @@ void main() {
   late FakePlatform platformA, platformB;
   late List<CaptureSource> sourcesA;
   late bool previewActive;
+  var sourceListCallsA = 0;
+
+  MediaFrameProgress receiverProgress() => MediaFrameProgress(
+    stage: MediaFrameStage.receiver,
+    active: true,
+    sequence: 2,
+    age: const Duration(milliseconds: 10),
+    consumedSequence: 1,
+    consumedFrameAge: const Duration(seconds: 2),
+  );
   Completer<List<CaptureSource>>? sourceListGate;
 
   Future<void> waitFor(bool Function() condition) async {
@@ -276,11 +394,27 @@ void main() {
     sourcesA = const [CaptureSource('screen:1', '内建显示器', isPrimary: true)];
     previewActive = false;
     sourceListGate = null;
+    sourceListCallsA = 0;
     factoryA = _FakeFactory();
     factoryB = _FakeFactory();
   });
 
   tearDown(() async {
+    // Also unblock cleanup if a new shutdown assertion fails before releasing
+    // its gate; leave existing fake success/failure semantics unchanged.
+    for (final factory in [factoryA, factoryB]) {
+      for (final link in factory.links) {
+        link.failClose = false;
+        for (final gate in [link.gate, link.closeGate, link.pictureStopGate]) {
+          if (gate != null && !gate.isCompleted) gate.complete();
+        }
+      }
+      for (final picture in factory.delivered.whereType<_FakePicture>()) {
+        picture.failStop = false;
+        final gate = picture.stopGate;
+        if (gate != null && !gate.isCompleted) gate.complete();
+      }
+    }
     remoteA.dispose();
     remoteB.dispose();
     await a.disconnectAll();
@@ -289,15 +423,24 @@ void main() {
     b.dispose();
   });
 
-  void build({bool Function()? localCaptureOccupied}) {
+  void build({
+    bool Function()? localCaptureOccupied,
+    bool Function()? relayCredentialAvailable,
+    Duration statisticsLifetime = const Duration(seconds: 6),
+  }) {
     remoteA = RemoteSessionController(
       connections: a,
       platform: platformA,
       factory: factoryA,
-      listSources: () async => sourceListGate?.future ?? sourcesA,
+      listSources: () async {
+        sourceListCallsA++;
+        return sourceListGate?.future ?? sourcesA;
+      },
       localCaptureActive: localCaptureOccupied ?? () => previewActive,
+      relayCredentialAvailable: relayCredentialAvailable,
       firstFrameDeadline: const Duration(milliseconds: 150),
       permissionPoll: const Duration(milliseconds: 20),
+      statisticsLifetime: statisticsLifetime,
     );
     remoteB = RemoteSessionController(
       connections: b,
@@ -318,6 +461,1008 @@ void main() {
     // One receiver per live connection, created without touching any device.
     expect(factoryA.links, hasLength(1));
     expect(factoryA.links.single.starts, isEmpty);
+  });
+
+  test('late relay lease retries a pre-transport timeout once with a new operation', () async {
+    var relayReady = false;
+    build(relayCredentialAvailable: () => relayReady);
+    final peer = a.sessions.single.peerKey;
+    await remoteA.start(SessionOperation.watch, peerKey: peer);
+    final first = factoryA.current;
+    final firstId = first.id;
+    relayReady = true;
+    first.emit(MediaEventKind.failed, failureCode: 'media_connection_timeout');
+    first.stoppedFlag = true; // SDK releases native resources before ended.
+    first.emit(MediaEventKind.ended);
+    await waitFor(() => factoryA.link.starts.length == 2);
+    expect(factoryA.current.id, isNot(firstId));
+    expect(remoteA.phase, RemotePhase.connecting);
+    final second = factoryA.current;
+    second.emit(MediaEventKind.failed, failureCode: 'media_connection_timeout');
+    second.stoppedFlag = true;
+    second.emit(MediaEventKind.ended);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(factoryA.link.starts, hasLength(2));
+  });
+
+  test(
+    'relay fallback cannot revive an explicitly stopped operation',
+    () async {
+      var relayReady = false;
+      build(relayCredentialAvailable: () => relayReady);
+      await remoteA.start(
+        SessionOperation.watch,
+        peerKey: a.sessions.single.peerKey,
+      );
+      final first = factoryA.current;
+      relayReady = true;
+      first.emit(
+        MediaEventKind.failed,
+        failureCode: 'media_connection_timeout',
+      );
+      await remoteA.stop();
+      first.emit(MediaEventKind.ended);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(factoryA.link.starts, hasLength(1));
+    },
+  );
+
+  test(
+    'existing relay or failed event cleanup cannot start a fallback',
+    () async {
+      var relayReady = true;
+      build(relayCredentialAvailable: () => relayReady);
+      final peer = a.sessions.single.peerKey;
+      await remoteA.start(SessionOperation.watch, peerKey: peer);
+      final first = factoryA.current;
+      first.emit(MediaEventKind.failed, failureCode: 'media_transport_lost');
+      first.stoppedFlag = true;
+      first.emit(MediaEventKind.ended);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(factoryA.link.starts, hasLength(1));
+
+      relayReady = false;
+      factoryA.failNextEventCancellation = true;
+      await remoteA.start(SessionOperation.watch, peerKey: peer);
+      final second = factoryA.current;
+      relayReady = true;
+      second.emit(MediaEventKind.failed, failureCode: 'media_transport_lost');
+      second.stoppedFlag = true;
+      second.emit(MediaEventKind.ended);
+      await waitFor(() => remoteA.cleanupFailed);
+      expect(factoryA.link.starts, hasLength(2));
+    },
+  );
+
+  test('presentation deadline begins after ICE is connected', () async {
+    build();
+    await remoteA.start(
+      SessionOperation.watch,
+      peerKey: a.sessions.single.peerKey,
+    );
+    final picture = factoryA.current;
+    await Future<void>.delayed(const Duration(milliseconds: 180));
+    expect(remoteA.phase, RemotePhase.connecting);
+    expect(picture.stops, 0);
+    picture.emit(MediaEventKind.transportReady);
+    await waitFor(() => picture.stops == 1);
+    expect(remoteA.phase, RemotePhase.failed);
+  });
+
+  for (final operation in [SessionOperation.watch, SessionOperation.cast]) {
+    test(
+      '$operation thumbnail is bound to the active identity and media revision',
+      () async {
+        build();
+        final peer = a.sessions.single.peerKey;
+        expect(remoteA.thumbnailFor(peer), isNull);
+        await remoteA.start(operation, peerKey: peer);
+        final picture = factoryA.current;
+        expect(remoteA.thumbnailFor(peer), isNull);
+        picture.emit(MediaEventKind.firstFrame);
+        expect(remoteA.thumbnailFor(peer), same(picture));
+        expect(remoteA.thumbnailFor('same-name-other-identity'), isNull);
+        final lookups = sourceListCallsA;
+        for (var i = 0; i < 20; i++) {
+          remoteA.thumbnailFor(peer);
+        }
+        expect(sourceListCallsA, lookups);
+        expect(factoryA.link.starts, [operation]);
+        await remoteA.pause();
+        picture.emit(MediaEventKind.paused);
+        expect(remoteA.thumbnailFor(peer), isNull);
+        await remoteA.resume();
+        expect(remoteA.thumbnailFor(peer), isNull);
+        picture.emit(MediaEventKind.firstFrame);
+        expect(remoteA.thumbnailFor(peer), same(picture));
+        picture.stopGate = Completer<void>();
+        final stopping = remoteA.stop();
+        expect(remoteA.thumbnailFor(peer), isNull);
+        picture.emit(MediaEventKind.firstFrame);
+        expect(remoteA.thumbnailFor(peer), isNull);
+        picture.stopGate!.complete();
+        await stopping;
+      },
+    );
+  }
+
+  test('changing source and revoking a connection remove its thumbnail immediately', () async {
+    build();
+    final peer = a.sessions.single.peerKey;
+    await remoteA.start(SessionOperation.cast, peerKey: peer);
+    final picture = factoryA.current;
+    picture.emit(MediaEventKind.firstFrame);
+    await remoteA.loadSourceChoices();
+    picture.changeGate = Completer<void>();
+    final change = remoteA.changeSource(sourcesA.single);
+    expect(remoteA.thumbnailFor(peer), isNull);
+    picture.changeGate!.complete();
+    await change;
+    expect(remoteA.thumbnailFor(peer), isNull);
+    picture.emit(MediaEventKind.firstFrame);
+    expect(remoteA.thumbnailFor(peer), same(picture));
+    a.sessions.single.grant!.revoke();
+    expect(remoteA.thumbnailFor(peer), isNull);
+    await remoteA.stop();
+  });
+
+  testWidgets(
+    'hover and keyboard focus borrow a picture without creating media at 200 percent',
+    (tester) async {
+      build();
+      tester.view.physicalSize = const Size(700, 900);
+      tester.view.devicePixelRatio = 1;
+      tester.platformDispatcher.textScaleFactorTestValue = 2;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      final peer = a.sessions.single.peerKey;
+      final entry = DirectoryDevice(
+        identityId: peer,
+        publicKey: peer,
+        name: '正在分享的电脑',
+        platform: 'macos',
+        trust: DeviceTrust.verified,
+        reachability: DeviceReachability.reachable,
+        connected: true,
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: AnimatedBuilder(
+                animation: remoteA,
+                builder: (_, _) => DeviceField(
+                  entries: [entry],
+                  localName: '本机',
+                  allowConnections: false,
+                  onLocal: () {},
+                  onDevice: (_) async {},
+                  thumbnailBuilder: (_, device) =>
+                      remoteA.thumbnailFor(device.publicKey!)?.thumbnailView,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      final node = find.byKey(ValueKey('device-$peer'));
+      await tester.ensureVisible(node);
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(location: const Offset(1, 1));
+      await mouse.moveTo(tester.getCenter(node));
+      await tester.pump();
+      expect(factoryA.link.starts, isEmpty);
+      expect(sourceListCallsA, 0);
+      expect(find.byKey(const ValueKey('borrowed-thumbnail')), findsNothing);
+      await tester.runAsync(
+        () => remoteA.start(SessionOperation.watch, peerKey: peer),
+      );
+      factoryA.current.emit(MediaEventKind.firstFrame);
+      await tester.pump();
+      expect(find.byKey(const ValueKey('borrowed-thumbnail')), findsOneWidget);
+      await mouse.moveTo(const Offset(1, 1));
+      await tester.pump();
+      expect(find.byKey(const ValueKey('borrowed-thumbnail')), findsNothing);
+      tester.widget<OutlinedButton>(node).focusNode!.requestFocus();
+      await tester.pump();
+      expect(find.byKey(const ValueKey('borrowed-thumbnail')), findsOneWidget);
+      expect(factoryA.link.starts, [SessionOperation.watch]);
+      expect(sourceListCallsA, 0);
+      await tester.runAsync(remoteA.stop);
+      await tester.pump();
+      expect(find.byKey(const ValueKey('borrowed-thumbnail')), findsNothing);
+      expect(tester.takeException(), isNull);
+      await mouse.removePointer();
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(() async {
+        await remoteA.shutdown();
+        await remoteB.shutdown();
+      });
+    },
+  );
+
+  Matcher cleanupFailure() => throwsA(
+    isA<SessionFailure>().having(
+      (failure) => failure.code,
+      'code',
+      'media_cleanup_failed',
+    ),
+  );
+
+  testWidgets(
+    'incoming adoption notified into shutdown leaves no subscription or permission timer',
+    (tester) async {
+      build();
+      final incoming = _FakePicture(
+        id: 'incoming-shutdown-on-notify',
+        operation: SessionOperation.watch,
+        sends: true,
+      )..stopGate = Completer<void>();
+      final stream = _CancelOnceStream(incoming.events, failFirstCancel: false);
+      incoming.eventStreamOverride = stream;
+      Future<void>? shutting;
+      var requested = false;
+      void listener() {
+        if (requested || !remoteB.occupied) return;
+        requested = true;
+        shutting = remoteB.shutdown();
+      }
+
+      remoteB.addListener(listener);
+      factoryB.deliver(incoming);
+      remoteB.removeListener(listener);
+      expect(requested, isTrue);
+      expect(stream.listeners, 1);
+      expect(stream.cancellations, 1);
+      expect(incoming.stops, 1);
+      expect(remoteB.sending, isFalse);
+      expect(factoryB.link.closeCalls, 1);
+      incoming.emit(MediaEventKind.firstFrame);
+      incoming.emit(MediaEventKind.statistics, bitsPerSecond: 2000);
+      expect(remoteB.phase, isNot(RemotePhase.active));
+      expect(remoteB.bitsPerSecond, isNull);
+      var shutdownCompleted = false;
+      unawaited(shutting!.then<void>((_) => shutdownCompleted = true));
+      incoming.stopGate!.complete();
+      // Cleanup crosses the real connection fixture's zone and the widget
+      // test's fake clock. Let the real event loop progress before draining
+      // fake microtasks; awaiting that future directly can deadlock the test.
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.pump();
+      expect(shutdownCompleted, isTrue);
+      // Flutter's widget-test invariant also rejects any permission/deadline
+      // timer created after the synchronous shutdown listener returned.
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(stream.cancellations, 1);
+      expect(incoming.stops, 1);
+      expect(remoteB.occupied, isFalse);
+      expect(remoteB.cleanupFailed, isFalse);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  test(
+    'ordinary stop retries a rejected orphan and unblocks local preview',
+    () async {
+      build();
+      previewActive = true;
+      final orphan = _FakePicture(
+        id: 'preview-busy-retained-orphan',
+        operation: SessionOperation.cast,
+        sends: false,
+      )..failStop = true;
+      factoryA.deliver(orphan);
+      expect(remoteA.session, isNull);
+      expect(remoteA.occupied, isTrue);
+      await waitFor(() => remoteA.cleanupFailed);
+      expect(orphan.stopReasons, [VideoEndReason.busy]);
+      previewActive = false;
+      final engine = FakePreviewEngine();
+      final preview = PreviewController(
+        platformA,
+        engine,
+        blockedByRemotePicture: () => remoteA.occupied,
+      );
+      try {
+        await preview.start();
+        expect(preview.error, contains('单画面预算'));
+        expect(preview.active, isFalse);
+        expect(engine.starts, 0);
+        orphan.failStop = false;
+        await remoteA.stop();
+        expect(orphan.stops, 2);
+        expect(orphan.stopped, isTrue);
+        expect(remoteA.occupied, isFalse);
+        expect(remoteA.cleanupFailed, isFalse);
+        // Retrying cleanup is an ordinary stop, not permanent process shutdown.
+        expect(remoteA.offeredOperations, {'watch', 'cast'});
+        await preview.start();
+        expect(engine.starts, 1);
+        expect(preview.active, isTrue);
+      } finally {
+        await preview.stop();
+        preview.dispose();
+      }
+    },
+  );
+
+  for (final shuttingDown in [false, true]) {
+    test(
+      'a synchronous listener reenters ${shuttingDown ? 'shutdown' : 'stop'} through the same pending future',
+      () async {
+        build();
+        await remoteA.start(
+          SessionOperation.watch,
+          peerKey: a.sessions.single.peerKey,
+        );
+        final picture = factoryA.current;
+        final link = factoryA.link;
+        picture.emit(MediaEventKind.firstFrame);
+        picture.stopGate = Completer<void>();
+        if (shuttingDown) link.closeGate = Completer<void>();
+        Future<void> release() =>
+            shuttingDown ? remoteA.shutdown() : remoteA.stop();
+        Future<void>? nested;
+        var reentered = false;
+        void listener() {
+          if (reentered) return;
+          reentered = true;
+          nested = release();
+        }
+
+        remoteA.addListener(listener);
+        final original = release();
+        remoteA.removeListener(listener);
+        expect(reentered, isTrue);
+        expect(nested, same(original));
+        await waitFor(() => picture.stops == 1);
+        expect(link.closeCalls, shuttingDown ? 1 : 0);
+        picture.stopGate!.complete();
+        link.closeGate?.complete();
+        await original;
+        expect(picture.stops, 1);
+        expect(remoteA.occupied, isFalse);
+        expect(remoteA.cleanupFailed, isFalse);
+      },
+    );
+  }
+
+  test('shutdown inside the first start notification prevents late link creation and waits for that start', () async {
+    build();
+    final originalLink = factoryA.link;
+    Future<void>? shutting;
+    var requested = false;
+    void listener() {
+      if (requested || !remoteA.busy) return;
+      requested = true;
+      shutting = remoteA.shutdown();
+    }
+
+    remoteA.addListener(listener);
+    final starting = remoteA.start(
+      SessionOperation.watch,
+      peerKey: a.sessions.single.peerKey,
+    );
+    remoteA.removeListener(listener);
+    expect(requested, isTrue);
+    expect(shutting, isNotNull);
+    expect(factoryA.links, [same(originalLink)]);
+    expect(originalLink.starts, isEmpty);
+    var startCompleted = false;
+    final startCompletion = starting.then((_) => startCompleted = true);
+    await shutting!;
+    expect(startCompleted, isTrue);
+    await startCompletion;
+    expect(factoryA.links, [same(originalLink)]);
+    expect(originalLink.starts, isEmpty);
+    expect(originalLink.closeCalls, 1);
+    expect(factoryA.delivered, isEmpty);
+    expect(remoteA.occupied, isFalse);
+    expect(remoteA.busy, isFalse);
+    expect(remoteA.offeredOperations, isEmpty);
+  });
+
+  test('subscription cancellation failure still stops the picture and stays retryable by shutdown', () async {
+    build();
+    final picture = _FakePicture(
+      id: 'subscription-cleanup',
+      operation: SessionOperation.cast,
+      sends: false,
+    );
+    final stream = _CancelOnceStream(picture.events);
+    picture.eventStreamOverride = stream;
+    factoryA.deliver(picture);
+    picture.emit(MediaEventKind.firstFrame);
+    expect(remoteA.receiving, isTrue);
+    await expectLater(remoteA.shutdown(), cleanupFailure());
+    expect(stream.cancellations, 1);
+    expect(picture.stops, 1);
+    expect(picture.stopped, isTrue);
+    expect(remoteA.receiving, isFalse);
+    expect(remoteA.cleanupFailed, isTrue);
+    expect(remoteA.occupied, isTrue);
+    await remoteA.shutdown();
+    expect(stream.cancellations, 2);
+    expect(remoteA.cleanupFailed, isFalse);
+    expect(remoteA.occupied, isFalse);
+    expect(factoryA.link.closeCalls, 1);
+  });
+
+  test('shutdown gates display and admission synchronously and waits for both native owners', () async {
+    build();
+    final peer = a.sessions.single.peerKey;
+    await remoteA.start(SessionOperation.watch, peerKey: peer);
+    final picture = factoryA.current;
+    final link = factoryA.link;
+    picture.emit(MediaEventKind.transportReady);
+    picture.emit(MediaEventKind.firstFrame);
+    picture.emit(
+      MediaEventKind.statistics,
+      transportPath: MediaTransportPath.direct,
+      roundTripTime: const Duration(milliseconds: 12),
+      bitsPerSecond: 1000,
+      frameWidth: 640,
+      frameHeight: 360,
+    );
+    picture.stopGate = Completer<void>();
+    link.closeGate = Completer<void>();
+    final shutting = remoteA.shutdown();
+    expect(remoteA.shutdown(), same(shutting));
+    expect(remoteA.offeredOperations, isEmpty);
+    expect(remoteA.operationsFor(peer), isEmpty);
+    expect(remoteA.phase, isNot(RemotePhase.active));
+    expect(remoteA.receiving, isFalse);
+    expect(remoteA.transportReady, isFalse);
+    expect(remoteA.transportPath, isNull);
+    expect(remoteA.roundTripTime, isNull);
+    expect(remoteA.bitsPerSecond, isNull);
+    expect(remoteA.frameWidth, isNull);
+    expect(remoteA.frameHeight, isNull);
+    var completed = false;
+    final completion = shutting.then((_) => completed = true);
+    await waitFor(() => picture.stops == 1 && link.closeCalls == 1);
+    await remoteA.start(SessionOperation.watch, peerKey: peer);
+    expect(link.starts, [SessionOperation.watch]);
+    picture.emit(MediaEventKind.firstFrame);
+    picture.emit(MediaEventKind.statistics, bitsPerSecond: 9999);
+    expect(remoteA.phase, isNot(RemotePhase.active));
+    expect(remoteA.bitsPerSecond, isNull);
+    expect(completed, isFalse);
+
+    picture.stopGate!.complete();
+    await waitFor(() => picture.stopped);
+    expect(completed, isFalse, reason: 'The link still owns native cleanup.');
+    link.closeGate!.complete();
+    await completion;
+    expect(remoteA.occupied, isFalse);
+    expect(remoteA.cleanupFailed, isFalse);
+    await remoteA.shutdown();
+    await remoteA.start(SessionOperation.cast, peerKey: peer);
+    expect(link.starts, [SessionOperation.watch]);
+    expect(link.closeCalls, 1);
+    expect(picture.stops, 1);
+  });
+
+  test(
+    'shutdown joins an already pending stop instead of releasing twice',
+    () async {
+      build();
+      await remoteA.start(
+        SessionOperation.watch,
+        peerKey: a.sessions.single.peerKey,
+      );
+      final picture = factoryA.current;
+      picture.emit(MediaEventKind.firstFrame);
+      picture.stopGate = Completer<void>();
+      final stopping = remoteA.stop();
+      await waitFor(() => picture.stops == 1);
+      final shutting = remoteA.shutdown();
+      expect(remoteA.shutdown(), same(shutting));
+      var completed = false;
+      final completion = shutting.then((_) => completed = true);
+      await Future<void>.delayed(Duration.zero);
+      expect(completed, isFalse);
+      expect(picture.stops, 1);
+      picture.stopGate!.complete();
+      await stopping;
+      await completion;
+      expect(picture.stops, 1);
+      expect(factoryA.link.closeCalls, 1);
+      expect(remoteA.occupied, isFalse);
+    },
+  );
+
+  test(
+    'shutdown waits for a pending start and its late picture cleanup',
+    () async {
+      build();
+      final link = factoryA.link;
+      link.gate = Completer<void>();
+      link.pictureStopGate = Completer<void>();
+      final starting = remoteA.start(
+        SessionOperation.watch,
+        peerKey: a.sessions.single.peerKey,
+      );
+      await waitFor(() => link.starts.isNotEmpty);
+      final shutting = remoteA.shutdown();
+      var completed = false;
+      final completion = shutting.then((_) => completed = true);
+      await Future<void>.delayed(Duration.zero);
+      expect(completed, isFalse);
+      expect(link.closeCalls, 1);
+      expect(factoryA.delivered, isEmpty);
+
+      link.gate!.complete();
+      await waitFor(() => link.picture != null && link.picture!.stops == 1);
+      final late = link.picture!;
+      late.emit(MediaEventKind.firstFrame);
+      expect(remoteA.receiving, isFalse);
+      expect(remoteA.phase, isNot(RemotePhase.active));
+      expect(
+        completed,
+        isFalse,
+        reason: 'The late native owner has not stopped.',
+      );
+      link.pictureStopGate!.complete();
+      await starting;
+      await completion;
+      expect(late.stopped, isTrue);
+      expect(late.stops, 1);
+      expect(remoteA.occupied, isFalse);
+      expect(remoteA.cleanupFailed, isFalse);
+    },
+  );
+
+  test(
+    'shutdown reports an owned cleanup failure and retries its retained owner',
+    () async {
+      build();
+      await remoteA.start(
+        SessionOperation.watch,
+        peerKey: a.sessions.single.peerKey,
+      );
+      final picture = factoryA.current;
+      picture.emit(MediaEventKind.firstFrame);
+      picture.failStop = true;
+      await expectLater(remoteA.shutdown(), cleanupFailure());
+      expect(remoteA.cleanupFailed, isTrue);
+      expect(remoteA.occupied, isTrue);
+      expect(remoteA.receiving, isFalse);
+      expect(picture.stops, 1);
+      picture.failStop = false;
+      await remoteA.shutdown();
+      expect(picture.stops, 2);
+      expect(remoteA.cleanupFailed, isFalse);
+      expect(remoteA.occupied, isFalse);
+      expect(remoteA.offeredOperations, isEmpty);
+    },
+  );
+
+  test(
+    'shutdown waits for a disconnected link already being retired',
+    () async {
+      build();
+      final link = factoryA.link;
+      link.closeGate = Completer<void>();
+      await a.disconnectAll();
+      await waitFor(() => link.closeCalls == 1);
+      final shutting = remoteA.shutdown();
+      var completed = false;
+      final completion = shutting.then((_) => completed = true);
+      await Future<void>.delayed(Duration.zero);
+      expect(completed, isFalse);
+      expect(link.closeCalls, 1);
+      link.closeGate!.complete();
+      await completion;
+      expect(link.closeCalls, 1);
+      expect(remoteA.cleanupFailed, isFalse);
+    },
+  );
+
+  test(
+    'a retired link remains owned after failed close and shutdown can retry',
+    () async {
+      build();
+      final link = factoryA.link;
+      link.failClose = true;
+      await a.disconnectAll();
+      await waitFor(() => link.closeCalls == 1 && remoteA.cleanupFailed);
+      await expectLater(remoteA.shutdown(), cleanupFailure());
+      expect(link.closeCalls, 2);
+      expect(remoteA.cleanupFailed, isTrue);
+      link.failClose = false;
+      await remoteA.shutdown();
+      expect(link.closeCalls, 3);
+      expect(remoteA.cleanupFailed, isFalse);
+    },
+  );
+
+  for (final previewOccupied in [true, false]) {
+    test(
+      'shutdown retains a rejected ${previewOccupied ? 'preview-busy' : 'other-operation'} orphan when cleanup fails',
+      () async {
+        build();
+        if (previewOccupied) {
+          previewActive = true;
+        } else {
+          await remoteA.start(
+            SessionOperation.watch,
+            peerKey: a.sessions.single.peerKey,
+          );
+          factoryA.current.emit(MediaEventKind.firstFrame);
+        }
+        final owned = remoteA.session;
+        final orphan = _FakePicture(
+          id: 'rejected-orphan',
+          operation: SessionOperation.cast,
+          sends: false,
+        )..failStop = true;
+        factoryA.deliver(orphan);
+        await waitFor(() => orphan.stops == 1 && remoteA.cleanupFailed);
+        expect(orphan.stopReasons, [VideoEndReason.busy]);
+        expect(remoteA.session, same(owned));
+        await expectLater(remoteA.shutdown(), cleanupFailure());
+        expect(orphan.stops, 2);
+        expect(remoteA.cleanupFailed, isTrue);
+        orphan.failStop = false;
+        await remoteA.shutdown();
+        expect(orphan.stops, 3);
+        expect(orphan.stopped, isTrue);
+        expect(remoteA.occupied, isFalse);
+        expect(remoteA.cleanupFailed, isFalse);
+      },
+    );
+  }
+
+  test(
+    'shutdown owns a late rejected adoption and preserves its failed cleanup',
+    () async {
+      build();
+      final link = factoryA.link;
+      link.closeGate = Completer<void>();
+      final shutting = remoteA.shutdown();
+      final rejected = expectLater(shutting, cleanupFailure());
+      final orphan = _FakePicture(
+        id: 'late-during-shutdown',
+        operation: SessionOperation.cast,
+        sends: false,
+      )..failStop = true;
+      factoryA.deliver(orphan, via: link);
+      await waitFor(() => orphan.stops == 1 && remoteA.cleanupFailed);
+      expect(remoteA.session, isNull);
+      expect(remoteA.receiving, isFalse);
+      orphan.emit(MediaEventKind.firstFrame);
+      expect(remoteA.phase, isNot(RemotePhase.active));
+      link.closeGate!.complete();
+      await rejected;
+      expect(remoteA.cleanupFailed, isTrue);
+      orphan.failStop = false;
+      await remoteA.shutdown();
+      expect(orphan.stops, 2);
+      expect(orphan.stopped, isTrue);
+      expect(remoteA.cleanupFailed, isFalse);
+    },
+  );
+
+  test('shutdown permanently blocks new source and playback work', () async {
+    build();
+    final peer = a.sessions.single.peerKey;
+    await remoteA.start(SessionOperation.cast, peerKey: peer);
+    final picture = factoryA.current;
+    picture.emit(MediaEventKind.firstFrame);
+    await remoteA.loadSourceChoices();
+    expect(remoteA.sourceChoices, isNotEmpty);
+    final lists = sourceListCallsA;
+    picture.stopGate = Completer<void>();
+    final shutting = remoteA.shutdown();
+    expect(remoteA.canChangeSource, isFalse);
+    expect(remoteA.sourceChoices, isEmpty);
+    await remoteA.loadSourceChoices();
+    await remoteA.changeSource(sourcesA.single);
+    await remoteA.pause();
+    await remoteA.resume();
+    await remoteA.start(SessionOperation.cast, peerKey: peer);
+    expect(sourceListCallsA, lists);
+    expect(picture.changes, isEmpty);
+    expect(picture.resumes, 0);
+    expect(factoryA.link.starts, [SessionOperation.cast]);
+    picture.stopGate!.complete();
+    await shutting;
+    await remoteA.loadSourceChoices();
+    await remoteA.changeSource(sourcesA.single);
+    await remoteA.start(SessionOperation.cast, peerKey: peer);
+    expect(sourceListCallsA, lists);
+    expect(picture.changes, isEmpty);
+    expect(factoryA.link.starts, [SessionOperation.cast]);
+  });
+
+  for (final resuming in [false, true]) {
+    test(
+      'late ${resuming ? 'resume' : 'pause'} failure cannot alter the next picture',
+      () async {
+        build();
+        final peer = a.sessions.single.peerKey;
+        await remoteA.start(SessionOperation.watch, peerKey: peer);
+        final previous = factoryA.current;
+        previous.emit(MediaEventKind.firstFrame);
+        if (resuming) previous.emit(MediaEventKind.paused);
+        previous.playbackGate = Completer<void>();
+        previous.failPlayback = true;
+        final pending = resuming ? remoteA.resume() : remoteA.pause();
+        await remoteA.stop();
+        await remoteA.start(SessionOperation.watch, peerKey: peer);
+        final current = factoryA.current;
+        current.emit(MediaEventKind.firstFrame);
+        current.emit(MediaEventKind.statistics, bitsPerSecond: 1234);
+        previous.playbackGate!.complete();
+        await pending;
+        expect(remoteA.session, same(current));
+        expect(remoteA.phase, RemotePhase.active);
+        expect(remoteA.error, isNull);
+        expect(remoteA.bitsPerSecond, 1234);
+        expect(current.stops, 0);
+      },
+    );
+  }
+
+  test('peer evidence is separate, role bound, expires and cannot establish first frame', () async {
+    build(statisticsLifetime: const Duration(milliseconds: 30));
+    await remoteA.start(
+      SessionOperation.cast,
+      peerKey: a.sessions.single.peerKey,
+    );
+    final picture = factoryA.current;
+    picture.emit(MediaEventKind.waitingFirstFrame);
+    picture.emit(
+      MediaEventKind.peerFrameProgress,
+      frameProgress: receiverProgress(),
+    );
+    expect(remoteA.peerFrameProgress!.sequence, 2);
+    expect(remoteA.frameProgress, isNull);
+    expect(remoteA.phase, RemotePhase.waitingFirstFrame);
+    picture.emit(
+      MediaEventKind.peerFrameProgress,
+      revision: 1,
+      frameProgress: const MediaFrameProgress.unknown(MediaFrameStage.receiver),
+    );
+    expect(remoteA.peerFrameProgress!.sequence, 2);
+    picture.emit(
+      MediaEventKind.peerFrameProgress,
+      frameProgress: const MediaFrameProgress.unknown(MediaFrameStage.capture),
+    );
+    expect(remoteA.peerFrameProgress!.sequence, 2);
+    await waitFor(() => remoteA.peerFrameProgress == null);
+    picture.emit(
+      MediaEventKind.peerFrameProgress,
+      frameProgress: receiverProgress(),
+    );
+    remoteA.clearFrameProgress();
+    expect(remoteA.peerFrameProgress, isNull);
+    picture.emit(MediaEventKind.failed, failureCode: 'media_frames_stalled');
+    expect(remoteA.error, contains('未恢复解码'));
+    await remoteA.stop();
+    expect(remoteA.peerFrameProgress, isNull);
+  });
+
+  test('frame evidence cannot establish first frame and expires independently of statistics', () async {
+    build(statisticsLifetime: const Duration(milliseconds: 30));
+    await remoteA.start(
+      SessionOperation.watch,
+      peerKey: a.sessions.single.peerKey,
+    );
+    final picture = factoryA.current;
+    picture.emit(MediaEventKind.waitingFirstFrame);
+    picture.emit(
+      MediaEventKind.frameProgress,
+      frameProgress: receiverProgress(),
+    );
+    expect(remoteA.frameProgress!.sequence, 2);
+    expect(remoteA.phase, RemotePhase.waitingFirstFrame);
+    picture.emit(MediaEventKind.statistics, bitsPerSecond: 1000);
+    expect(remoteA.frameProgress!.sequence, 2);
+    expect(remoteA.bitsPerSecond, 1000);
+    await waitFor(() => remoteA.frameProgress == null);
+    expect(picture.stops, 0);
+  });
+
+  test(
+    'pause, future and old revisions cannot refresh frame evidence',
+    () async {
+      build();
+      await remoteA.start(
+        SessionOperation.watch,
+        peerKey: a.sessions.single.peerKey,
+      );
+      final picture = factoryA.current;
+      picture.emit(MediaEventKind.firstFrame);
+      picture.emit(
+        MediaEventKind.frameProgress,
+        frameProgress: receiverProgress(),
+      );
+      picture.emit(MediaEventKind.paused);
+      expect(remoteA.frameProgress, isNull);
+      picture.emit(
+        MediaEventKind.frameProgress,
+        frameProgress: receiverProgress(),
+      );
+      expect(remoteA.frameProgress, isNull);
+      await remoteA.resume();
+      for (final revision in [0, 2]) {
+        picture.emit(
+          MediaEventKind.frameProgress,
+          revision: revision,
+          frameProgress: receiverProgress(),
+        );
+        expect(remoteA.frameProgress, isNull);
+      }
+      picture.emit(
+        MediaEventKind.frameProgress,
+        revision: 1,
+        frameProgress: receiverProgress(),
+      );
+      expect(remoteA.frameProgress!.sequence, 2);
+      expect(remoteA.phase, RemotePhase.waitingFirstFrame);
+      await remoteA.stop();
+      expect(remoteA.frameProgress, isNull);
+    },
+  );
+
+  testWidgets(
+    'frame wording distinguishes decoding from display and clears on window resume',
+    (tester) async {
+      build();
+      await tester.runAsync(
+        () => remoteA.start(
+          SessionOperation.watch,
+          peerKey: a.sessions.single.peerKey,
+        ),
+      );
+      final picture = factoryA.current;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: AnimatedBuilder(
+            animation: remoteA,
+            builder: (_, _) => RemotePicturePanel(controller: remoteA),
+          ),
+        ),
+      );
+      picture.emit(MediaEventKind.firstFrame);
+      picture.emit(
+        MediaEventKind.frameProgress,
+        frameProgress: receiverProgress(),
+      );
+      await tester.pump();
+      expect(find.text('接收端最近已解码，尚未消费最新画面。'), findsOneWidget);
+      picture.emit(
+        MediaEventKind.peerFrameProgress,
+        frameProgress: MediaFrameProgress(
+          stage: MediaFrameStage.capture,
+          active: true,
+          sequence: 1,
+          age: const Duration(seconds: 30),
+          outputSequence: 2,
+          outputAge: const Duration(seconds: 20),
+          sourceUnchanged: true,
+        ),
+      );
+      await tester.pump();
+      expect(find.text('对端来源曾未变化，当前状态待确认。'), findsOneWidget);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump();
+      expect(remoteA.frameProgress, isNull);
+      expect(find.text('本机接收帧状态：未测。'), findsOneWidget);
+      expect(remoteA.peerFrameProgress, isNull);
+      expect(find.text('对端帧状态：未测。'), findsOneWidget);
+      expect(picture.stops, 0);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  test(
+    'statistics do not establish presentation and missing values clear',
+    () async {
+      build();
+      await remoteA.start(
+        SessionOperation.watch,
+        peerKey: a.sessions.single.peerKey,
+      );
+      final picture = factoryA.current;
+      picture.emit(MediaEventKind.waitingFirstFrame);
+      picture.emit(
+        MediaEventKind.statistics,
+        transportPath: MediaTransportPath.relay,
+        roundTripTime: const Duration(milliseconds: 24),
+        bitsPerSecond: 800000,
+      );
+      expect(remoteA.transportPath, MediaTransportPath.relay);
+      expect(remoteA.roundTripTime, const Duration(milliseconds: 24));
+      expect(remoteA.bitsPerSecond, 800000);
+      expect(remoteA.transportReady, isFalse);
+      expect(remoteA.phase, RemotePhase.waitingFirstFrame);
+      picture.emit(MediaEventKind.statistics);
+      expect(remoteA.transportPath, isNull);
+      expect(remoteA.roundTripTime, isNull);
+      expect(remoteA.bitsPerSecond, isNull);
+      expect(remoteA.phase, RemotePhase.waitingFirstFrame);
+    },
+  );
+
+  test(
+    'expired statistics become unmeasured without ending a picture',
+    () async {
+      build(statisticsLifetime: const Duration(milliseconds: 30));
+      await remoteA.start(
+        SessionOperation.watch,
+        peerKey: a.sessions.single.peerKey,
+      );
+      final picture = factoryA.current;
+      picture.emit(MediaEventKind.firstFrame);
+      picture.emit(
+        MediaEventKind.statistics,
+        transportPath: MediaTransportPath.direct,
+        bitsPerSecond: 0,
+      );
+      expect(
+        remoteA.bitsPerSecond,
+        0,
+      ); // Measured idle traffic, not a missing value.
+      await waitFor(() => remoteA.bitsPerSecond == null);
+      expect(remoteA.transportPath, isNull);
+      expect(remoteA.phase, RemotePhase.active);
+      expect(picture.stops, 0);
+    },
+  );
+
+  test(
+    'pause and revision changes clear statistics and reject stale samples',
+    () async {
+      build();
+      await remoteA.start(
+        SessionOperation.watch,
+        peerKey: a.sessions.single.peerKey,
+      );
+      final picture = factoryA.current;
+      picture.emit(MediaEventKind.firstFrame);
+      picture.emit(
+        MediaEventKind.statistics,
+        transportPath: MediaTransportPath.relay,
+        bitsPerSecond: 1000,
+      );
+      picture.emit(MediaEventKind.paused);
+      expect(remoteA.bitsPerSecond, isNull);
+      picture.emit(MediaEventKind.statistics, bitsPerSecond: 2000);
+      expect(remoteA.bitsPerSecond, isNull);
+      await remoteA.resume();
+      picture.emit(MediaEventKind.statistics, revision: 0, bitsPerSecond: 3000);
+      picture.emit(MediaEventKind.statistics, revision: 2, bitsPerSecond: 4000);
+      expect(remoteA.bitsPerSecond, isNull);
+      picture.emit(MediaEventKind.statistics, revision: 1, bitsPerSecond: 5000);
+      expect(remoteA.bitsPerSecond, 5000);
+      expect(remoteA.phase, RemotePhase.waitingFirstFrame);
+      picture.emit(MediaEventKind.waitingFirstFrame, revision: 2);
+      expect(remoteA.bitsPerSecond, isNull);
+    },
+  );
+
+  test('failed cleanup cannot retain or revive statistics', () async {
+    build();
+    await remoteA.start(
+      SessionOperation.watch,
+      peerKey: a.sessions.single.peerKey,
+    );
+    final picture = factoryA.current;
+    picture.emit(MediaEventKind.firstFrame);
+    picture.emit(MediaEventKind.statistics, bitsPerSecond: 1000);
+    picture.failStop = true;
+    await remoteA.stop();
+    expect(remoteA.cleanupFailed, isTrue);
+    expect(remoteA.bitsPerSecond, isNull);
+    picture.emit(MediaEventKind.statistics, bitsPerSecond: 2000);
+    expect(remoteA.bitsPerSecond, isNull);
+    picture.failStop = false;
+    await remoteA.stop();
   });
 
   test(
@@ -405,8 +1550,15 @@ void main() {
       picture.emit(MediaEventKind.waitingFirstFrame);
       expect(remoteA.phase, RemotePhase.waitingFirstFrame);
       // No presentation receipt arrives, so the bounded policy ends the session
-      // and the field never reports a successful share.
-      await waitFor(() => !remoteA.occupied);
+      // even while transport statistics continue arriving.
+      final samples = Timer.periodic(const Duration(milliseconds: 20), (_) {
+        picture.emit(MediaEventKind.statistics, bitsPerSecond: 4000);
+      });
+      try {
+        await waitFor(() => !remoteA.occupied);
+      } finally {
+        samples.cancel();
+      }
       expect(remoteA.phase, RemotePhase.failed);
       expect(remoteA.error, contains('未呈现共享画面'));
       expect(picture.stops, greaterThanOrEqualTo(1));
@@ -697,7 +1849,10 @@ void main() {
           expect(incoming.stopped, isTrue);
           expect(incoming.stops, 1);
           expect(incoming.stopReasons, [VideoEndReason.busy]);
-          expect(remoteB.occupied, isFalse);
+          // Synchronous stop gates capture, but its completion must still be
+          // observed before the retained cleanup owner releases the budget.
+          expect(remoteB.occupied, isTrue);
+          await waitFor(() => !remoteB.occupied);
           expect(remoteB.session, isNull);
           expect(engine.stops, 0);
           if (!active) engine.startCompleter!.complete();
@@ -727,7 +1882,16 @@ void main() {
       sourcesA = [...sourcesA, window];
       await remoteA.loadSourceChoices();
       expect(remoteA.sourceChoices, contains(window));
+      picture.emit(
+        MediaEventKind.statistics,
+        transportPath: MediaTransportPath.relay,
+        bitsPerSecond: 1000,
+      );
       await remoteA.changeSource(window);
+      expect(remoteA.bitsPerSecond, isNull);
+      expect(remoteA.transportPath, isNull);
+      picture.emit(MediaEventKind.statistics, revision: 0, bitsPerSecond: 2000);
+      expect(remoteA.bitsPerSecond, isNull);
       expect(picture.changes, [window]);
       expect(remoteA.localSource, window);
       expect(remoteA.phase, RemotePhase.waitingFirstFrame);
@@ -1090,6 +2254,8 @@ void main() {
     picture.emit(MediaEventKind.connecting);
     await tester.pump();
     expect(find.textContaining('正在建立媒体通道'), findsOneWidget);
+    expect(find.text('画面尺寸：未测'), findsOneWidget);
+    expect(find.text('媒体路径：未测 · 往返时延：未测 · 接收速率：未测'), findsOneWidget);
     // A receiving session keeps its view mounted; without it no receipt is sent.
     expect(find.byKey(const ValueKey('remote-view')), findsOneWidget);
     picture.emit(MediaEventKind.transportReady);
@@ -1100,6 +2266,20 @@ void main() {
     picture.emit(MediaEventKind.firstFrame);
     await tester.pump();
     expect(find.textContaining('已收到对端画面'), findsOneWidget);
+    picture.emit(
+      MediaEventKind.statistics,
+      transportPath: MediaTransportPath.direct,
+      roundTripTime: const Duration(milliseconds: 12),
+      bitsPerSecond: 800000,
+      frameWidth: 640,
+      frameHeight: 360,
+    );
+    await tester.pump();
+    expect(find.text('画面尺寸：640 × 360'), findsOneWidget);
+    expect(
+      find.text('媒体路径：直连 · 往返时延：12.0 ms · 接收速率：800.0 kbit/s'),
+      findsOneWidget,
+    );
     expect(find.text('更换分享来源'), findsNothing);
     // Release the session inside the test body so no timer outlives the tree.
     await tester.runAsync(() => remoteA.stop());

@@ -1,10 +1,14 @@
 export 'package:share_hub_session_api/share_hub_session_api.dart';
 
 export 'src/remote_session.dart';
+export 'src/remote_media_provider.dart';
+export 'src/frame_progress.dart';
+export 'src/video_frame_probe.dart';
 export 'src/video_description.dart';
 export 'src/video_ice_candidate.dart';
 export 'src/video_presentation_receipt.dart';
 export 'src/video_session_messages.dart';
+export 'src/video_recovery.dart';
 export 'src/video_playback.dart';
 
 import 'package:flutter/widgets.dart';
