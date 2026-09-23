@@ -148,7 +148,14 @@ sealed class SessionAuthorization {
   final int transportGeneration;
   int get expiresMicros => _owner.expiresMicros;
   GrantRole get sender;
-  Future<void> check() => _owner._check(_epoch, GrantPhase.active);
+  Future<void> check() async {
+    await _owner._check(_epoch, GrantPhase.active);
+  }
+
+  /// A checked sample in this exact permit's continuous-clock domain. Native
+  /// adapters use it for conservative deadline conversion; reading the raw
+  /// endpoint clock would miss rollback detection for that sample.
+  Future<int> readCurrentMicros() => _owner._check(_epoch, GrantPhase.active);
 
   /// Close the microtask gap after awaiting check(), immediately before effects.
   void requireCurrent() {
@@ -254,7 +261,7 @@ final class GrantEndpoint {
   final _hmac = Hmac.sha256();
   final _cipher = AesGcm.with256bits();
 
-  Future<void> _check(int epoch, GrantPhase expected) async {
+  Future<int> _check(int epoch, GrantPhase expected) async {
     void requireEpoch() {
       if (_epoch != epoch || _phase != expected || _root == null) {
         throw const SessionFailure('stale_or_revoked');
@@ -278,6 +285,7 @@ final class GrantEndpoint {
       throw const SessionFailure('expired_or_clock_rollback');
     }
     _lastMicros = now;
+    return now;
   }
 
   void _invalidate(GrantPhase next) {
@@ -292,7 +300,9 @@ final class GrantEndpoint {
   }
 
   /// Hosts poll this with their continuous clock even when no traffic arrives.
-  Future<void> checkValidity() => _check(_epoch, _phase);
+  Future<void> checkValidity() async {
+    await _check(_epoch, _phase);
+  }
 
   void suspend() {
     if (_phase != GrantPhase.revoked) _invalidate(GrantPhase.suspended);

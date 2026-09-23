@@ -137,10 +137,9 @@ void main() {
       expect(seen, same(a));
       expect(seen?.binding, same(binding));
 
-    // Identical public binding bytes are insufficient: membership is by the
-    // authenticated endpoint instance that minted this sealed request.
-    final foreign = GrantRegistry()
-      ..register(endpoint(GrantRole.initiator));
+      // Identical public binding bytes are insufficient: membership is by the
+      // authenticated endpoint instance that minted this sealed request.
+      final foreign = GrantRegistry()..register(endpoint(GrantRole.initiator));
       await expectLater(
         foreign.withVerifiedEndpoint(request, (_) => fail('foreign import')),
         throwsA(isA<SessionFailure>()),
@@ -177,6 +176,31 @@ void main() {
       pending.complete(now);
       await rejected;
       expect(imported, false);
+    },
+  );
+  test(
+    'native clock sample rejects a transient rollback before conversion',
+    () async {
+      var sample = now;
+      a = endpoint(GrantRole.initiator, clock: () async => sample);
+      await resume();
+      final request = await a.authorizeLocal(
+        SessionOperation.watch,
+        'native-clock',
+        '',
+      );
+      expect(await request.readCurrentMicros(), now);
+      sample = now - 1;
+      await expectLater(
+        request.readCurrentMicros(),
+        throwsA(isA<SessionFailure>()),
+      );
+      expect(a.phase, GrantPhase.revoked);
+      sample = now;
+      await expectLater(
+        request.readCurrentMicros(),
+        throwsA(isA<SessionFailure>()),
+      );
     },
   );
   test(
