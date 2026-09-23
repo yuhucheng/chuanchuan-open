@@ -365,7 +365,7 @@ void main() {
       );
       expect(rejected, isNull);
       expect(c.sessions, isEmpty);
-      expect(c.message, contains('连接未建立'));
+      expect(c.message, contains('本地信令地址不可达'));
       expect(c.notice?.kind, ConnectionNoticeKind.problem);
       expect(c.problem, c.message);
     },

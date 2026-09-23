@@ -387,6 +387,8 @@ class ConnectionController extends ChangeNotifier {
             '对端身份与所选设备不一致，请重新发现设备。',
           ConnectionFailure(code: 'invalid_input') => '请输入完整的 6 位纯数字短接码及有效端口。',
           ConnectionFailure(code: 'cancelled') => '连接已取消或握手超时。',
+          ConnectionFailure(code: 'signal_unreachable') =>
+            '本地信令地址不可达，请检查对端接入状态、地址及局域网连接；TURN 不能代替首次短码连接。',
           _ => '连接未建立，请检查短接码、对端接入状态及局域网连通性。',
         });
       }

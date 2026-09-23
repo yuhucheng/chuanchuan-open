@@ -445,11 +445,18 @@ class PairingAttempt {
     final timeout = Timer(handshakeTimeout, cancel);
     try {
       _check();
-      final socket = await Socket.connect(
-        address,
-        port,
-        timeout: const Duration(seconds: 5),
-      );
+      final Socket socket;
+      try {
+        socket = await Socket.connect(
+          address,
+          port,
+          timeout: const Duration(seconds: 5),
+        );
+      } on SocketException {
+        throw const ConnectionFailure('signal_unreachable');
+      } on TimeoutException {
+        throw const ConnectionFailure('signal_unreachable');
+      }
       final wire = _wire = WireChannel(socket);
       _check();
       final nonce = encodeBytes(randomBytes(32));

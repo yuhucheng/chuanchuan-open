@@ -47,4 +47,6 @@ dart test
 
 v2 加密 `connected` 回复带本地选定的 `grantType` 与 `lifetimeSeconds`；发起端必须与自己的产品策略核对，随后连接租约与已认证 grant 使用同一类型和期限。为兼容此前的 v2 对端，缺少 `grantType` 只按 `short-code` 解读，不能由此启用其他类型。当前正式客户端仍只选择 `short-code` / 28800 秒；新类型须先独立批准准入策略，不能由对端报文自行启用。v1 的旧帧格式和八小时行为不变。
 
+首次短码连接在 TCP 尚未建立时若目标地址拒绝、不可达或连接超时，报告 `signal_unreachable`；应用提示检查目标接入状态、地址和本地网络。已经建立 TCP 后的密码/身份/协议失败不使用该诊断，不能把 TURN 凭据误当作首次短码信令的替代路径。
+
 `ConnectionController` 在成功握手后将真实 grant 注册到进程内 `GrantRegistry`，SDK 使用该注册表核验收到的 permit；不根据 UI 布尔值或发现名称签发授权。关闭开关和退出先同步 `revokeAll()`，再等待套接字清理；单连接结束删除对应注册。重新开启生成新码及新上下文。客户端契约样例见 `test/connection_controller_test.dart`，覆盖两端身份、对端注册表隔离、关闭前同步撤销及关闭后主动出站；SDK 消费样例在 SDK 包的 `test/session_contract_test.dart`。这些测试不替代双机、Windows 或后台验收。

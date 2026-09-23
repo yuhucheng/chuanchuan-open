@@ -10,6 +10,29 @@ import 'package:test/test.dart';
 
 void main() {
   test(
+    'unreachable TCP signaling is distinct from a failed code proof',
+    () async {
+      final listener = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      final port = listener.port;
+      await listener.close();
+      final identity = await DeviceIdentity.fromSeed(List.filled(32, 35));
+      await expectLater(
+        PairingAttempt(
+          identity: identity,
+          clock: () async => 1000000,
+        ).connect('127.0.0.1', port, '123456'),
+        throwsA(
+          isA<ConnectionFailure>().having(
+            (error) => error.code,
+            'code',
+            'signal_unreachable',
+          ),
+        ),
+      );
+    },
+  );
+
+  test(
     'v2 pairing binds its lease and grant to the same local policy',
     () async {
       const policy = GrantPolicy(
