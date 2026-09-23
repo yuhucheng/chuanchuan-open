@@ -32,6 +32,7 @@ final class _RelayTransport implements AuxiliaryTransport {
   final nonce = base64Url.encode(List<int>.generate(32, (i) => i + 32));
   Completer<void>? joinGate;
   int forwarded = 0;
+  bool failSendAck = false;
 
   @override
   Future<Map<String, Object?>> post(
@@ -82,6 +83,7 @@ final class _RelayTransport implements AuxiliaryTransport {
       );
       queue[recipient]!.add(body['wire']!);
       forwarded++;
+      if (failSendAck) throw const AuxiliaryFailure('unreachable');
       return {'accepted': true};
     }
     if (path == '/v1/signal/poll') {
@@ -92,7 +94,8 @@ final class _RelayTransport implements AuxiliaryTransport {
       };
     }
     if (path == '/v1/signal/leave') {
-      joined.remove(body['token']);
+      joined.clear();
+      queue.clear();
       return {'closed': true};
     }
     throw StateError(path);
@@ -215,5 +218,41 @@ void main() {
     transport.joinGate!.complete();
     await expectLater(opening, throwsA(isA<AuxiliaryFailure>()));
     expect(transport.joined, isEmpty);
+  });
+
+  test('lost send acknowledgement closes both local and server room', () async {
+    final alice = await DeviceIdentity.fromSeed(List<int>.filled(32, 1));
+    final bob = await DeviceIdentity.fromSeed(List<int>.filled(32, 2));
+    final binding = GrantBinding(
+      id: List<int>.filled(32, 3),
+      initiatorKey: alice.publicKey.bytes,
+      receiverKey: bob.publicKey.bytes,
+    );
+    GrantEndpoint endpoint(GrantRole role) =>
+        GrantEndpoint.fromAuthenticatedPairing(
+          binding: binding,
+          role: role,
+          establishedMicros: 0,
+          recoverySecret: List<int>.filled(32, 4),
+          clock: () async => 0,
+          onInvalidated: () {},
+        );
+    final a = endpoint(GrantRole.initiator), b = endpoint(GrantRole.receiver);
+    final transport = _RelayTransport([alice, bob]);
+    final client = RelayServiceClient(transport);
+    final channel = await client.open(
+      a,
+      alice,
+      cancellation: AuxiliaryCancellation(),
+    );
+    await client.open(b, bob, cancellation: AuxiliaryCancellation());
+    transport.failSendAck = true;
+    await expectLater(
+      channel.sendSealed([1, 2, 3]),
+      throwsA(isA<AuxiliaryFailure>()),
+    );
+    expect(channel.closed, isTrue);
+    expect(transport.joined, isEmpty);
+    expect(transport.forwarded, 1);
   });
 }

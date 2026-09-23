@@ -157,9 +157,9 @@ final class RelaySignalChannel {
     } catch (_) {
       // A lost acknowledgement makes the next sequence ambiguous. Never reuse
       // this channel or guess whether the server accepted the ciphertext.
-      _closed = true;
-      _cancellation.cancel();
-      await _invalidations.cancel();
+      // Leave with a fresh cancellation token so a cancelled request cannot
+      // strand a live server room until its TTL expires.
+      await close();
       rethrow;
     } finally {
       _sending = false;
@@ -188,16 +188,11 @@ final class RelaySignalChannel {
       final envelope = RelaySignalEnvelope.decode(wire);
       _inbox.accept(envelope);
       if (envelope.kind == RelaySignalKind.cancel) {
-        _closed = true;
-        _cancellation.cancel();
-        await _invalidations.cancel();
-        unawaited(close());
+        await close();
       }
       return envelope;
     } catch (_) {
-      _closed = true;
-      _cancellation.cancel();
-      await _invalidations.cancel();
+      await close();
       rethrow;
     } finally {
       _receiving = false;
