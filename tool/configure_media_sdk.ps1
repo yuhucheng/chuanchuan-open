@@ -17,11 +17,15 @@ function Assert-Package([string]$Path, [string]$Name) {
     }
 }
 $project = (Resolve-Path -LiteralPath $ProjectPath).Path
+if (!(Test-Path -LiteralPath $SdkPath -PathType Container)) {
+    throw "SDK package directory is missing: $SdkPath"
+}
 $sdk = (Resolve-Path -LiteralPath $SdkPath).Path
 Assert-Package $project 'share_hub_open'
-Assert-Package $sdk 'share_hub_media_sdk'
+try { Assert-Package $sdk 'share_hub_media_sdk' }
+catch { throw "SDK package layout is invalid: $($_.Exception.Message)" }
 if (!(Test-Path -LiteralPath (Join-Path $sdk 'lib/share_hub_media_sdk.dart') -PathType Leaf)) {
-    throw 'SDK entry library is missing.'
+    throw 'SDK package layout is invalid: entry library is missing.'
 }
 $localRoot = Join-Path $project '.local'
 $sdkRoot = Join-Path $localRoot 'media-sdk'

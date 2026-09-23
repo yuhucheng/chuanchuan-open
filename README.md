@@ -18,17 +18,17 @@ Agent 配置、OpenSpec 和内部计划已迁至独立私有管理仓，本仓�
 
 安装 Flutter 3.47.2 / Dart 3.13.2；Windows 需要 VS 2022 C++ 桌面工具链和 Windows SDK，脚本使用 PowerShell 7；Mac 需要完整 Xcode。
 
-SDK 是必需的构建依赖，标准位置为 `.local/media-sdk/package`。正式 SDK 可按此包布局解压；当前尚未交付正式二进制包或下载地址，本地开发使用已有内部适配包，通过脚本链接到标准位置：
+SDK 是必需的构建依赖，标准位置为 `.local/media-sdk/package`。当前尚未交付正式二进制包、下载地址或已确定的安装格式。以下命令**仅用于有权取得内部开发适配包的开发环境**，通过脚本将该包链接到标准位置：
 
 ```powershell
 ./tool/configure_media_sdk.ps1 -SdkPath /absolute/path/to/share_hub_media_sdk
 flutter analyze --no-pub
 flutter test --no-pub
-flutter build windows --debug --no-pub
-./build/windows/x64/runner/Debug/share_hub.exe
 ```
 
-脚本只建立 SDK 包目录链接并执行 pub get，不复制私有源码，不修改 manifest，不生成另一套 main。已有 SDK 目录或冲突链接不会被覆盖。缺少 SDK 属于依赖未安装，需先准备 SDK；不会退回缺功能版本。已按标准目录解压包时可直接运行 `flutter pub get`。
+在 Windows 开发机运行 `flutter build windows --debug --no-pub`；在 Mac 开发机运行 `flutter build macos --debug --no-pub`。两者均使用 `lib/main.dart`，尚不构成正式 SDK 包的构建或平台验收。
+
+脚本只建立 SDK 包目录链接并执行 pub get，不复制私有源码，不修改 manifest，不生成另一套 main。SDK 路径不存在与包布局错误分别报告；已有 SDK 目录或冲突链接不会被覆盖。缺少 SDK 属于依赖未安装，需先准备 SDK；不会退回缺功能版本。将来正式包的取得、最终目录、校验、平台/API/ABI 兼容和签名步骤，须以实际发布的制品与说明为准；当前不能用内部源码包冒充这些步骤。
 
 若配置在 `pub get` 阶段失败或中断，已建立的正确 SDK 链接会保留，不回滚删除 SDK。处理依赖错误后，以同一 `-SdkPath` 重试即可；切换其他包前脚本仍会拒绝覆盖原链接。可运行 `pwsh -File tool/test_configure_media_sdk.ps1` 验证临时目录中的重复配置、中文/空格路径、失败和中断恢复；该测试使用模拟包及命令，不证明正式二进制或平台加载已验收。
 
@@ -45,15 +45,16 @@ macOS 使用相同 `lib/main.dart`，运行 `flutter build macos --debug --no-pu
 | 唯一客户端入口 | `lib/main.dart`，固定注入 SDK 的 `createPreviewEngine()` |
 | 公共媒体契约 | `packages/share_hub_media_api`，客户端与 SDK 共享 |
 | 媒体实现 | SDK 包；当前内部开发适配器尚不是可分发二进制 SDK |
-| 界面、设备发现 | `lib/ui`、`lib/features/devices`；手动 DNS-SD / Bonjour 发现 |
+| 界面、设备发现 | `lib/ui`、`lib/features/devices`；启动后自动发现，接入开关独立 |
 | 文件准备 | `lib/features/transfers`；macOS 已实现本地选文件和摘要；Windows 系统选择器、令牌读取、摘要与普通退出释放已通过实机验收；尚未发送网络数据 |
 | 平台宿主 | 全部在本仓库的 `windows`、`macos` |
-| 短接码连接 | `packages/share_hub_connection` 与 macOS 设备页已接入；协议测试通过，双机/休眠待验收 |
-| 网络传输、远控、Android | 尚未完成 |
+| 短接码连接 | `packages/share_hub_connection` 已接入桌面场式客户端；协议和本机回环测试通过，双机/休眠待验收 |
+| 远端画面 | 已接入客户端与内部 SDK 的公共组合端口；真实双机、平台矩阵和正式 SDK 制品待验收 |
+| 网络文件传输、远控、Android | 分属后续版本，尚未交付 |
 
 UI 必须显式获得媒体引擎，测试可以注入 fake，但 fake 只存在于测试工具，不用于产品入口。启动应用不会自动采集屏幕，仍需用户选择并开始预览。
 
-SDK 依赖项、锁文件和原生插件注册随正常客户端维护；`.local` 中的包和本机目录链接不提交。SDK 不依赖客户端 UI。SDK 的正式二进制交付、签名与远端会话仍待实现，不能把当前预览适配器当作完整核心。
+SDK 依赖项、锁文件和原生插件注册随正常客户端维护；`.local` 中的包和本机目录链接不提交。SDK 不依赖客户端 UI。SDK 的正式二进制交付、签名及远端会话完整平台验收仍待完成，不能把当前开发适配器当作完整发行核心。
 
 应用身份沿用 `share_hub.exe` / `Software\ShareHub\Client` 和 `dev.sharehub.client`。Windows 已通过选定测试窗口的真实首帧与像素检查，显示器和完整生命周期待验收，当前没有可信发行签名。
 

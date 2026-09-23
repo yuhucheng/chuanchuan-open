@@ -62,11 +62,23 @@ try {
     Assert (!(Test-Path -LiteralPath (Join-Path $f.Project '.local/media-sdk/main.dart'))) 'Unexpected alternate entry'
     Write-Output 'PASS SDK linking is idempotent, handles non-ASCII and space paths, preserves manifest and normal entry'
 
+    $f=Fixture 'missing-sdk'
+    $missing=Join-Path (Split-Path $f.Sdk -Parent) 'not-installed'
+    Reject { & $tool -ProjectPath $f.Project -SdkPath $missing -SkipPubGet } 'SDK package directory is missing'
+    Assert (!(Test-Path -LiteralPath (Join-Path $f.Project '.local'))) 'Missing SDK mutated project'
+    Write-Output 'PASS missing SDK has a distinct diagnostic before mutation'
+
     $f=Fixture 'invalid'
     Set-Content -LiteralPath (Join-Path $f.Sdk 'pubspec.yaml') -Value 'name: wrong_sdk'
     Reject { Configure $f } 'Expected package share_hub_media_sdk'
     Assert (!(Test-Path -LiteralPath (Join-Path $f.Project '.local'))) 'Invalid SDK mutated project'
     Write-Output 'PASS invalid package rejected before mutation'
+
+    $f=Fixture 'missing-entry'
+    Remove-Item -LiteralPath (Join-Path $f.Sdk 'lib/share_hub_media_sdk.dart')
+    Reject { Configure $f } 'SDK package layout is invalid: entry library is missing'
+    Assert (!(Test-Path -LiteralPath (Join-Path $f.Project '.local'))) 'Missing SDK entry mutated project'
+    Write-Output 'PASS missing SDK entry has a distinct layout diagnostic before mutation'
 
     $f=Fixture 'directory'
     $destination=Join-Path $f.Project '.local/media-sdk/package'
