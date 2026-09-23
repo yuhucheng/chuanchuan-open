@@ -9,6 +9,7 @@ export 'src/auxiliary_service.dart'
         HttpsAuxiliaryTransport,
         AuxiliaryServiceClient;
 export 'src/identity.dart' show DeviceIdentity, ConnectionFailure;
+export 'src/channel.dart' show ConnectionWire;
 export 'src/pairing.dart'
     show PairingHost, PairingAttempt, PairingOffer, offerLifetime;
 export 'src/relay_signal_envelope.dart'

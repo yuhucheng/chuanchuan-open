@@ -1,8 +1,11 @@
 import 'dart:async';
+import 'dart:collection';
+import 'dart:convert';
 
 import 'package:share_hub_session_api/share_hub_session_api.dart';
 
 import 'auxiliary_service.dart';
+import 'channel.dart';
 import 'identity.dart';
 import 'relay_room_claim.dart';
 import 'relay_signal_envelope.dart';
@@ -18,6 +21,7 @@ final class RelayServiceClient {
     GrantEndpoint grant,
     DeviceIdentity identity, {
     required AuxiliaryCancellation cancellation,
+    int? generation,
   }) async {
     cancellation.throwIfCancelled();
     await grant.checkValidity();
@@ -28,7 +32,15 @@ final class RelayServiceClient {
     if (encodeBytes(selfKey) != identity.encodedKey) {
       throw const AuxiliaryFailure('identity_mismatch');
     }
-    final claim = RelayRoomClaim.fromBinding(binding, grant.generation);
+    final selectedGeneration = generation ?? grant.generation;
+    if (selectedGeneration < grant.generation ||
+        selectedGeneration > grant.generation + 1 ||
+        (selectedGeneration > grant.generation &&
+            grant.phase != GrantPhase.suspended) ||
+        selectedGeneration > 0xffffffff) {
+      throw const AuxiliaryFailure('invalid_relay_generation');
+    }
+    final claim = RelayRoomClaim.fromBinding(binding, selectedGeneration);
     await AuxiliaryServiceClient(transport)
         .register(identity, cancellation: cancellation);
     cancellation.throwIfCancelled();
@@ -78,6 +90,7 @@ final class RelayServiceClient {
       room,
       token,
       cancellation,
+      ready,
     );
     try {
       await grant.checkValidity();
@@ -101,6 +114,7 @@ final class RelaySignalChannel {
     this.room,
     this._token,
     this._cancellation,
+    this._ready,
   ) : _inbox = RelaySignalInbox(
         room: claim.roomId,
         sender:
@@ -123,18 +137,40 @@ final class RelaySignalChannel {
   final RelaySignalInbox _inbox;
   final RelayRoomClaim claim;
   final String room, _token;
+  final Queue<RelaySignalEnvelope> _buffered = Queue();
   late final StreamSubscription<void> _invalidations;
   int _sequence = 0;
   bool _closed = false, _left = false, _sending = false, _receiving = false;
+  bool _ready;
 
   bool get closed => _closed || _cancellation.isCancelled;
 
-  Future<void> sendSealed(List<int> sealed) async {
+  /// The second member may join after this member. Preserve a first frame
+  /// that races with the readiness poll instead of silently consuming it.
+  Future<void> awaitReady() async {
+    while (!_ready) {
+      if (closed) throw const AuxiliaryFailure('cancelled');
+      final first = await receive();
+      if (first != null) _buffered.add(first);
+    }
+  }
+
+  Future<void> sendSealed(List<int> sealed) =>
+      sendSealedWith((_) async => sealed);
+
+  /// Reserves the relay sequence before the endpoint seals the payload, so
+  /// the end-to-end AEAD nonce and outer replay counter cannot diverge.
+  Future<void> sendSealedWith(
+    Future<List<int>> Function(int sequence) seal,
+  ) async {
     if (closed || _sending) throw const AuxiliaryFailure('cancelled');
     await _grant.checkValidity();
     _cancellation.throwIfCancelled();
     _sending = true;
     try {
+      final sealed = await seal(_sequence);
+      _cancellation.throwIfCancelled();
+      await _grant.checkValidity();
       final wire = RelaySignalEnvelope(
         room: claim.roomId,
         sender: _identity.publicKey.bytes,
@@ -170,6 +206,7 @@ final class RelaySignalChannel {
     if (closed || _receiving) throw const AuxiliaryFailure('cancelled');
     await _grant.checkValidity();
     _cancellation.throwIfCancelled();
+    if (_buffered.isNotEmpty) return _buffered.removeFirst();
     _receiving = true;
     try {
       final response = await _transport.post('/v1/signal/poll', {
@@ -183,6 +220,7 @@ final class RelaySignalChannel {
           response['wire'] is! String) {
         throw const AuxiliaryFailure('invalid_response');
       }
+      _ready = response['ready'] as bool;
       final wire = response['wire'] as String;
       if (wire.isEmpty) return null;
       final envelope = RelaySignalEnvelope.decode(wire);
@@ -248,5 +286,95 @@ final class RelaySignalChannel {
       _cancellation.cancel();
       await _invalidations.cancel();
     }
+  }
+}
+
+/// Adapts one proved relay room to the same bounded JSON frames used by the
+/// authenticated TCP session. The relay sees opaque frame bytes only; the
+/// resume proof and CipherChannel still authenticate the peer and generation.
+final class RelayConnectionWire implements ConnectionWire {
+  RelayConnectionWire.protected(
+    this.channel, {
+    required this._seal,
+    required this._open,
+  });
+  final RelaySignalChannel channel;
+  final Future<List<int>> Function(int, List<int>) _seal, _open;
+  Future<void> _sendTail = Future.value();
+  Object? _failure;
+  bool _closed = false;
+  int _limit = 8192;
+  int _queued = 0;
+
+  @override
+  bool get isClosed => _closed || channel.closed;
+
+  @override
+  void enableSessionFrames() => _limit = 131072;
+
+  @override
+  void send(Map<String, dynamic> message) {
+    if (isClosed || _failure != null) {
+      throw const ConnectionFailure('disconnected');
+    }
+    if (_queued >= 8) throw const ConnectionFailure('rate_limited');
+    final bytes = utf8.encode(jsonEncode(message));
+    if (bytes.isEmpty || bytes.length > _limit) {
+      throw const ConnectionFailure('message_limit');
+    }
+    _queued++;
+    final pending = _sendTail.then(
+      (_) => channel.sendSealedWith((sequence) => _seal(sequence, bytes)),
+    );
+    _sendTail = pending.then<void>(
+      (_) => _queued--,
+      onError: (Object error, StackTrace _) {
+        _queued--;
+        _failure = error;
+        close();
+      },
+    );
+  }
+
+  @override
+  Future<void> flush() async {
+    await _sendTail;
+    if (_failure != null || isClosed) {
+      throw const ConnectionFailure('disconnected');
+    }
+  }
+
+  @override
+  Future<Map<String, dynamic>> next() async {
+    while (!isClosed) {
+      try {
+        final envelope = await channel.receive();
+        if (envelope == null) continue;
+        if (envelope.kind == RelaySignalKind.cancel) {
+          close();
+          break;
+        }
+        final bytes = await _open(envelope.sequence, envelope.payload);
+        if (bytes.isEmpty || bytes.length > _limit) {
+          throw const ConnectionFailure('message_limit');
+        }
+        final decoded = jsonDecode(utf8.decode(bytes));
+        if (decoded is! Map<String, dynamic>) {
+          throw const ConnectionFailure('invalid_message');
+        }
+        return decoded;
+      } catch (_) {
+        close();
+        rethrow;
+      }
+    }
+    throw const ConnectionFailure('disconnected');
+  }
+
+  @override
+  void close() {
+    if (_closed) return;
+    _closed = true;
+    unawaited(channel.close());
   }
 }

@@ -9,6 +9,8 @@ import 'package:share_hub_session_api/share_hub_session_api.dart';
 
 import 'channel.dart';
 import 'identity.dart';
+import 'relay_room_claim.dart';
+import 'relay_service_client.dart';
 
 /// Must advance through sleep and never go backwards. Hosts supply an OS
 /// continuous clock; a process restart discards every authorization.
@@ -42,7 +44,7 @@ class CipherChannel {
     SecretKey? baseReceiveKey,
   }) : _baseSendKey = baseSendKey ?? _sendKey,
        _baseReceiveKey = baseReceiveKey ?? _receiveKey;
-  final WireChannel wire;
+  final ConnectionWire wire;
   final SecretKey _sendKey;
   final SecretKey _receiveKey;
   final SecretKey _baseSendKey, _baseReceiveKey;
@@ -59,7 +61,7 @@ class CipherChannel {
   }
 
   static Future<CipherChannel> create(
-    WireChannel wire,
+    ConnectionWire wire,
     List<int> key,
     List<int> transcript, {
     required bool host,
@@ -86,7 +88,7 @@ class CipherChannel {
   /// not leave the peers on incompatible key chains. Grant proofs authorize
   /// this path; fresh challenges/generation separate every transport's keys.
   Future<CipherChannel> _recover(
-    WireChannel wire,
+    ConnectionWire wire,
     GrantEndpoint endpoint,
     ResumeResponse response,
   ) async {
@@ -264,6 +266,73 @@ class TrustedConnection implements SessionTransport {
       throw const ConnectionFailure('session_unavailable');
     }
     return endpoint;
+  }
+
+  /// The relay transports only AEAD-sealed frames derived from the original
+  /// pairing's process-held directional keys. Its room proof is a rendezvous
+  /// gate; resume still proves the grant and derives new session keys above it.
+  Future<ConnectionWire> openRelayWire(RelaySignalChannel channel) async {
+    if (!canRecover || grant!.phase != GrantPhase.suspended) {
+      throw const ConnectionFailure('recovery_unavailable');
+    }
+    final generation = grant!.generation + 1;
+    if (channel.claim.encode() !=
+        RelayRoomClaim.fromBinding(grant!.binding, generation).encode()) {
+      throw const ConnectionFailure('invalid_relay_claim');
+    }
+    await grant!.checkValidity();
+    final transcript = utf8.encode(
+      jsonEncode(['chuanchuan.connection.relay.v1', channel.room, generation]),
+    );
+    final salt = hashes.sha256.convert(transcript).bytes;
+    final hkdf = Hkdf(hmac: Hmac.sha256(), outputLength: 32);
+    final info = utf8.encode('chuanchuan.connection.relay.frame.v1');
+    final sendKey = await hkdf.deriveKey(
+      secretKey: _channel._baseSendKey,
+      nonce: salt,
+      info: info,
+    );
+    final receiveKey = await hkdf.deriveKey(
+      secretKey: _channel._baseReceiveKey,
+      nonce: salt,
+      info: info,
+    );
+    await channel.awaitReady();
+    if (!canRecover || grant!.generation + 1 != generation) {
+      throw const ConnectionFailure('recovery_unavailable');
+    }
+    await grant!.checkValidity();
+    final cipher = AesGcm.with256bits();
+    List<int> aad(int sequence) => [
+      ...transcript,
+      ...utf8.encode(jsonEncode(sequence)),
+    ];
+    return RelayConnectionWire.protected(
+      channel,
+      seal: (sequence, clear) async {
+        final box = await cipher.encrypt(
+          clear,
+          secretKey: sendKey,
+          nonce: _channel._nonce(sequence),
+          aad: aad(sequence),
+        );
+        return [...box.cipherText, ...box.mac.bytes];
+      },
+      open: (sequence, sealed) async {
+        if (sealed.length < 16) {
+          throw const ConnectionFailure('authentication_failed');
+        }
+        return cipher.decrypt(
+          SecretBox(
+            sealed.sublist(0, sealed.length - 16),
+            nonce: _channel._nonce(sequence),
+            mac: Mac(sealed.sublist(sealed.length - 16)),
+          ),
+          secretKey: receiveKey,
+          aad: aad(sequence),
+        );
+      },
+    );
   }
 
   @override
@@ -549,7 +618,7 @@ class TrustedConnection implements SessionTransport {
           await _channel
               .send({'type': 'revoked'})
               .timeout(const Duration(milliseconds: 500));
-          await _channel.wire.socket.flush().timeout(
+          await _channel.wire.flush().timeout(
             const Duration(milliseconds: 500),
           );
         } catch (_) {
@@ -638,7 +707,7 @@ class TrustedConnection implements SessionTransport {
   /// Used by the authenticated host's bounded socket dispatcher. The routing
   /// id is only a lookup hint; the grant's proof authenticates both identities.
   Future<TrustedConnection> acceptRecovery(
-    WireChannel wire,
+    ConnectionWire wire,
     Map<String, dynamic> hello,
     void Function() requireAdmission,
   ) async {
@@ -710,6 +779,21 @@ class TrustedConnection implements SessionTransport {
       _recovering = false;
     }
   }
+
+  /// Relay callers read the same authenticated hello that the socket host
+  /// dispatcher reads. Admission remains owned by the process controller.
+  Future<TrustedConnection> acceptRecoveryWire(
+    ConnectionWire wire,
+    void Function() requireAdmission,
+  ) async {
+    try {
+      final hello = await wire.next();
+      return await acceptRecovery(wire, hello, requireAdmission);
+    } catch (_) {
+      wire.close();
+      rethrow;
+    }
+  }
 }
 
 /// One cancellable socket recovery attempt. It never pairs again or renews a
@@ -721,7 +805,7 @@ class ConnectionRecoveryAttempt {
   });
   final TrustedConnection previous;
   final Duration timeout;
-  WireChannel? _wire;
+  ConnectionWire? _wire;
   TrustedConnection? _connection;
   bool _started = false, _cancelled = false;
   Completer<TrustedConnection>? _completion;
@@ -764,12 +848,31 @@ class ConnectionRecoveryAttempt {
   }
 
   Future<TrustedConnection> connect(String address, int port) {
+    if (port < 1 || port > 65535) {
+      return Future.error(const ConnectionFailure('invalid_input'));
+    }
+    return _launch(
+      () => _connectWith(
+        () async =>
+            WireChannel(await Socket.connect(address, port, timeout: timeout)),
+      ),
+    );
+  }
+
+  /// Uses the same resume proof and fresh cipher keys over an already proved
+  /// relay room. The dial owner must cancel its network work when this attempt
+  /// is cancelled; late results are rejected by the same admission barrier.
+  Future<TrustedConnection> connectWire(
+    Future<ConnectionWire> Function() open,
+  ) => _launch(() => _connectWith(open));
+
+  Future<TrustedConnection> _launch(Future<TrustedConnection> Function() work) {
     if (_started) {
       return Future.error(StateError('An attempt cannot be reused.'));
     }
     final completion = _completion = Completer<TrustedConnection>();
-    final work = _connect(address, port);
-    _settled = work.then<void>(
+    final running = work();
+    _settled = running.then<void>(
       (connection) {
         if (!completion.isCompleted) completion.complete(connection);
       },
@@ -780,10 +883,12 @@ class ConnectionRecoveryAttempt {
     return completion.future;
   }
 
-  Future<TrustedConnection> _connect(String address, int port) async {
+  Future<TrustedConnection> _connectWith(
+    Future<ConnectionWire> Function() open,
+  ) async {
     if (_started) throw StateError('An attempt cannot be reused.');
     _started = true;
-    if (port < 1 || port > 65535 || timeout <= Duration.zero) {
+    if (timeout <= Duration.zero) {
       throw const ConnectionFailure('invalid_input');
     }
     _current();
@@ -792,8 +897,7 @@ class ConnectionRecoveryAttempt {
     try {
       await previous._checkRecovery();
       _current();
-      final socket = await Socket.connect(address, port, timeout: timeout);
-      final wire = _wire = WireChannel(socket);
+      final wire = _wire = await open();
       _current();
       await previous._checkRecovery();
       final endpoint = previous.grant!;

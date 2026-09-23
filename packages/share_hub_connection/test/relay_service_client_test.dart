@@ -255,4 +255,31 @@ void main() {
     expect(transport.joined, isEmpty);
     expect(transport.forwarded, 1);
   });
+
+  test('revocation while a relay frame is sealing forwards nothing', () async {
+    final alice = await DeviceIdentity.fromSeed(List<int>.filled(32, 1));
+    final bob = await DeviceIdentity.fromSeed(List<int>.filled(32, 2));
+    final grant = GrantEndpoint.fromAuthenticatedPairing(
+      binding: GrantBinding(
+        id: List<int>.filled(32, 3),
+        initiatorKey: alice.publicKey.bytes,
+        receiverKey: bob.publicKey.bytes,
+      ),
+      role: GrantRole.initiator,
+      establishedMicros: 0,
+      recoverySecret: List<int>.filled(32, 4),
+      clock: () async => 0,
+      onInvalidated: () {},
+    );
+    final transport = _RelayTransport([alice, bob]);
+    final channel = await RelayServiceClient(transport)
+        .open(grant, alice, cancellation: AuxiliaryCancellation());
+    final sealing = Completer<List<int>>();
+    final sending = channel.sendSealedWith((_) => sealing.future);
+    await Future<void>.delayed(Duration.zero);
+    grant.revoke();
+    sealing.complete([1, 2, 3]);
+    await expectLater(sending, throwsA(isA<AuxiliaryFailure>()));
+    expect(transport.forwarded, 0);
+  });
 }
