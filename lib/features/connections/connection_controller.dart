@@ -185,7 +185,7 @@ class ConnectionController extends ChangeNotifier {
                 if (!_track(connection)) return;
                 code = null;
                 _notice = const ConnectionNotice.status(
-                  '连接已建立，短接码已消费。授权有效 8 小时，可随时断开。',
+                  '连接已建立，短接码已消费。授权期限以当前连接为准，可随时断开。',
                 );
                 unawaited(_clearAdvertisement());
                 _emit();
@@ -378,7 +378,7 @@ class ConnectionController extends ChangeNotifier {
         _routes.remove(connection.grant);
         return null;
       }
-      _notice = const ConnectionNotice.status('身份验证通过，已建立本地直连。授权有效 8 小时。');
+      _notice = const ConnectionNotice.status('身份验证通过，已建立本地直连。授权期限以当前连接为准。');
       return connection;
     } catch (error) {
       if (!_disposed && generation == _generation) {
@@ -465,7 +465,7 @@ class ConnectionController extends ChangeNotifier {
               ? const ConnectionNotice.status('连接已断开；再次连接需输入有效短接码。')
               : ConnectionNotice.problem(
                   reason == 'expired'
-                      ? '八小时授权已到期，请使用新短接码连接。'
+                      ? '授权已到期，请使用新短接码连接。'
                       : '连接已断开；再次连接需输入有效短接码。',
                 );
           _emit();
