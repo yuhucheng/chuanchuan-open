@@ -466,7 +466,10 @@ class _FieldShellState extends State<FieldShell> {
                       SessionOperation.watch,
                       SessionOperation.cast,
                     ])
-                      if (live.hasCapability(operation.name))
+                      if (widget.remote.offeredOperations.contains(
+                            operation.name,
+                          ) &&
+                          live.hasCapability(operation.name))
                         Padding(
                           padding: const EdgeInsets.only(bottom: 12),
                           child: FilledButton(
