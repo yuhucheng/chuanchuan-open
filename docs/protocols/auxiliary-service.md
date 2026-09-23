@@ -18,6 +18,8 @@ UTF8("chuanchuan-aux-v1") || 0x00 || UTF8(purpose) || 0x00 || publicKey[32] || n
 
 登记是持有证明与服务访问资格，不建立设备间信任。服务按部署资源策略限制挑战、登记和活跃凭据；无激活码、邀请码或订阅前置。TURN 用户名/密码只用于 ICE relay，不能作为配对秘密或 grant。凭据续取不改变原 grant 类型、时长、截止时刻或方向，且不能让已停止的媒体或控制恢复。
 
+同一设备从新的网络地址重新登记时，必须在新地址取得并签署一次性登记挑战；服务原子更新地址配额归属，目标地址已满则拒绝，原记录不变。同地址重试仍返回相同 `deviceId`；撤销后的同一公钥不能通过重登记恢复资格。地址和登记状态只是服务防滥用材料，不作为对端身份、可达性或授权凭证。
+
 错误体为 `{"error":"code"}`：`invalid_request` 为 400，`invalid_proof`、`not_eligible` 为 403，`capacity_limited` 为 429。TLS 失败或网络不可达由传输层报告，不伪装为普通挑战失败；本地直连不等待此请求。服务当前没有公开目录查询或跨网信令端点，客户端不能将登记响应推断为可见设备、对端在线或远端能力已交付。
 
 公开连接包现提供 `AuxiliaryServiceClient`、`HttpsAuxiliaryTransport` 和 `AuxiliaryCancellation`：用现有 `DeviceIdentity` 签发上述持有证明，校验登记 ID 和凭据形状，取消后丢弃迟到响应；HTTPS 传输使用平台信任库，不支持 HTTP 服务地址。`AuxiliaryTurnCredential` 的字符串表示会隐藏密码，调用方仍须限制其他日志和持久化。该接口没有读取或续期端到端 grant。
