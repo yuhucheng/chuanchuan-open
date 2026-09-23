@@ -236,6 +236,24 @@ final class AuxiliaryServiceClient {
     }
   }
 
+  /// Retires this identity's official registration after fresh possession
+  /// proof. Local grants must be revoked by their process owner immediately;
+  /// an unavailable auxiliary service cannot delay that local action.
+  Future<void> revokeRegistration(
+    DeviceIdentity identity, {
+    required AuxiliaryCancellation cancellation,
+  }) async {
+    final result = await _prove(
+      identity,
+      'revoke',
+      '/v1/devices/revoke',
+      cancellation,
+    );
+    if (result.length != 1 || result['revoked'] != true) {
+      throw const AuxiliaryFailure('invalid_response');
+    }
+  }
+
   Future<AuxiliaryTurnCredential> issueTurn(
     DeviceIdentity identity, {
     required AuxiliaryCancellation cancellation,
