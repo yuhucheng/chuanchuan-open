@@ -22,7 +22,6 @@ UTF8("chuanchuan-aux-v1") || 0x00 || UTF8(purpose) || 0x00 || publicKey[32] || n
 
 错误体为 `{"error":"code"}`：`invalid_request` 为 400，`invalid_proof`、`not_eligible` 为 403，`capacity_limited` 为 429。TLS 失败或网络不可达由传输层报告，不伪装为普通挑战失败；本地直连不等待此请求。服务当前没有公开目录查询或跨网信令端点，客户端不能将登记响应推断为可见设备、对端在线或远端能力已交付。
 
-公开连接包现提供 `AuxiliaryServiceClient`、`HttpsAuxiliaryTransport` 和 `AuxiliaryCancellation`：用现有 `DeviceIdentity` 签发上述持有证明，校验登记 ID 和凭据形状，取消后丢弃迟到响应；HTTPS 传输使用平台信任库，不支持 HTTP 服务地址。`AuxiliaryTurnCredential` 的字符串表示会隐藏密码，调用方仍须限制其他日志和持久化。该接口没有读取或续期端到端 grant。
+公开连接包现提供 `AuxiliaryServiceClient`、`HttpsAuxiliaryTransport` 和 `AuxiliaryCancellation`：用现有 `DeviceIdentity` 签发上述持有证明，校验登记 ID 和凭据形状；取消会立即结束 HTTPS 建连、等待响应与读响应的调用方等待，并关闭迟到建立的请求，旧结果不得作用于新代次。HTTPS 传输使用平台信任库，不支持 HTTP 服务地址。`AuxiliaryTurnCredential` 的字符串表示会隐藏密码，调用方仍须限制其他日志和持久化。该接口没有读取或续期端到端 grant。
 
-产品入口现通过编译参数 `CHUANCHUAN_AUX_ORIGIN` 显式接收 HTTPS 服务 origin；未提供或无效时只走本地/直连路径，不内置公网地址。进程所有者只在主动短码握手、有效连接或认证恢复期间异步登记/获取，按凭据有效期重取，错误最多有限次短间隔重试；单纯打开“允许连接”不请求云凭据。连接需求消失即取消请求、停止续取并清除快照。SDK 新 Peer 仅同步读取已经取得且尚未过期的凭据，明确退出也会关闭传输。这个配置入口与接口接线尚未经过官方部署、资源配额和真实 relay 验收，内网自定义辅助替代方案仍待实现。
 产品入口现通过编译参数 `CHUANCHUAN_AUX_ORIGIN` 显式接收 HTTPS 服务 origin；未提供或无效时只走本地/直连路径，不内置公网地址。进程所有者只在主动短码握手、有效连接或认证恢复期间异步登记/获取，按凭据有效期重取；可重试错误每轮只有有限次短间隔尝试，持续连接期间在逐步增大的冷却期后再开始下一轮，以处理辅助服务重启。最终鉴权等不可重试错误不自动轮询。单纯打开“允许连接”不请求云凭据。连接需求消失即取消请求、停止续取及冷却计时，并清除快照。SDK 新 Peer 仅同步读取已经取得且尚未过期的凭据，明确退出也会关闭传输。这个配置入口与接口接线尚未经过官方部署、资源配额和真实 relay 验收，内网自定义辅助替代方案仍待实现。

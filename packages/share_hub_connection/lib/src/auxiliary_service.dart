@@ -106,7 +106,18 @@ final class HttpsAuxiliaryTransport implements AuxiliaryTransport {
   ) async {
     cancellation.throwIfCancelled();
     HttpClientRequest? request;
-    void abort() => request?.abort();
+    final cancelled = Completer<void>();
+    void abort() {
+      request?.abort();
+      if (!cancelled.isCompleted) cancelled.complete();
+    }
+
+    Future<T> waitFor<T>(Future<T> operation) => Future.any<T>([
+      operation,
+      cancelled.future.then<T>(
+        (_) => throw const AuxiliaryFailure('cancelled'),
+      ),
+    ]).timeout(timeout);
     cancellation.onCancel(abort);
     var abandoned = false;
     try {
@@ -116,27 +127,28 @@ final class HttpsAuxiliaryTransport implements AuxiliaryTransport {
           if (abandoned || cancellation.isCancelled) lateRequest.abort();
         }, onError: (Object _) {}),
       );
-      request = await opening.timeout(timeout);
+      final opened = await waitFor(opening);
+      request = opened;
       if (cancellation.isCancelled) {
-        request.abort();
+        opened.abort();
         cancellation.throwIfCancelled();
       }
-      request.headers.contentType = ContentType.json;
-      request.headers.set(HttpHeaders.cacheControlHeader, 'no-store');
+      opened.headers.contentType = ContentType.json;
+      opened.headers.set(HttpHeaders.cacheControlHeader, 'no-store');
       final payload = utf8.encode(jsonEncode(body));
-      request.contentLength = payload.length;
-      request.add(payload);
-      final response = await request.close().timeout(timeout);
+      opened.contentLength = payload.length;
+      opened.add(payload);
+      final response = await waitFor(opened.close());
       cancellation.throwIfCancelled();
-      final bytes = await response
-          .fold<List<int>>(<int>[], (value, chunk) {
-            if (value.length + chunk.length > 4096) {
-              throw const AuxiliaryFailure('invalid_response');
-            }
-            value.addAll(chunk);
-            return value;
-          })
-          .timeout(timeout);
+      final bytes = await waitFor(
+        response.fold<List<int>>(<int>[], (value, chunk) {
+          if (value.length + chunk.length > 4096) {
+            throw const AuxiliaryFailure('invalid_response');
+          }
+          value.addAll(chunk);
+          return value;
+        }),
+      );
       cancellation.throwIfCancelled();
       final decoded = jsonDecode(utf8.decode(bytes));
       if (decoded is! Map<String, dynamic>) {

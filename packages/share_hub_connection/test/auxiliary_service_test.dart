@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:share_hub_connection/share_hub_connection.dart';
 import 'package:test/test.dart';
@@ -181,6 +182,49 @@ void main() {
       throwsArgumentError,
     );
   });
+
+  test(
+    'cancelling a stalled TLS connection releases the request immediately',
+    () async {
+      final accepted = Completer<Socket>();
+      final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      final subscription = server.listen((socket) {
+        if (!accepted.isCompleted) accepted.complete(socket);
+      });
+      final transport = HttpsAuxiliaryTransport(
+        Uri.parse('https://127.0.0.1:${server.port}'),
+        timeout: const Duration(seconds: 5),
+      );
+      final cancellation = AuxiliaryCancellation();
+      Socket? stalledSocket;
+      try {
+        final result = transport.post('/v1/aux/challenge', {
+          'publicKey': identity.encodedKey,
+          'purpose': 'turn',
+        }, cancellation);
+        stalledSocket = await accepted.future.timeout(
+          const Duration(seconds: 2),
+        );
+        cancellation.cancel();
+        await expectLater(
+          result.timeout(const Duration(milliseconds: 500)),
+          throwsA(
+            isA<AuxiliaryFailure>().having(
+              (error) => error.code,
+              'code',
+              'cancelled',
+            ),
+          ),
+        );
+      } finally {
+        cancellation.cancel();
+        transport.close();
+        stalledSocket?.destroy();
+        await subscription.cancel();
+        await server.close();
+      }
+    },
+  );
 
   test(
     'server owns challenge expiry when client wall clock is ahead',
