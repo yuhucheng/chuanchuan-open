@@ -119,6 +119,11 @@ continuous clock and audit deadlines during silence. Clock failure/rollback gate
 the affected grant. Peer wall clocks and newly computed eight-hour windows are
 never accepted as deadline evidence.
 
+The candidate authority subset exposes `authorization_check` for the final
+native permit gate. It returns CANCELLED for a cancelled permit, STALE_HANDLE
+after grant suspension/revocation, and EXPIRED at the original deadline; a
+successful earlier import is not permission to skip this check at allocation.
+
 Prefer using the native clock domain from original pairing. When bridging an
 already established endpoint in another continuous-clock domain, conversion must
 be conservative: read native `t0`, await the provider's current continuous time

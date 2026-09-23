@@ -248,6 +248,13 @@ SHM_DRAFT_EXPORT shm_status SHM_DRAFT_CALL shm_draft_provider_close(
     shm_core core, shm_provider provider);
 SHM_DRAFT_EXPORT shm_status SHM_DRAFT_CALL shm_draft_authorization_cancel(
     shm_core core, shm_authorization authorization, uint32_t stop_reason);
+/* Recheck an imported permit at the native allocation boundary. This does not
+ * mint or renew authority: a cancelled permit returns CANCELLED, a suspended
+ * or revoked grant makes its permit stale, and an elapsed original deadline
+ * returns EXPIRED. Media admission must call this immediately before effects.
+ */
+SHM_DRAFT_EXPORT shm_status SHM_DRAFT_CALL shm_draft_authorization_check(
+    shm_core core, shm_authorization authorization);
 
 /* Release drops the caller's reference only. Live operations retain authority;
  * use cancel/stop for invalidation. IDs never become another object's ID.
