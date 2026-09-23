@@ -16,6 +16,7 @@ class _Auxiliary implements AuxiliaryTransport {
   Completer<void>? holdChallenge;
   int challenges = 0, issued = 0;
   bool failOnce = false;
+  int failChallenges = 0;
 
   @override
   Future<Map<String, Object?>> post(
@@ -25,8 +26,9 @@ class _Auxiliary implements AuxiliaryTransport {
   ) async {
     if (path == '/v1/aux/challenge') {
       challenges++;
-      if (failOnce) {
+      if (failOnce || failChallenges > 0) {
         failOnce = false;
+        if (failChallenges > 0) failChallenges--;
         throw const AuxiliaryFailure('unreachable');
       }
       if (holdChallenge case final pending?) await pending.future;
@@ -138,6 +140,50 @@ void main() {
       expect(owner.lastFailure, isNull);
     },
   );
+
+  test('long-lived demand recovers after a cooled-down retry burst', () async {
+    owner.stop();
+    owner = RelayCredentialOwner(
+      () async => identity,
+      AuxiliaryServiceClient(transport),
+      () => closes++,
+      retryDelays: const [Duration(milliseconds: 1)],
+      recoveryDelay: const Duration(milliseconds: 20),
+      maxRecoveryDelay: const Duration(milliseconds: 40),
+    );
+    transport.failChallenges = 2;
+    final first = owner.start();
+    expect(owner.current, isNull);
+    await first;
+    await Future<void>.delayed(const Duration(milliseconds: 8));
+    expect(transport.challenges, 2);
+    expect(owner.current, isNull);
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+    expect(transport.challenges, 4);
+    expect(transport.issued, 1);
+    expect(owner.current, isNotNull);
+    expect(owner.lastFailure, isNull);
+  });
+
+  test('idle suspension cancels the cooled-down retry', () async {
+    owner.stop();
+    owner = RelayCredentialOwner(
+      () async => identity,
+      AuxiliaryServiceClient(transport),
+      () => closes++,
+      retryDelays: const [Duration(milliseconds: 1)],
+      recoveryDelay: const Duration(milliseconds: 30),
+      maxRecoveryDelay: const Duration(milliseconds: 60),
+    );
+    transport.failChallenges = 2;
+    await owner.start();
+    await Future<void>.delayed(const Duration(milliseconds: 8));
+    expect(transport.challenges, 2);
+    owner.suspend();
+    await Future<void>.delayed(const Duration(milliseconds: 70));
+    expect(transport.challenges, 2);
+    expect(owner.current, isNull);
+  });
 
   testWidgets('idle product app never requests auxiliary credentials', (
     tester,

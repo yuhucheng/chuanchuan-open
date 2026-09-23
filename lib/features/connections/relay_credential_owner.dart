@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:share_hub_connection/share_hub_connection.dart';
 
@@ -15,18 +16,27 @@ final class RelayCredentialOwner {
       Duration(seconds: 2),
       Duration(seconds: 4),
     ],
-  }) : _now = now ?? DateTime.now;
+    this.recoveryDelay = const Duration(minutes: 1),
+    this.maxRecoveryDelay = const Duration(minutes: 15),
+  }) : assert(recoveryDelay > Duration.zero),
+       assert(maxRecoveryDelay >= recoveryDelay),
+       _now = now ?? DateTime.now;
 
   final Future<DeviceIdentity> Function() _identity;
   final AuxiliaryServiceClient _service;
   final void Function() _closeTransport;
   final DateTime Function() _now;
   final List<Duration> retryDelays;
+
+  /// A failed burst cools down before another bounded burst. This lets an
+  /// existing connection recover after service restart without busy polling.
+  final Duration recoveryDelay, maxRecoveryDelay;
   AuxiliaryTurnCredential? _lease;
   AuxiliaryCancellation? _cancellation;
   Timer? _renewal, _expiry;
   Future<void>? _pending;
   bool _needed = false, _stopped = false;
+  int _failedBursts = 0;
   String? lastFailure;
 
   AuxiliaryTurnCredential? get current {
@@ -45,6 +55,7 @@ final class RelayCredentialOwner {
     if (_stopped) return Future.value();
     if (_needed) return _pending ?? Future.value();
     _needed = true;
+    _failedBursts = 0;
     final previous = _pending;
     if (previous != null) {
       return previous.then((_) {
@@ -59,6 +70,7 @@ final class RelayCredentialOwner {
   void suspend() {
     if (_stopped || !_needed) return;
     _needed = false;
+    _failedBursts = 0;
     _cancellation?.cancel();
     _renewal?.cancel();
     _expiry?.cancel();
@@ -77,6 +89,7 @@ final class RelayCredentialOwner {
   Future<void> refresh() {
     if (!_needed || _stopped) return Future.value();
     _renewal?.cancel();
+    _failedBursts = 0;
     return _attempt(0);
   }
 
@@ -114,6 +127,7 @@ final class RelayCredentialOwner {
         throw const AuxiliaryFailure('expired_credential');
       }
       _lease = lease;
+      _failedBursts = 0;
       lastFailure = null;
       _renewal?.cancel();
       _expiry?.cancel();
@@ -126,11 +140,13 @@ final class RelayCredentialOwner {
     } on AuxiliaryFailure catch (error) {
       if (_stopped || !_needed || cancellation.isCancelled) return;
       lastFailure = error.code;
-      if (_retryable(error.code) && retryIndex < retryDelays.length) {
+      if (_retryable(error.code)) {
         _renewal?.cancel();
+        final shortRetry = retryIndex < retryDelays.length;
+        final delay = shortRetry ? retryDelays[retryIndex] : _cooldownDelay();
         _renewal = Timer(
-          retryDelays[retryIndex],
-          () => unawaited(_attempt(retryIndex + 1)),
+          delay,
+          () => unawaited(_attempt(shortRetry ? retryIndex + 1 : 0)),
         );
       }
     } catch (_) {
@@ -138,6 +154,12 @@ final class RelayCredentialOwner {
         lastFailure = 'unexpected';
       }
     }
+  }
+
+  Duration _cooldownDelay() {
+    final multiplier = 1 << math.min(_failedBursts++, 8);
+    final candidate = recoveryDelay * multiplier;
+    return candidate > maxRecoveryDelay ? maxRecoveryDelay : candidate;
   }
 
   bool _retryable(String code) =>
