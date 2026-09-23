@@ -70,8 +70,8 @@ class WireChannel {
   }
 
   Future<Map<String, dynamic>> next() {
-    if (_closed) return Future.error(const ConnectionFailure('disconnected'));
     if (_frames.isNotEmpty) return Future.value(_frames.removeFirst());
+    if (_closed) return Future.error(const ConnectionFailure('disconnected'));
     if (_waiting != null) throw StateError('Only one reader is allowed.');
     return (_waiting = Completer<Map<String, dynamic>>()).future;
   }
@@ -90,7 +90,9 @@ class WireChannel {
     if (_closed) return;
     _closed = true;
     _buffer.clear();
-    _frames.clear();
+    // Complete frames received before EOF remain ordered for authentication,
+    // including an explicit revocation behind a heartbeat. Local close below
+    // still discards all buffered work immediately.
     final waiting = _waiting;
     _waiting = null;
     waiting?.completeError(const ConnectionFailure('disconnected'));
@@ -98,6 +100,7 @@ class WireChannel {
 
   void close() {
     _ended();
+    _frames.clear();
     socket.destroy();
     unawaited(_subscription.cancel());
   }

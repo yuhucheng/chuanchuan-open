@@ -19,7 +19,40 @@ abstract interface class FileAccess {
   Future<void> release(String token);
 }
 
-class MethodChannelFileAccess implements FileAccess {
+/// A pass restarts the retained selected handle and invalidates earlier passes.
+abstract interface class ReReadableFileAccess implements FileAccess {
+  Future<String> beginReadPass(String token);
+  Future<Uint8List> readPass(
+    String token,
+    String passId,
+    int offset,
+    int length,
+  );
+  Future<void> finishPass(String token, String passId);
+}
+
+class MethodChannelFileAccess implements ReReadableFileAccess {
+  @override
+  Future<String> beginReadPass(String token) async =>
+      (await _channel.invokeMethod<String>('files.beginReadPass', token))!;
+  @override
+  Future<Uint8List> readPass(
+    String token,
+    String passId,
+    int offset,
+    int length,
+  ) async => (await _channel.invokeMethod<Uint8List>('files.readPass', {
+    'token': token,
+    'passId': passId,
+    'offset': offset,
+    'length': length,
+  }))!;
+  @override
+  Future<void> finishPass(String token, String passId) => _channel.invokeMethod(
+    'files.finishPass',
+    {'token': token, 'passId': passId},
+  );
+
   static const _channel = MethodChannel('dev.sharehub.client/platform');
   @override
   Future<List<SelectedFile>> pickFiles() async {

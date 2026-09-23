@@ -17,9 +17,44 @@ class TransferItem {
   String? sha256;
   String? error;
   bool _released = false;
+  bool _used = false, _releaseRequested = false;
+  TransferUse? _use;
   Future<bool>? _releasePending;
+  bool get canSend =>
+      state == PreparationState.ready &&
+      sha256 != null &&
+      !_released &&
+      !_used &&
+      !_releaseRequested;
   bool get canCancel =>
       state == PreparationState.queued || state == PreparationState.preparing;
+}
+
+/// Exclusive use of a prepared native selection. Releasing the use first stops
+/// and closes its network owner; only the queue may release the selection token.
+/// Failed owner cleanup retains this use so remove/clear/exit can retry it.
+final class TransferUse {
+  TransferUse._(this._item, this._onStop)
+    : file = _item.file,
+      sha256 = _item.sha256!;
+  final TransferItem _item;
+  final Future<void> Function() _onStop;
+  final SelectedFile file;
+  final String sha256;
+  bool _released = false;
+  Future<void>? _releasing;
+  Future<void> release() {
+    if (_released) return Future.value();
+    return _releasing ??= _release().whenComplete(() {
+      _releasing = null;
+    });
+  }
+
+  Future<void> _release() async {
+    await _onStop();
+    _released = true;
+    if (identical(_item._use, this)) _item._use = null;
+  }
 }
 
 /// Prepares a local manifest. Ready means checked locally, never delivered.
@@ -36,6 +71,42 @@ class TransferQueue extends ChangeNotifier {
   int _selectionGeneration = 0;
   Future<void>? _worker;
   Future<void>? _picker;
+
+  /// Atomically claims capabilities minted by an OS drop. A null result leaves
+  /// the whole offer owned by the native bridge, which must release it. This
+  /// accepts opaque tokens only; it never converts Dart paths into authority.
+  List<TransferItem>? admitDroppedFiles(List<SelectedFile> files) {
+    if (_disposed) return null;
+    final tokens = files.map((file) => file.token).toSet();
+    if (files.isEmpty ||
+        files.length > maxFiles - _items.length ||
+        tokens.length != files.length ||
+        files.any(
+          (file) => file.token.isEmpty || file.name.isEmpty || file.size < 0,
+        ) ||
+        _items.any((item) => tokens.contains(item.file.token))) {
+      error = '无法加入这批文件，请检查文件和队列容量（最多 64 项）。';
+      _notify();
+      return null;
+    }
+    final admitted = files.map(TransferItem.new).toList(growable: false);
+    _items.addAll(admitted);
+    error = null;
+    _ensureWorker();
+    _notify();
+    return List.unmodifiable(admitted);
+  }
+
+  TransferUse claim(
+    TransferItem item, {
+    required Future<void> Function() onStop,
+  }) {
+    if (_disposed || !_items.contains(item) || !item.canSend) {
+      throw StateError('Selection is not available for a new transfer.');
+    }
+    item._used = true;
+    return item._use = TransferUse._(item, onStop);
+  }
 
   Future<void> selectFiles() {
     if (_disposed || selecting) return Future.value();
@@ -140,13 +211,15 @@ class TransferQueue extends ChangeNotifier {
   }
 
   Future<void> cancel(TransferItem item) async {
-    if (!item.canCancel) return;
+    if (!_items.contains(item) || !item.canCancel) return;
     item.state = PreparationState.cancelled;
     _notify();
     await _release(item);
   }
 
   Future<void> remove(TransferItem item) async {
+    if (!_items.contains(item)) return;
+    item._releaseRequested = true;
     if (item.canCancel) item.state = PreparationState.cancelled;
     if (await _release(item)) _items.remove(item);
     _notify();
@@ -156,12 +229,12 @@ class TransferQueue extends ChangeNotifier {
     ++_selectionGeneration;
     final snapshot = List<TransferItem>.of(_items);
     for (final item in snapshot) {
+      item._releaseRequested = true;
       if (item.canCancel) item.state = PreparationState.cancelled;
     }
     _notify();
-    for (final item in snapshot) {
-      await remove(item);
-    }
+    // Every owner is stopped synchronously before waiting for the slowest one.
+    await Future.wait(snapshot.map(remove));
   }
 
   Future<bool> _release(TransferItem item) {
@@ -169,6 +242,7 @@ class TransferQueue extends ChangeNotifier {
     return item._releasePending ??=
         () async {
           try {
+            await item._use?.release();
             await access.release(item.file.token);
             item._released = true;
             return true;

@@ -17,12 +17,16 @@ class DeviceField extends StatefulWidget {
     required this.onLocal,
     required this.onDevice,
     this.query = '',
+    this.fileProgress,
+    this.fileDropRegion,
   });
   final List<DirectoryDevice> entries;
   final String localName, query;
   final bool allowConnections;
   final VoidCallback onLocal;
   final Future<void> Function(DirectoryDevice) onDevice;
+  final Widget? Function(DirectoryDevice)? fileProgress;
+  final Widget Function(DirectoryDevice?, Widget)? fileDropRegion;
   @override
   State<DeviceField> createState() => _DeviceFieldState();
 }
@@ -32,6 +36,8 @@ class _DeviceFieldState extends State<DeviceField> {
   final _focus = <String, FocusNode>{};
   final _aggregateFocus = FocusNode(debugLabel: 'aggregate');
   bool _expanded = false;
+  Widget _drop(DirectoryDevice? device, Widget child) =>
+      widget.fileDropRegion?.call(device, child) ?? child;
   @override
   void initState() {
     super.initState();
@@ -116,29 +122,36 @@ class _DeviceFieldState extends State<DeviceField> {
           FieldTokens.nodeWidth * math.max<double>(1.0, scale),
         );
         final items = <Widget>[
-          _node(
-            context,
-            key: const ValueKey('local-device'),
-            name: widget.localName,
-            detail: widget.allowConnections ? '你 · 允许连接已开启' : '你 · 允许连接已关闭',
-            icon: Icons.laptop_mac,
-            onPressed: widget.onLocal,
-            local: true,
-          ),
-          for (final entry in visible)
+          _drop(
+            null,
             _node(
               context,
-              key: ValueKey('device-${entry.identityId}'),
-              name: entry.name,
-              detail: _detail(entry, online.contains(entry.identityId)),
-              icon: Icons.devices,
-              focus: _focus[entry.identityId],
-              onPressed: online.contains(entry.identityId)
-                  ? () async {
-                      await widget.onDevice(entry);
-                      if (mounted) _focus[entry.identityId]?.requestFocus();
-                    }
-                  : null,
+              key: const ValueKey('local-device'),
+              name: widget.localName,
+              detail: widget.allowConnections ? '你 · 允许连接已开启' : '你 · 允许连接已关闭',
+              icon: Icons.laptop_mac,
+              onPressed: widget.onLocal,
+              local: true,
+            ),
+          ),
+          for (final entry in visible)
+            _drop(
+              entry,
+              _node(
+                context,
+                key: ValueKey('device-${entry.identityId}'),
+                name: entry.name,
+                detail: _detail(entry, online.contains(entry.identityId)),
+                icon: Icons.devices,
+                focus: _focus[entry.identityId],
+                extra: widget.fileProgress?.call(entry),
+                onPressed: online.contains(entry.identityId)
+                    ? () async {
+                        await widget.onDevice(entry);
+                        if (mounted) _focus[entry.identityId]?.requestFocus();
+                      }
+                    : null,
+              ),
             ),
           if (!_expanded && filtered.length > visible.length)
             _node(
@@ -234,6 +247,7 @@ class _DeviceFieldState extends State<DeviceField> {
     required VoidCallback? onPressed,
     FocusNode? focus,
     bool local = false,
+    Widget? extra,
   }) => RawGestureDetector(
     gestures: onPressed == null
         ? const {}
@@ -283,6 +297,7 @@ class _DeviceFieldState extends State<DeviceField> {
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodySmall,
           ),
+          ?extra,
         ],
       ),
     ),

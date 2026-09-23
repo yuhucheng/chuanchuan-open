@@ -51,9 +51,13 @@ class FlutterWindow : public Win32Window {
   std::vector<TrayItem> TrayItems() const;
   flutter::EncodableValue WindowState();
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> desktop_;
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> control_display_;
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> control_clipboard_;
   NOTIFYICONDATAW tray_{};
   bool desktop_ready_ = false, tray_installed_ = false, quit_pending_ = false;
   bool allow_connections_ = false, connection_supported_ = false;
+  bool control_active_ = false;
+  bool control_notice_enabled_ = true;
   bool exit_approved_ = false;
   UINT taskbar_created_ = 0;
   std::shared_ptr<int> alive_ = std::make_shared<int>(0);

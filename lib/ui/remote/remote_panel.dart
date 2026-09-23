@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:share_hub_media_api/share_hub_media_api.dart';
 
 import '../../features/remote/remote_session_controller.dart';
+import 'control_input_surface.dart';
 
 /// Inline surface for the single remote picture.
 ///
@@ -16,6 +17,9 @@ class RemotePicturePanel extends StatelessWidget {
   String _title() {
     final name = controller.peerLabel ?? '已连接设备';
     final operation = controller.operation;
+    if (operation == SessionOperation.control) {
+      return controller.sending ? '$name 的本机控制操作' : '控制 $name';
+    }
     if (controller.sending) {
       return operation == SessionOperation.cast
           ? '正在投屏到 $name'
@@ -30,6 +34,10 @@ class RemotePicturePanel extends StatelessWidget {
   /// presented a frame is never described as running.
   String _status() {
     if (controller.cleanupFailed) return '资源释放失败，尚未完全停止。';
+    if (controller.operation == SessionOperation.control &&
+        controller.phase == RemotePhase.active) {
+      return controller.sending ? '本机控制画面已呈现；输入仍需单独核验。' : '已收到控制画面；输入仍需单独核验。';
+    }
     return switch (controller.phase) {
       RemotePhase.idle => controller.error ?? '未开始。',
       RemotePhase.connecting =>
@@ -55,7 +63,17 @@ class RemotePicturePanel extends StatelessWidget {
           const Text('授权与画面分开：通道建立不代表对端已呈现，撤销或断开会立即释放。'),
           if (controller.receiving) ...[
             const SizedBox(height: 12),
-            SizedBox(height: 280, child: controller.session!.view),
+            SizedBox(
+              height: controller.operation == SessionOperation.control
+                  ? 360
+                  : 280,
+              child: controller.operation == SessionOperation.control
+                  ? ControlInputSurface(
+                      controller: controller,
+                      child: controller.session!.view,
+                    )
+                  : controller.session!.view,
+            ),
           ],
           if (controller.error != null && controller.cleanupFailed)
             Semantics(liveRegion: true, child: Text(controller.error!)),
@@ -112,12 +130,14 @@ class RemotePicturePanel extends StatelessWidget {
                   child: const Text('取消'),
                 )
               else ...[
-                if (controller.phase == RemotePhase.active)
+                if (controller.phase == RemotePhase.active &&
+                    controller.operation != SessionOperation.control)
                   OutlinedButton(
                     onPressed: controller.sourceBusy ? null : controller.pause,
                     child: const Text('暂停'),
                   ),
-                if (controller.phase == RemotePhase.paused)
+                if (controller.phase == RemotePhase.paused &&
+                    controller.operation != SessionOperation.control)
                   FilledButton(
                     onPressed: controller.sourceBusy ? null : controller.resume,
                     child: const Text('恢复'),
@@ -125,7 +145,13 @@ class RemotePicturePanel extends StatelessWidget {
               ],
               FilledButton(
                 onPressed: controller.stop,
-                child: Text(controller.cleanupFailed ? '重试释放' : '停止并释放'),
+                child: Text(
+                  controller.cleanupFailed
+                      ? '重试释放'
+                      : controller.operation == SessionOperation.control
+                      ? '停止控制'
+                      : '停止并释放',
+                ),
               ),
             ],
           ),

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -59,6 +60,9 @@ class ConnectionController extends ChangeNotifier {
   DeviceIdentity? _identity;
   PairingHost? _host;
   PairingAttempt? _attempt;
+  ConnectionRecoveryService? _recovery;
+  final _recoveries = <TrustedConnection, _RecoveryRetry>{};
+  final _retryRandom = Random();
   Timer? _timer;
   bool _disposed = false;
   bool _disconnecting = false;
@@ -79,7 +83,7 @@ class ConnectionController extends ChangeNotifier {
   /// its authoritative clock before starting an operation.
   TrustedConnection? outgoingFor(String peerKey) {
     for (final connection in _sessions.reversed) {
-      if (!connection.isClosed &&
+      if (connection.isConnected &&
           connection.peerKey == peerKey &&
           connection.grant?.role == GrantRole.initiator &&
           connection.grant?.phase == GrantPhase.active) {
@@ -95,6 +99,16 @@ class ConnectionController extends ChangeNotifier {
 
   Future<DeviceIdentity> _loadIdentity() async =>
       _identity ??= await platform.identity();
+
+  Future<ConnectionRecoveryService> _loadRecovery() async {
+    final service = _recovery ??= ConnectionRecoveryService();
+    await service.open();
+    if (_disposed || _disconnecting || !identical(_recovery, service)) {
+      await service.close();
+      throw const ConnectionFailure('cancelled');
+    }
+    return service;
+  }
 
   Future<void> open() async {
     if (busy || _disposed || _disconnecting) return;
@@ -113,6 +127,8 @@ class ConnectionController extends ChangeNotifier {
     try {
       final identity = await _loadIdentity();
       if (_disposed || generation != _generation) return;
+      final recovery = await _loadRecovery();
+      if (_disposed || generation != _generation) return;
       await _host?.stopAccepting();
       if (_disposed || generation != _generation) return;
       await _clearAdvertisement();
@@ -121,6 +137,7 @@ class ConnectionController extends ChangeNotifier {
         identity: identity,
         clock: platform.now,
         protocolVersion: 2,
+        recovery: recovery,
         onConnection: (connection) {
           if (_disposed || _disconnecting || !accepting) {
             connection.close();
@@ -213,6 +230,11 @@ class ConnectionController extends ChangeNotifier {
   /// Admission and in-flight handshakes are invalidated before awaiting I/O.
   Future<void> disconnectAll() async {
     _disconnecting = true;
+    final recoveryClosing = _recovery?.close();
+    _recovery = null;
+    for (final retry in _recoveries.values) {
+      retry.timer?.cancel();
+    }
     grants.revokeAll();
     _timer?.cancel();
     _timer = null;
@@ -221,6 +243,7 @@ class ConnectionController extends ChangeNotifier {
     }
     try {
       await stopAccepting();
+      await recoveryClosing;
     } finally {
       _disconnecting = false;
     }
@@ -245,10 +268,13 @@ class ConnectionController extends ChangeNotifier {
     try {
       final identity = await _loadIdentity();
       if (_disposed || generation != _generation) return null;
+      final recovery = await _loadRecovery();
+      if (_disposed || generation != _generation) return null;
       final attempt = _attempt = PairingAttempt(
         identity: identity,
         clock: platform.now,
         protocolVersion: 2,
+        recovery: recovery,
       );
       final connection = await attempt.connect(
         host,
@@ -303,8 +329,26 @@ class ConnectionController extends ChangeNotifier {
     }
     grants.register(grant);
     _sessions.add(connection);
+    final retry = _RecoveryRetry();
+    _recoveries[connection] = retry;
+    retry.phases = connection.phaseChanges.listen((phase) {
+      if (_disposed || !_sessions.contains(connection)) return;
+      if (phase == ConnectionPhase.suspended) {
+        _notice = const ConnectionNotice.status('连接暂时中断，正在原授权有效期内尝试恢复。');
+        _scheduleRecovery(connection, retry);
+      } else if (phase == ConnectionPhase.active) {
+        retry.timer?.cancel();
+        retry.timer = null;
+        retry.attempts = 0;
+        _notice = const ConnectionNotice.status('连接已恢复，原授权到期时间不变。');
+      }
+      _emit();
+    });
     unawaited(
       connection.whenClosed.then((reason) {
+        retry.timer?.cancel();
+        unawaited(retry.phases?.cancel() ?? Future.value());
+        _recoveries.remove(connection);
         grants.revoke(grant);
         _sessions.remove(connection);
         if (!_disposed) {
@@ -323,9 +367,54 @@ class ConnectionController extends ChangeNotifier {
     return true;
   }
 
+  bool _canRecover(TrustedConnection connection, _RecoveryRetry retry) =>
+      !_disposed &&
+      !_disconnecting &&
+      !connection.isClosed &&
+      connection.grant?.role == GrantRole.initiator &&
+      _recovery != null &&
+      identical(_recoveries[connection], retry);
+
+  void _scheduleRecovery(TrustedConnection connection, _RecoveryRetry retry) {
+    if (!_canRecover(connection, retry) ||
+        connection.isConnected ||
+        retry.running ||
+        retry.timer != null) {
+      return;
+    }
+    const backoff = [250, 500, 1000, 2000, 4000, 8000, 15000];
+    final delay = backoff[retry.attempts.clamp(0, backoff.length - 1)];
+    retry.attempts++;
+    retry.timer = Timer(
+      Duration(
+        milliseconds: (delay * (0.8 + _retryRandom.nextDouble() * 0.4)).round(),
+      ),
+      () async {
+        retry.timer = null;
+        if (!_canRecover(connection, retry) || connection.isConnected) return;
+        retry.running = true;
+        try {
+          await _recovery!.reconnect(connection);
+        } catch (_) {
+          /* Original owner enforces terminal clock/revocation policy. */
+        } finally {
+          retry.running = false;
+          _scheduleRecovery(connection, retry);
+        }
+      },
+    );
+  }
+
   @override
   void dispose() {
     _disposed = true;
+    unawaited(_recovery?.close() ?? Future.value());
+    _recovery = null;
+    for (final retry in _recoveries.values) {
+      retry.timer?.cancel();
+      unawaited(retry.phases?.cancel() ?? Future.value());
+    }
+    _recoveries.clear();
     _generation++;
     _attempt?.cancel();
     _timer?.cancel();
@@ -337,4 +426,11 @@ class ConnectionController extends ChangeNotifier {
     unawaited(_clearAdvertisement());
     super.dispose();
   }
+}
+
+final class _RecoveryRetry {
+  Timer? timer;
+  StreamSubscription<ConnectionPhase>? phases;
+  int attempts = 0;
+  bool running = false;
 }

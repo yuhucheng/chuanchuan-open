@@ -21,6 +21,12 @@
 /* End PBXAggregateTarget section */
 
 /* Begin PBXBuildFile section */
+		AC0000000000000000000007 /* FileDropBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD0000000000000000000007 /* FileDropBridge.swift */; };
+		AC0000000000000000000008 /* FileDropSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD0000000000000000000008 /* FileDropSession.swift */; };
+		AC0000000000000000000006 /* SourceAccessBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD0000000000000000000006 /* SourceAccessBridge.swift */; };
+		AC0000000000000000000003 /* ReceiveAccessBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD0000000000000000000003 /* ReceiveAccessBridge.swift */; };
+		AC0000000000000000000004 /* ReceiveStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD0000000000000000000004 /* ReceiveStore.swift */; };
+		AC0000000000000000000005 /* ReceiveWorkDispatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD0000000000000000000005 /* ReceiveWorkDispatcher.swift */; };
 		AC0000000000000000000002 /* FileAccessBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD0000000000000000000002 /* FileAccessBridge.swift */; };
 		AC0000000000000000000001 /* SelectedFileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD0000000000000000000001 /* SelectedFileStore.swift */; };
 		AB0000000000000000000001 /* PlatformServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000002 /* PlatformServices.swift */; };
@@ -64,6 +70,12 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		AD0000000000000000000007 /* FileDropBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDropBridge.swift; sourceTree = "<group>"; };
+		AD0000000000000000000008 /* FileDropSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../Platform/Sources/ShareHubPlatform/FileDropSession.swift; sourceTree = "<group>"; };
+		AD0000000000000000000006 /* SourceAccessBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceAccessBridge.swift; sourceTree = "<group>"; };
+		AD0000000000000000000003 /* ReceiveAccessBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReceiveAccessBridge.swift; sourceTree = "<group>"; };
+		AD0000000000000000000004 /* ReceiveStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../Platform/Sources/ShareHubPlatform/ReceiveStore.swift; sourceTree = "<group>"; };
+		AD0000000000000000000005 /* ReceiveWorkDispatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../Platform/Sources/ShareHubPlatform/ReceiveWorkDispatcher.swift; sourceTree = "<group>"; };
 		AD0000000000000000000002 /* FileAccessBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileAccessBridge.swift; sourceTree = "<group>"; };
 		AD0000000000000000000001 /* SelectedFileStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../Platform/Sources/ShareHubPlatform/SelectedFileStore.swift; sourceTree = "<group>"; };
 		AB0000000000000000000002 /* PlatformServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../Platform/Sources/ShareHubPlatform/PlatformServices.swift; sourceTree = "<group>"; };
@@ -175,6 +187,12 @@
 				33CC10F02044A3C60003C045 /* AppDelegate.swift */,
 				33CC11122044BFA00003C045 /* MainFlutterWindow.swift */,
 				AD0000000000000000000002 /* FileAccessBridge.swift */,
+				AD0000000000000000000003 /* ReceiveAccessBridge.swift */,
+				AD0000000000000000000006 /* SourceAccessBridge.swift */,
+				AD0000000000000000000007 /* FileDropBridge.swift */,
+				AD0000000000000000000008 /* FileDropSession.swift */,
+				AD0000000000000000000004 /* ReceiveStore.swift */,
+				AD0000000000000000000005 /* ReceiveWorkDispatcher.swift */,
 				AD0000000000000000000001 /* SelectedFileStore.swift */,
 				AB0000000000000000000002 /* PlatformServices.swift */,
 				33E51913231747F40026EE4D /* DebugProfile.entitlements */,
@@ -365,6 +383,12 @@
 			files = (
 				33CC11132044BFA00003C045 /* MainFlutterWindow.swift in Sources */,
 				AC0000000000000000000002 /* FileAccessBridge.swift in Sources */,
+				AC0000000000000000000003 /* ReceiveAccessBridge.swift in Sources */,
+				AC0000000000000000000006 /* SourceAccessBridge.swift in Sources */,
+				AC0000000000000000000007 /* FileDropBridge.swift in Sources */,
+				AC0000000000000000000008 /* FileDropSession.swift in Sources */,
+				AC0000000000000000000004 /* ReceiveStore.swift in Sources */,
+				AC0000000000000000000005 /* ReceiveWorkDispatcher.swift in Sources */,
 				AC0000000000000000000001 /* SelectedFileStore.swift in Sources */,
 				AB0000000000000000000001 /* PlatformServices.swift in Sources */,
 				33CC10F12044A3C60003C045 /* AppDelegate.swift in Sources */,

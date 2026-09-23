@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:share_hub_connection/share_hub_connection.dart';
+import 'package:share_hub_media_api/share_hub_media_api.dart';
 
 import '../../features/connections/connection_controller.dart';
 import '../../features/connections/connection_panel.dart';
@@ -9,8 +12,12 @@ import '../../features/devices/device_directory.dart';
 import '../../features/preview/preview_controller.dart';
 import '../../features/preview/preview_engine.dart';
 import '../../features/remote/remote_session_controller.dart';
+import '../../features/remote/control_clipboard_preference.dart';
 import '../../features/transfers/transfer_queue.dart';
 import '../../features/transfers/transfers_page.dart';
+import '../../features/transfers/network_transfers.dart';
+import '../../features/transfers/network_progress_view.dart';
+import '../../features/transfers/native_file_drop.dart';
 import '../../platform/client_platform.dart';
 import '../remote/remote_panel.dart';
 import 'appearance.dart';
@@ -26,8 +33,10 @@ class FieldShell extends StatefulWidget {
     required this.preview,
     required this.remote,
     required this.transfers,
+    this.networkTransfers,
     required this.desktop,
     required this.appearance,
+    this.clipboardPreference,
     required this.targetPlatform,
   });
   final DeviceController devices;
@@ -35,8 +44,10 @@ class FieldShell extends StatefulWidget {
   final PreviewController preview;
   final RemoteSessionController remote;
   final TransferQueue transfers;
+  final NetworkTransfers? networkTransfers;
   final DesktopLifecycle desktop;
   final Appearance appearance;
+  final ControlClipboardPreference? clipboardPreference;
   final TargetPlatform targetPlatform;
   @override
   State<FieldShell> createState() => _FieldShellState();
@@ -111,7 +122,9 @@ class _FieldShellState extends State<FieldShell> {
                   widget.devices,
                   widget.preview,
                   widget.transfers,
+                  ?widget.networkTransfers,
                   widget.appearance,
+                  ?widget.clipboardPreference,
                   widget.desktop,
                 ]),
                 builder: (_, _) => content(),
@@ -126,6 +139,45 @@ class _FieldShellState extends State<FieldShell> {
           ],
         ),
       );
+
+  Widget _fileDropRegion(DirectoryDevice? entry, Widget child) {
+    final connection = entry == null
+        ? null
+        : widget.networkTransfers?.targets
+              .where((target) => target.peerKey == entry.publicKey)
+              .firstOrNull;
+    if (entry != null && connection == null) return child;
+    return NativeFileDropRegion(
+      onDrop: (files) {
+        if (!mounted || widget.desktop.exiting || widget.desktop.exited) {
+          return false;
+        }
+        final accepted = connection == null
+            ? widget.transfers.admitDroppedFiles(files) != null
+            : widget.networkTransfers!.acceptDrop(files, connection);
+        if (accepted) {
+          unawaited(
+            openPanel(
+              '文件传送',
+              () => TransfersPage(
+                queue: widget.transfers,
+                network: widget.networkTransfers,
+                initialPeerKey: connection?.peerKey,
+                peerName: (key) =>
+                    _directory()
+                        .where((d) => d.publicKey == key)
+                        .firstOrNull
+                        ?.name ??
+                    '已验证设备',
+              ),
+            ),
+          );
+        }
+        return accepted;
+      },
+      child: child,
+    );
+  }
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
@@ -187,7 +239,11 @@ class _FieldShellState extends State<FieldShell> {
                       TextButton.icon(
                         onPressed: widget.remote.stop,
                         icon: const Icon(Icons.stop_screen_share_outlined),
-                        label: const Text('停止远端画面'),
+                        label: Text(
+                          widget.remote.operation == SessionOperation.control
+                              ? '停止控制'
+                              : '停止远端画面',
+                        ),
                       ),
                   ],
                 ),
@@ -199,6 +255,29 @@ class _FieldShellState extends State<FieldShell> {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       IssueBanner(issues: _issues()),
+                      if (widget.remote.occupied &&
+                          widget.remote.operation == SessionOperation.control &&
+                          widget.remote.sending &&
+                          widget.desktop.controlNoticeEnabled)
+                        Semantics(
+                          liveRegion: true,
+                          child: Card(
+                            child: Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Row(
+                                children: [
+                                  const Expanded(
+                                    child: Text('此设备正在被远程控制；停止本次控制后，连接仍保持有效。'),
+                                  ),
+                                  TextButton(
+                                    onPressed: widget.remote.stop,
+                                    child: const Text('停止控制'),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
                       // The single remote picture stays in the main surface so a
                       // receiving view never unmounts mid-session.
                       if (widget.remote.occupied)
@@ -223,6 +302,16 @@ class _FieldShellState extends State<FieldShell> {
                             query: search.text,
                             onLocal: localActions,
                             onDevice: deviceActions,
+                            fileDropRegion: _fileDropRegion,
+                            fileProgress: (entry) =>
+                                widget.networkTransfers != null &&
+                                    entry.publicKey != null
+                                ? NetworkProgressView(
+                                    controller: widget.networkTransfers!,
+                                    peerKey: entry.publicKey,
+                                    compact: true,
+                                  )
+                                : null,
                           ),
                           const Text('设备名称不是身份凭证 · 时延未测'),
                         ],
@@ -289,12 +378,21 @@ class _FieldShellState extends State<FieldShell> {
                     onPressed: () {
                       Navigator.pop(context);
                       openPanel(
-                        '本机文件准备',
-                        () => TransfersPage(queue: widget.transfers),
+                        '文件传送',
+                        () => TransfersPage(
+                          queue: widget.transfers,
+                          network: widget.networkTransfers,
+                          peerName: (key) =>
+                              _directory()
+                                  .where((d) => d.publicKey == key)
+                                  .firstOrNull
+                                  ?.name ??
+                              '已验证设备',
+                        ),
                       );
                     },
                     icon: const Icon(Icons.folder_open),
-                    label: const Text('文件准备'),
+                    label: const Text('文件传送'),
                   ),
                 ],
               ),
@@ -354,17 +452,24 @@ class _FieldShellState extends State<FieldShell> {
                   Text('会话操作', style: Theme.of(context).textTheme.titleMedium),
                   const SizedBox(height: 12),
                   const Text('时延未测。'),
+                  if (live.connected && widget.networkTransfers != null)
+                    FilledButton.tonalIcon(
+                      onPressed: () => Navigator.pop(context, 'files'),
+                      icon: const Icon(Icons.file_present_outlined),
+                      label: const Text('发送文件'),
+                    ),
                   if (widget.remote.offeredOperations.isEmpty)
-                    const Text('本构建未提供观看或投屏能力。'),
+                    const Text('本构建未提供远端画面操作能力。'),
                   if (live.connected && !canInitiate)
-                    const Text('当前连接由对方发起。若要观看或投屏，请让对方开启「允许连接」，再输入对方的短接码。'),
+                    const Text('当前连接由对方发起。若要发起远端操作，请让对方开启「允许连接」，再输入对方的短接码。'),
                   if (canInitiate) ...[
                     const Text('对端是否支持由会话本身确认；被拒绝会明确显示失败原因。'),
-                    const Text('观看：我看它的屏幕 · 投屏：它看我的屏幕'),
+                    const Text('观看：我看它的屏幕 · 投屏：它看我的屏幕 · 控制：我操作它的电脑'),
                     const SizedBox(height: 12),
                     for (final operation in const [
                       SessionOperation.watch,
                       SessionOperation.cast,
+                      SessionOperation.control,
                     ])
                       if (live.hasCapability(operation.name))
                         Padding(
@@ -376,7 +481,9 @@ class _FieldShellState extends State<FieldShell> {
                             child: Text(
                               operation == SessionOperation.watch
                                   ? '观看该设备屏幕'
-                                  : '投屏到该设备',
+                                  : operation == SessionOperation.cast
+                                  ? '投屏到该设备'
+                                  : '控制该设备',
                             ),
                           ),
                         ),
@@ -389,7 +496,7 @@ class _FieldShellState extends State<FieldShell> {
                     // The code is entered first; the operation only starts once
                     // the connection actually exists.
                     const Text('连接本身不采集任何画面。'),
-                    const Text('观看：我看它的屏幕 · 投屏：它看我的屏幕'),
+                    const Text('观看：我看它的屏幕 · 投屏：它看我的屏幕 · 控制：我操作它的电脑'),
                     const SizedBox(height: 12),
                     if (widget.remote.offeredOperations.contains(
                       SessionOperation.watch.name,
@@ -416,6 +523,20 @@ class _FieldShellState extends State<FieldShell> {
                               ),
                         child: const Text('连接并投屏'),
                       ),
+                    if (widget.remote.offeredOperations.contains(
+                      SessionOperation.control.name,
+                    )) ...[
+                      const SizedBox(height: 12),
+                      OutlinedButton(
+                        onPressed: widget.remote.occupied
+                            ? null
+                            : () => Navigator.pop(
+                                context,
+                                SessionOperation.control.name,
+                              ),
+                        child: const Text('连接并控制'),
+                      ),
+                    ],
                   ] else if (!canInitiate &&
                       live.hasPairingEndpoint &&
                       _connectionSupported)
@@ -478,6 +599,20 @@ class _FieldShellState extends State<FieldShell> {
       ),
     );
     if (action == null || !mounted) return;
+    if (action == 'files') {
+      await openPanel(
+        '文件传送',
+        () => TransfersPage(
+          queue: widget.transfers,
+          network: widget.networkTransfers,
+          initialPeerKey: entry.publicKey,
+          peerName: (key) =>
+              _directory().where((d) => d.publicKey == key).firstOrNull?.name ??
+              '已验证设备',
+        ),
+      );
+      return;
+    }
     final target = _directory()
         .where((item) => item.identityId == entry.identityId)
         .firstOrNull;
@@ -491,6 +626,8 @@ class _FieldShellState extends State<FieldShell> {
             ? '观看该设备屏幕'
             : action == SessionOperation.cast.name
             ? '投屏到该设备'
+            : action == SessionOperation.control.name
+            ? '控制该设备'
             : null,
         device: NearbyDevice(
           target.identityId,
@@ -519,6 +656,8 @@ class _FieldShellState extends State<FieldShell> {
     await widget.remote.start(
       action == SessionOperation.cast.name
           ? SessionOperation.cast
+          : action == SessionOperation.control.name
+          ? SessionOperation.control
           : SessionOperation.watch,
       peerKey: peerKey,
       label: live?.name,
@@ -680,6 +819,34 @@ class _FieldShellState extends State<FieldShell> {
           ),
         ),
       ],
+      SwitchListTile(
+        title: const Text('被控提示'),
+        subtitle: const Text('默认开启；关闭提示后仍可在主窗口或托盘停止控制。'),
+        value: widget.desktop.controlNoticeEnabled,
+        onChanged: widget.desktop.setControlNoticeEnabled,
+      ),
+      if (widget.clipboardPreference case final setting?)
+        if (widget.remote.factory.controlCapabilities.contains(
+          ControlCapability.clipboardText,
+        )) ...[
+          SwitchListTile(
+            key: const ValueKey('settings-control-clipboard'),
+            title: const Text('远程控制期间同步纯文本剪贴板'),
+            subtitle: const Text('默认双向开启；任意一端关闭即暂停当前控制对的同步。'),
+            value: setting.value,
+            onChanged: setting.setEnabled,
+          ),
+          if (setting.error case final String message) ...[
+            Semantics(liveRegion: true, child: Text(message)),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton(
+                onPressed: setting.retry,
+                child: const Text('重试剪贴板设置'),
+              ),
+            ),
+          ],
+        ],
       const SizedBox(height: 24),
       TextField(
         key: const ValueKey('device-name'),
@@ -725,7 +892,7 @@ class _FieldShellState extends State<FieldShell> {
           child: Text(message, key: const ValueKey('settings-device-error')),
         ),
       ],
-      const Text('Windows、macOS 无需激活或激活码。远控提示、网络文件和剪贴板设置在对应能力交付后开放。'),
+      const Text('Windows、macOS 无需激活或激活码。文件接收位置可在文件页面更改。'),
       const SizedBox(height: 24),
       const Divider(),
       if (widget.desktop.error case final String message)

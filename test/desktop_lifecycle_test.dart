@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:share_hub_connection/share_hub_connection.dart';
 import 'package:share_hub_open/features/connections/connection_controller.dart';
@@ -25,8 +26,24 @@ void main() {
   late TestFileAccess files;
   late DesktopLifecycle lifecycle;
   late List<String> calls;
+  late List<Map<Object?, Object?>> states;
+  late ValueNotifier<bool> controlActive;
+  var controlStops = 0;
+  Completer<void>? remoteStopGate;
+  var remoteStopClean = true;
+  Completer<void>? networkCloseGate;
+  late Completer<void> networkCloseEntered;
+  var failNetworkClose = false;
   setUp(() async {
     calls = [];
+    states = [];
+    controlActive = ValueNotifier<bool>(false);
+    controlStops = 0;
+    remoteStopGate = null;
+    remoteStopClean = true;
+    networkCloseGate = null;
+    networkCloseEntered = Completer<void>();
+    failNetworkClose = false;
     platform = FakePlatform();
     devices = DeviceController(platform);
     connections = ConnectionController(FakeConnectionPlatform());
@@ -36,6 +53,9 @@ void main() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
           calls.add(call.method);
+          if (call.method == 'state') {
+            states.add(Map<Object?, Object?>.from(call.arguments as Map));
+          }
           if (call.method == 'initialize') return {'allowConnections': false};
           if (call.method == 'prepareExit' &&
               files.picker != null &&
@@ -51,13 +71,37 @@ void main() {
       connections: connections,
       preview: preview,
       transfers: transfers,
+      closeNetworkTransfers: () async {
+        calls.add('network-close');
+        if (!networkCloseEntered.isCompleted) networkCloseEntered.complete();
+        if (networkCloseGate != null) await networkCloseGate!.future;
+        if (failNetworkClose) throw StateError('network cleanup failed');
+      },
       connectionSupported: false,
       channel: channel,
+      controlActive: () => controlActive.value,
+      controlChanges: controlActive,
+      stopControl: () async {
+        controlStops++;
+        controlActive.value = false;
+      },
+      stopRemotePicture: () async {
+        calls.add('remote-stop');
+        await remoteStopGate?.future;
+        return remoteStopClean;
+      },
     );
     await lifecycle.initialize();
   });
   tearDown(() async {
+    if (networkCloseGate case final gate? when !gate.isCompleted) {
+      gate.complete();
+    }
+    if (remoteStopGate case final gate? when !gate.isCompleted) {
+      gate.complete();
+    }
     lifecycle.dispose();
+    controlActive.dispose();
     devices.dispose();
     connections.dispose();
     preview.dispose();
@@ -67,6 +111,94 @@ void main() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, null);
   });
+  test('tray stop targets only the current control operation', () async {
+    const codec = StandardMethodCodec();
+    Future<Object?> invokeNative(String method) {
+      final reply = Completer<Object?>();
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .handlePlatformMessage(
+            channel.name,
+            codec.encodeMethodCall(MethodCall(method)),
+            (bytes) => reply.complete(codec.decodeEnvelope(bytes!)),
+          );
+      return reply.future;
+    }
+
+    expect(await invokeNative('stopControl'), isFalse);
+    expect(controlStops, 0);
+    controlActive.value = true;
+    await Future<void>.delayed(Duration.zero);
+    expect(states.last['controlActive'], isTrue);
+    expect(await invokeNative('stopControl'), isTrue);
+    expect(controlStops, 1);
+    expect(states.last['controlActive'], isFalse);
+    expect(lifecycle.exited, isFalse);
+  });
+  test(
+    'control notice defaults on and may be disabled without hiding stop',
+    () async {
+      expect(lifecycle.controlNoticeEnabled, isTrue);
+      controlActive.value = true;
+      await lifecycle.setControlNoticeEnabled(false);
+      expect(lifecycle.controlNoticeEnabled, isFalse);
+      expect(states.last['controlNoticeEnabled'], isFalse);
+      expect(states.last['controlActive'], isTrue);
+    },
+  );
+  test(
+    'exit waits for remote input release and retries failed cleanup',
+    () async {
+      remoteStopGate = Completer<void>();
+      remoteStopClean = false;
+      final first = lifecycle.requestExit();
+      await Future<void>.delayed(Duration.zero);
+      expect(lifecycle.exited, isFalse);
+      expect(calls, contains('remote-stop'));
+      remoteStopGate!.complete();
+      expect(await first, isFalse);
+      expect(calls, isNot(contains('prepareExit')));
+      remoteStopClean = true;
+      expect(await lifecycle.requestExit(), isTrue);
+      expect(calls.where((call) => call == 'remote-stop'), hasLength(2));
+    },
+  );
+  test(
+    'quit waits for network cleanup before releasing selected files',
+    () async {
+      files.selection = [
+        const SelectedFile(token: 'held', name: 'held', size: 0),
+      ];
+      await transfers.selectFiles();
+      await Future<void>.delayed(Duration.zero);
+      networkCloseGate = Completer<void>();
+      final closing = lifecycle.requestExit();
+      await networkCloseEntered.future;
+      expect(files.releases, isEmpty);
+      expect(
+        calls.indexOf('prepareExit'),
+        lessThan(calls.indexOf('network-close')),
+      );
+      networkCloseGate!.complete();
+      expect(await closing, isTrue);
+      expect(files.releases, ['held']);
+    },
+  );
+  test(
+    'failed network cleanup keeps exit retryable and preserves selections',
+    () async {
+      files.selection = [
+        const SelectedFile(token: 'held', name: 'held', size: 0),
+      ];
+      await transfers.selectFiles();
+      await Future<void>.delayed(Duration.zero);
+      failNetworkClose = true;
+      expect(await lifecycle.requestExit(), isFalse);
+      expect(files.releases, isEmpty);
+      failNetworkClose = false;
+      expect(await lifecycle.requestExit(), isTrue);
+      expect(files.releases, ['held']);
+    },
+  );
   test(
     'discovery is independent from initially closed admission and disconnect',
     () async {
@@ -152,7 +284,12 @@ void main() {
       final published = <bool>[];
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(restart, (call) async {
-            if (call.method == 'initialize') return {'allowConnections': true};
+            if (call.method == 'initialize') {
+              return {
+                'allowConnections': true,
+                'controlNoticeEnabled': false,
+              };
+            }
             if (call.method == 'state') {
               published.add(
                 (call.arguments as Map)['allowConnections'] as bool,
@@ -185,6 +322,7 @@ void main() {
       await restarted.initialize();
       // The remembered switch reopens admission with a brand new context.
       expect(restored.accepting, isTrue);
+      expect(restarted.controlNoticeEnabled, isFalse);
       expect(restored.code, matches(RegExp(r'^\d{6}$')));
       // Only the preference survives a restart: no session, no grant, and the
       // previous run's code cannot be replayed into this process.

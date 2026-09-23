@@ -1,7 +1,8 @@
 import Cocoa
+import CoreFoundation
 import FlutterMacOS
 
-class MainFlutterWindow: NSWindow, FlutterStreamHandler {
+class MainFlutterWindow: NSWindow, FlutterStreamHandler, NSDraggingDestination {
   private let preferences = DevicePreferences()
   private let discovery = LocalDiscovery()
   private let files = FileAccessBridge()
@@ -10,6 +11,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   private var desktop: FlutterMethodChannel?
   private var statusItem: NSStatusItem?
   private var allowItem: NSMenuItem?
+  private var stopControlItem: NSMenuItem?
   private var desktopReady = false
   private var quitPending = false
   private(set) var terminationApproved = false
@@ -25,6 +27,8 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
       ?? "Share Hub"
     center()
     RegisterGeneratedPlugins(registry: controller)
+    files.configureFileDrop(messenger: controller.engine.binaryMessenger)
+    registerForDraggedTypes([.fileURL])
     methods = FlutterMethodChannel(name: "dev.sharehub.client/platform", binaryMessenger: controller.engine.binaryMessenger)
     events = FlutterEventChannel(name: "dev.sharehub.client/discovery", binaryMessenger: controller.engine.binaryMessenger)
     events?.setStreamHandler(self)
@@ -78,11 +82,22 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
           result(FlutterError(code: "tray_unavailable", message: "菜单栏入口不可用", details: nil)); return
         }
         self.desktopReady = true
-        result(["allowConnections": UserDefaults.standard.bool(forKey: "allowConnections")])
+        result([
+          "allowConnections": UserDefaults.standard.bool(forKey: "allowConnections"),
+          "controlNoticeEnabled": UserDefaults.standard.object(forKey: "controlNoticeEnabled") as? Bool ?? true,
+        ])
       case "state":
-        let allowed = (call.arguments as? [String: Any])?["allowConnections"] as? Bool == true
+        let state = call.arguments as? [String: Any]
+        let allowed = state?["allowConnections"] as? Bool == true
+        let controlActive = state?["controlActive"] as? Bool == true
+        let noticeEnabled = state?["controlNoticeEnabled"] as? Bool != false
         self.allowItem?.state = allowed ? .on : .off
+        self.stopControlItem?.title = controlActive ? "停止控制" : "停止控制（当前无远控会话）"
+        self.stopControlItem?.isEnabled = controlActive
+        self.statusItem?.button?.toolTip = controlActive && noticeEnabled
+          ? "串串 · 正在被远程控制" : "串串 · 后台连接与会话"
         UserDefaults.standard.set(allowed, forKey: "allowConnections")
+        UserDefaults.standard.set(noticeEnabled, forKey: "controlNoticeEnabled")
         result(nil)
       case "appearance.read": result(UserDefaults.standard.string(forKey: "appearance") ?? "system")
       case "appearance.write":
@@ -90,6 +105,22 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
           result(FlutterError(code: "invalid_theme", message: "主题无效", details: nil)); return
         }
         UserDefaults.standard.set(value, forKey: "appearance"); result(nil)
+      case "controlClipboard.read":
+        if let stored = UserDefaults.standard.object(forKey: "controlClipboardSyncEnabled") {
+          guard let number = stored as? NSNumber,
+                CFGetTypeID(number as CFTypeRef) == CFBooleanGetTypeID() else {
+            result(FlutterError(code: "preferences_failed", message: "剪贴板设置已损坏", details: nil)); return
+          }
+          result(number.boolValue)
+        } else {
+          result(true)
+        }
+      case "controlClipboard.write":
+        guard let enabled = call.arguments as? Bool else {
+          result(FlutterError(code: "invalid_preference", message: "需要布尔值", details: nil)); return
+        }
+        UserDefaults.standard.set(enabled, forKey: "controlClipboardSyncEnabled")
+        result(nil)
       case "exit":
         // Dart has already awaited the complete cleanup transaction. Do not
         // request it again from AppKit's nested termination loop.
@@ -122,6 +153,17 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
       }
     }
     super.awakeFromNib()
+  }
+
+  func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+    guard !quitPending, !terminationApproved else { return [] }
+    return files.dropOperation(sender)
+  }
+  func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { draggingEntered(sender) }
+  func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { draggingEntered(sender) == .copy }
+  func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+    guard draggingEntered(sender) == .copy, let view = contentViewController?.view else { return false }
+    return files.acceptDrop(sender, view: view)
   }
 
   func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
@@ -210,7 +252,8 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     allowItem = entry(connectionSupported ? "允许连接" : "允许连接（当前平台不可用）", #selector(toggleAllow))
     allowItem?.isEnabled = connectionSupported
     menu.autoenablesItems = false
-    _ = entry("停止控制（当前无远控会话）", #selector(stopControl))
+    stopControlItem = entry("停止控制（当前无远控会话）", #selector(stopControl))
+    stopControlItem?.isEnabled = false
     menu.addItem(.separator())
     _ = entry("退出串串", #selector(quitApplication))
     item.menu = menu
@@ -253,6 +296,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
 
   private func completeTermination() {
     terminationApproved = true
+    unregisterDraggedTypes()
     discovery.stop(); files.close()
     if let status = statusItem { NSStatusBar.system.removeStatusItem(status) }
     statusItem = nil

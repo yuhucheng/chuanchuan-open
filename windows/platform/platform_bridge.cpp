@@ -2,7 +2,13 @@
 #include "connection_security.h"
 #include "device_preferences.h"
 #include "native_discovery.h"
-#include "selected_file_store.h"
+#include "source_bridge.h"
+#include "receive_bridge.h"
+#include "file_drop_target.h"
+#include "file_drop_session.h"
+#include "control_display_geometry.h"
+#include "control_pointer_bridge.h"
+#include "control_clipboard_bridge.h"
 #include <shellapi.h>
 #include <shobjidl.h>
 #include <wrl/client.h>
@@ -10,6 +16,7 @@
 #include <flutter/event_channel.h>
 #include <flutter/event_stream_handler_functions.h>
 #include <flutter/method_channel.h>
+#include <flutter/method_result_functions.h>
 #include <flutter/standard_method_codec.h>
 #include <climits>
 #include <optional>
@@ -21,6 +28,11 @@ using Value = flutter::EncodableValue;
 using Map = flutter::EncodableMap;
 using List = flutter::EncodableList;
 constexpr UINT_PTR kTimer = 0x53484453;
+ReceiveStoreOptions ReceiveOptions(const std::wstring& key) {
+  ReceiveStoreOptions options;
+  options.directory_settings_key = key;
+  return options;
+}
 using Microsoft::WRL::ComPtr;
 std::optional<int64_t> Integer(const Value& value) {
   if (const auto* number = std::get_if<int64_t>(&value)) return *number;
@@ -39,6 +51,10 @@ const char* FileMessage(SelectedFileError reason) {
     case SelectedFileError::changed: return u8"文件在准备过程中发生变化，请重新选择。";
     case SelectedFileError::invalid_read: return u8"文件读取顺序或分块大小无效。";
     case SelectedFileError::incomplete: return u8"文件内容尚未完整读取。";
+    case SelectedFileError::invalid_scope:
+    case SelectedFileError::expired:
+    case SelectedFileError::clock_failure:
+    case SelectedFileError::stopped:
     case SelectedFileError::invalid_token: return u8"文件令牌无效，请重新选择。";
   }
   return u8"文件访问失败，请重新选择。";
@@ -69,20 +85,61 @@ Value SnapshotValue(const DiscoverySnapshot& snapshot) {
 struct PlatformBridge::Impl {
   Impl(HWND window, std::wstring registry_key)
       : window(window), preferences(registry_key),
-        security(std::move(registry_key)), discovery(window) {}
+        security(registry_key), discovery(window), files(window), receiving(window, ReceiveOptions(registry_key)) {}
   HWND window;
   bool loaded = false, closed = false;
   UINT_PTR timer = 0;
   DevicePreferences preferences;
   ConnectionSecurity security;
   NativeDiscovery discovery;
-  SelectedFileStore files;
+  SourceBridge files;
+  ReceiveBridge receiving;
+  ControlPointerBridge pointer;
+  ControlClipboardBridge clipboard{window};
+  HWND drop_window = nullptr;
+  ComPtr<FileDropTarget> drop_target;
+  std::unique_ptr<FileDropSession> drop_session;
+  std::unique_ptr<flutter::MethodChannel<Value>> drops;
   ComPtr<IFileOpenDialog> picker;
   std::unique_ptr<flutter::MethodChannel<Value>> methods;
   std::unique_ptr<flutter::EventChannel<Value>> events;
   std::unique_ptr<flutter::EventSink<Value>> sink;
 };
 namespace {
+template <typename State>
+void PickReceiveDirectory(std::shared_ptr<State> state,
+                          std::unique_ptr<flutter::MethodResult<Value>> result) {
+  if (state->picker) { result->Error("resource_limit", "A file picker is already open."); return; }
+  ComPtr<IFileOpenDialog> dialog;
+  if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+                              IID_PPV_ARGS(&dialog)))) {
+    result->Error("permission_denied", "Cannot open receiving folder picker."); return;
+  }
+  DWORD options = 0;
+  if (FAILED(dialog->GetOptions(&options)) ||
+      FAILED(dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM |
+                                 FOS_PATHMUSTEXIST | FOS_NODEREFERENCELINKS))) {
+    result->Error("permission_denied", "Cannot open receiving folder picker."); return;
+  }
+  dialog->SetTitle(L"选择接收文件夹");
+  dialog->SetOkButtonLabel(L"使用此文件夹");
+  state->picker = dialog;
+  const HRESULT shown = dialog->Show(state->window);
+  state->picker.Reset();
+  if (state->closed) { result->Error("closed", "Client closed."); return; }
+  if (shown == HRESULT_FROM_WIN32(ERROR_CANCELLED)) { result->Success(); return; }
+  if (FAILED(shown)) { result->Error("permission_denied", "Cannot select receiving folder."); return; }
+  ComPtr<IShellItem> selected;
+  wchar_t* raw = nullptr;
+  if (FAILED(dialog->GetResult(&selected)) || !selected ||
+      FAILED(selected->GetDisplayName(SIGDN_FILESYSPATH, &raw)) || !raw) {
+    if (raw) CoTaskMemFree(raw);
+    result->Error("permission_denied", "Cannot select receiving folder."); return;
+  }
+  std::wstring path(raw);
+  CoTaskMemFree(raw);
+  state->receiving.AcceptPickedDirectory(std::move(path), std::move(result));
+}
 template <typename State>
 void PickFiles(std::shared_ptr<State> state,
                std::unique_ptr<flutter::MethodResult<Value>> result) {
@@ -104,7 +161,7 @@ void PickFiles(std::shared_ptr<State> state,
   state->picker = dialog;
   const HRESULT shown = dialog->Show(state->window);
   state->picker.Reset();
-  if (state->closed) return;
+  if (state->closed) { result->Error("closed", "Client closed."); return; }
   if (shown == HRESULT_FROM_WIN32(ERROR_CANCELLED)) { result->Success(Value(List{})); return; }
   if (FAILED(shown)) { FileFailure(result.get(), SelectedFileError::unavailable); return; }
   ComPtr<IShellItemArray> selected;
@@ -113,7 +170,7 @@ void PickFiles(std::shared_ptr<State> state,
       FAILED(selected->GetCount(&count))) {
     FileFailure(result.get(), SelectedFileError::unavailable); return;
   }
-  if (count > SelectedFileStore::kMaximumFiles - state->files.count()) {
+  if (count > SelectedFileStore::kMaximumFiles) {
     FileFailure(result.get(), SelectedFileError::limit); return;
   }
   std::vector<std::wstring> paths;
@@ -129,17 +186,7 @@ void PickFiles(std::shared_ptr<State> state,
     paths.emplace_back(raw);
     CoTaskMemFree(raw);
   }
-  try {
-    List output;
-    for (const auto& file : state->files.AddPickerPaths(paths)) {
-      output.emplace_back(Map{{Value("token"), Value(file.token)},
-                              {Value("name"), Value(file.name)},
-                              {Value("size"), Value(file.size)}});
-    }
-    result->Success(Value(output));
-  } catch (const SelectedFileException& error) {
-    FileFailure(result.get(), error.reason());
-  }
+  state->files.AcceptPickedFiles(std::move(paths), std::move(result));
 }
 }
 PlatformBridge::PlatformBridge(flutter::BinaryMessenger* messenger, HWND window,
@@ -148,6 +195,50 @@ PlatformBridge::PlatformBridge(flutter::BinaryMessenger* messenger, HWND window,
   const auto* codec = &flutter::StandardMethodCodec::GetInstance();
   impl_->methods = std::make_unique<flutter::MethodChannel<Value>>(messenger, "dev.sharehub.client/platform", codec);
   impl_->events = std::make_unique<flutter::EventChannel<Value>>(messenger, "dev.sharehub.client/discovery", codec);
+  impl_->drops = std::make_unique<flutter::MethodChannel<Value>>(messenger, "dev.sharehub.client/file-drop", codec);
+  const std::weak_ptr<Impl> weak = impl_;
+  impl_->drop_session = std::make_unique<FileDropSession>(impl_->files,
+      [weak](double x, double y, FileDropSession::Decision decision) {
+        const auto state = weak.lock();
+        if (!state || state->closed) { decision(false); return; }
+        state->drops->InvokeMethod("locate", std::make_unique<Value>(Map{
+            {Value("x"), Value(x)}, {Value("y"), Value(y)}}),
+            std::make_unique<flutter::MethodResultFunctions<Value>>(
+                [decision](const Value* answer) {
+                  decision(answer && std::get_if<bool>(answer) && std::get<bool>(*answer));
+                },
+                [decision](const std::string&, const std::string&, const Value*) { decision(false); },
+                [decision] { decision(false); }));
+      },
+      [weak](Value offer, FileDropSession::Decision decision) {
+        const auto state = weak.lock();
+        if (!state || state->closed) { decision(false); return; }
+        state->drops->InvokeMethod("drop", std::make_unique<Value>(std::move(offer)),
+            std::make_unique<flutter::MethodResultFunctions<Value>>(
+                [decision](const Value* answer) {
+                  decision(answer && std::get_if<bool>(answer) && std::get<bool>(*answer));
+                },
+                [decision](const std::string&, const std::string&, const Value*) { decision(false); },
+                [decision] { decision(false); }));
+      },
+      [weak] {
+        if (const auto state = weak.lock(); state && !state->closed)
+          state->drops->InvokeMethod("error", nullptr);
+      });
+  impl_->drops->SetMethodCallHandler([weak](const flutter::MethodCall<Value>& call,
+      std::unique_ptr<flutter::MethodResult<Value>> result) {
+    const auto state = weak.lock();
+    if (!state || state->closed) { result->Error("closed", "Client closed."); return; }
+    if (call.arguments() && !std::holds_alternative<std::monostate>(*call.arguments())) {
+      result->Error("invalid_arguments", "File drop listener takes no paths."); return;
+    }
+    if (call.method_name() == "listen") {
+      if (!state->drop_window) { result->Error("unavailable", "File drop unavailable."); return; }
+      state->drop_session->Listen(); result->Success();
+    } else if (call.method_name() == "cancel") {
+      state->drop_session->Cancel(); result->Success();
+    } else { result->NotImplemented(); }
+  });
   impl_->timer = SetTimer(window, kTimer, 1000, nullptr);
   impl_->discovery.on_change = [this](const DiscoverySnapshot& snapshot) {
     if (impl_->sink && !impl_->closed) impl_->sink->Success(SnapshotValue(snapshot));
@@ -166,36 +257,43 @@ PlatformBridge::PlatformBridge(flutter::BinaryMessenger* messenger, HWND window,
                                              std::unique_ptr<flutter::MethodResult<Value>> result) {
     if (impl_->closed) { result->Error("closed", u8"客户端已关闭。"); return; }
     const auto& method = call.method_name();
+    if (impl_->pointer.Handle(call, result)) return;
+    if (impl_->clipboard.Handle(call, result)) return;
+    if (method == "control.screenGeometry") {
+      // Read-only local metadata. It neither creates a control owner nor
+      // authorizes OS input; the owner must retain and recheck native identity.
+      const auto* args = call.arguments() ? std::get_if<Map>(call.arguments()) : nullptr;
+      const auto* id_value = args ? Field(*args, "sourceId") : nullptr;
+      const auto* id = id_value ? std::get_if<std::string>(id_value) : nullptr;
+      if (!args || args->size() != 1 || !id) {
+        result->Error("invalid_arguments", "Screen source id required."); return;
+      }
+      const auto geometry = ResolveControlScreenGeometry(*id);
+      if (!geometry) {
+        result->Error("source_unavailable", "Screen source is no longer current."); return;
+      }
+      result->Success(Value(Map{
+          {Value("sourceId"), Value(*id)},
+          {Value("left"), Value(static_cast<int64_t>(geometry->left))},
+          {Value("top"), Value(static_cast<int64_t>(geometry->top))},
+          {Value("width"), Value(static_cast<int64_t>(geometry->width))},
+          {Value("height"), Value(static_cast<int64_t>(geometry->height))},
+          {Value("rotation"), Value(static_cast<int64_t>(geometry->rotation))}}));
+      return;
+    }
+    if (method == "files.receive.directoryPick") {
+      if (call.arguments() && !std::holds_alternative<std::monostate>(*call.arguments())) {
+        result->Error("invalid_range", "Folder picker takes no path argument."); return;
+      }
+      PickReceiveDirectory(impl_, std::move(result));
+      return;
+    }
+    if (impl_->receiving.Handle(call, result)) return;
     if (method == "files.pick") {
       PickFiles(impl_, std::move(result));
       return;
     }
-    if (method == "files.read" || method == "files.finish" || method == "files.release") {
-      try {
-        if (method == "files.read") {
-          const auto* args = call.arguments() ? std::get_if<Map>(call.arguments()) : nullptr;
-          const auto* token_value = args ? Field(*args, "token") : nullptr;
-          const auto* offset_value = args ? Field(*args, "offset") : nullptr;
-          const auto* length_value = args ? Field(*args, "length") : nullptr;
-          const auto* token = token_value ? std::get_if<std::string>(token_value) : nullptr;
-          const auto offset = offset_value ? Integer(*offset_value) : std::nullopt;
-          const auto length = length_value ? Integer(*length_value) : std::nullopt;
-          if (!token || !offset || !length || *length < 0 || *length > INT_MAX) {
-            FileFailure(result.get(), SelectedFileError::invalid_read); return;
-          }
-          result->Success(Value(impl_->files.Read(*token, *offset, static_cast<int>(*length))));
-        } else {
-          const auto* token = call.arguments() ? std::get_if<std::string>(call.arguments()) : nullptr;
-          if (!token) { FileFailure(result.get(), SelectedFileError::invalid_token); return; }
-          if (method == "files.finish") impl_->files.Finish(*token);
-          else impl_->files.Release(*token);
-          result->Success();
-        }
-      } catch (const SelectedFileException& error) {
-        FileFailure(result.get(), error.reason());
-      }
-      return;
-    }
+    if (impl_->files.Handle(call, result)) return;
     if (method == "connection.identity") {
       // Protected-storage failure must be a hard error: an anonymous fallback
       // identity would silently break every saved peer.
@@ -279,19 +377,54 @@ PlatformBridge::PlatformBridge(flutter::BinaryMessenger* messenger, HWND window,
 PlatformBridge::~PlatformBridge() { Close(); }
 bool PlatformBridge::HandleMessage(UINT message, WPARAM wparam) {
   if (impl_->closed) return false;
+  if (message == ReceiveBridge::kMessage) { impl_->receiving.Pump(); return true; }
+  if (message == SourceBridge::kMessage) { impl_->files.Pump(); return true; }
   if (message == NativeDiscovery::kMessage) { impl_->discovery.Pump(); return true; }
-  if (message == WM_TIMER && wparam == impl_->timer) { impl_->discovery.Pump(); impl_->discovery.Tick(); return true; }
+  if (message == WM_TIMER && wparam == impl_->timer) {
+    impl_->receiving.Pump(); impl_->files.Pump(); impl_->discovery.Pump(); impl_->discovery.Tick(); return true;
+  }
   return false;
 }
 void PlatformBridge::CancelFilePicker() {
+  impl_->drop_session->Cancel();
   if (impl_->picker) impl_->picker->Close(HRESULT_FROM_WIN32(ERROR_CANCELLED));
+}
+
+void PlatformBridge::ConfigureFileDrop(HWND flutter_view) {
+  if (impl_->closed || impl_->drop_window || !flutter_view) return;
+  const std::weak_ptr<Impl> weak = impl_;
+  impl_->drop_target.Attach(new FileDropTarget(
+      [weak] {
+        const auto state = weak.lock();
+        return state && !state->closed && !state->picker && state->drop_session->ready();
+      },
+      [weak, flutter_view](std::vector<std::wstring> paths, POINTL screen) {
+        const auto state = weak.lock();
+        if (!state || state->closed) return false;
+        POINT client{screen.x, screen.y};
+        if (!ScreenToClient(flutter_view, &client)) return false;
+        const UINT dpi = GetDpiForWindow(flutter_view);
+        if (!dpi) return false;
+        return state->drop_session->Accept(std::move(paths),
+            client.x * 96.0 / dpi, client.y * 96.0 / dpi);
+      }));
+  if (SUCCEEDED(RegisterDragDrop(flutter_view, impl_->drop_target.Get())))
+    impl_->drop_window = flutter_view;
+  else impl_->drop_target.Reset();
 }
 
 void PlatformBridge::Close() {
   if (impl_->closed) return;
   impl_->closed = true;
+  impl_->pointer.Close();
+  impl_->clipboard.Close();
+  if (impl_->drop_window) { RevokeDragDrop(impl_->drop_window); impl_->drop_window = nullptr; }
+  impl_->drop_target.Reset();
+  impl_->drop_session->Close();
+  impl_->drops->SetMethodCallHandler(nullptr);
   if (impl_->picker) impl_->picker->Close(HRESULT_FROM_WIN32(ERROR_CANCELLED));
-  impl_->files.Shutdown();
+  impl_->receiving.Close();
+  impl_->files.Close();
   if (impl_->timer) { KillTimer(impl_->window, impl_->timer); impl_->timer = 0; }
   impl_->discovery.Close(); impl_->sink.reset();
   // Channels do not automatically unregister handlers when destroyed.

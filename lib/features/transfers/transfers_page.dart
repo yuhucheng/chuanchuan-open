@@ -1,165 +1,193 @@
 import 'package:flutter/material.dart';
 
 import 'transfer_queue.dart';
+import 'network_transfers.dart';
+import 'network_transfers_panel.dart';
+import 'native_file_drop.dart';
 
 class TransfersPage extends StatelessWidget {
-  const TransfersPage({super.key, required this.queue});
+  const TransfersPage({
+    super.key,
+    required this.queue,
+    this.network,
+    this.initialPeerKey,
+    this.peerName,
+  });
   final TransferQueue queue;
+  final NetworkTransfers? network;
+  final String? initialPeerKey;
+  final String Function(String)? peerName;
 
   @override
-  Widget build(BuildContext context) => AnimatedBuilder(
-    animation: queue,
-    builder: (context, _) => Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Text(
-          '把文件，准备好',
-          style: TextStyle(
-            fontSize: 28,
-            fontWeight: FontWeight.w700,
-            letterSpacing: -0.6,
-          ),
-        ),
-        SizedBox(height: 10),
-        Text(
-          '选好文件，检查内容，等待与你的另一台设备连接。',
-          style: TextStyle(
-            color: Theme.of(context).colorScheme.onSurfaceVariant,
-            height: 1.5,
-          ),
-        ),
-        SizedBox(height: 26),
-        Container(
-          padding: EdgeInsets.all(24),
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surface,
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(
-              color: Theme.of(context).colorScheme.outlineVariant,
+  Widget build(BuildContext context) => NativeFileDropRegion(
+    onDrop: (files) => queue.admitDroppedFiles(files) != null,
+    child: AnimatedBuilder(
+      animation: Listenable.merge([queue, ?network]),
+      builder: (context, _) => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            '把文件，准备好',
+            style: TextStyle(
+              fontSize: 28,
+              fontWeight: FontWeight.w700,
+              letterSpacing: -0.6,
             ),
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Wrap(
-                alignment: WrapAlignment.spaceBetween,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                runSpacing: 12,
-                spacing: 16,
-                children: [
-                  Text(
-                    '文件队列 · ${queue.items.length}',
-                    style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
-                  ),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      TextButton(
-                        onPressed: queue.items.isEmpty && !queue.selecting
-                            ? null
-                            : queue.clear,
-                        child: Text('清空队列'),
-                      ),
-                      SizedBox(width: 12),
-                      FilledButton.icon(
-                        onPressed:
-                            queue.selecting ||
-                                queue.items.length >= TransferQueue.maxFiles
-                            ? null
-                            : queue.selectFiles,
-                        icon: Icon(Icons.add_rounded, size: 20),
-                        label: Text(queue.selecting ? '正在选择' : '选择文件'),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-              SizedBox(height: 22),
-              Divider(
-                height: 1,
+          SizedBox(height: 10),
+          Text(
+            '选好文件，检查内容，等待与你的另一台设备连接。',
+            style: TextStyle(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+              height: 1.5,
+            ),
+          ),
+          SizedBox(height: 26),
+          Container(
+            padding: EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surface,
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(
                 color: Theme.of(context).colorScheme.outlineVariant,
               ),
-              if (queue.items.isEmpty)
-                Padding(
-                  padding: EdgeInsets.symmetric(vertical: 52),
-                  child: Column(
-                    children: [
-                      Icon(
-                        Icons.file_copy_outlined,
-                        size: 44,
-                        color: Color(0xFF83A392),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Wrap(
+                  alignment: WrapAlignment.spaceBetween,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  runSpacing: 12,
+                  spacing: 16,
+                  children: [
+                    Text(
+                      '文件队列 · ${queue.items.length}',
+                      style: TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w600,
                       ),
-                      SizedBox(height: 16),
-                      Text(
-                        '先加入想分享的文件',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
+                    ),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        TextButton(
+                          onPressed: queue.items.isEmpty && !queue.selecting
+                              ? null
+                              : queue.clear,
+                          child: Text('清空队列'),
                         ),
-                      ),
-                      SizedBox(height: 8),
-                      Text(
-                        '支持一次选择多个文件；准备过程不会修改原文件。',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
-                          fontSize: 13,
+                        SizedBox(width: 12),
+                        FilledButton.icon(
+                          onPressed:
+                              queue.selecting ||
+                                  queue.items.length >= TransferQueue.maxFiles
+                              ? null
+                              : queue.selectFiles,
+                          icon: Icon(Icons.add_rounded, size: 20),
+                          label: Text(queue.selecting ? '正在选择' : '选择文件'),
                         ),
-                      ),
-                    ],
-                  ),
-                )
-              else
-                ...queue.items.map(
-                  (item) => _FileRow(
-                    key: ValueKey(item.file.token),
-                    item: item,
-                    queue: queue,
-                  ),
+                      ],
+                    ),
+                  ],
                 ),
-              if (queue.error != null)
-                Padding(
-                  padding: EdgeInsets.only(top: 14),
+                SizedBox(height: 22),
+                Divider(
+                  height: 1,
+                  color: Theme.of(context).colorScheme.outlineVariant,
+                ),
+                if (queue.items.isEmpty)
+                  Padding(
+                    padding: EdgeInsets.symmetric(vertical: 52),
+                    child: Column(
+                      children: [
+                        Icon(
+                          Icons.file_copy_outlined,
+                          size: 44,
+                          color: Color(0xFF83A392),
+                        ),
+                        SizedBox(height: 16),
+                        Text(
+                          '先加入想分享的文件',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        SizedBox(height: 8),
+                        Text(
+                          '支持一次选择多个文件；准备过程不会修改原文件。',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurfaceVariant,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                else
+                  ...queue.items.map(
+                    (item) => _FileRow(
+                      key: ValueKey(item.file.token),
+                      item: item,
+                      queue: queue,
+                    ),
+                  ),
+                if (queue.error != null)
+                  Padding(
+                    padding: EdgeInsets.only(top: 14),
+                    child: Text(
+                      queue.error!,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          SizedBox(height: 20),
+          if (network case final controller?) ...[
+            NetworkTransfersPanel(
+              controller: controller,
+              initialPeerKey: initialPeerKey,
+              peerName: peerName,
+            ),
+            const SizedBox(height: 20),
+          ],
+          Container(
+            padding: EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  Icons.link_off_rounded,
+                  size: 20,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+                SizedBox(width: 12),
+                Expanded(
                   child: Text(
-                    queue.error!,
+                    '本地检查完成不表示送达；尚未发送的文件需要选择已连接设备。退出会清空本次队列。',
                     style: TextStyle(
-                      color: Theme.of(context).colorScheme.error,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      fontSize: 12,
+                      height: 1.7,
                     ),
                   ),
                 ),
-            ],
+              ],
+            ),
           ),
-        ),
-        SizedBox(height: 20),
-        Container(
-          padding: EdgeInsets.all(18),
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(
-                Icons.link_off_rounded,
-                size: 20,
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-              SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  '设备连接开发中，当前仅在本机准备文件，尚未发送。队列在退出应用后清空；接入传送前会再次检查文件是否变化。',
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    fontSize: 12,
-                    height: 1.7,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
+        ],
+      ),
     ),
   );
 }
@@ -205,7 +233,7 @@ class _FileRow extends StatelessWidget {
                     '${formatFileSize(item.file.size)} · ${switch (item.state) {
                       PreparationState.queued => '等待准备',
                       PreparationState.preparing => '正在检查文件',
-                      PreparationState.ready => '已检查 · 等待连接',
+                      PreparationState.ready => item.canSend ? '已检查 · 等待连接' : '已用于传送 · 结果见下方',
                       PreparationState.cancelled => '已取消准备',
                       PreparationState.failed => '准备失败',
                     }}',

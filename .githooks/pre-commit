@@ -7,7 +7,7 @@ branch=$(git symbolic-ref --quiet --short HEAD) || {
 # Approved branch names must stay in sync with docs/version-plan.md.
 case "$branch" in
   main) ;;
-  release/v0.1.0)
+  release/v0.1.0|release/v0.2.0)
     echo "Version policy: committing on approved exception branch '$branch' (see docs/version-plan.md)." >&2
     ;;
   *)

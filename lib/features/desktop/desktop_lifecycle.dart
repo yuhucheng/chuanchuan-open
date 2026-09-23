@@ -17,6 +17,11 @@ class DesktopLifecycle extends ChangeNotifier {
     required this.connections,
     required this.preview,
     required this.transfers,
+    this.closeNetworkTransfers,
+    this.controlActive,
+    this.controlChanges,
+    this.stopControl,
+    this.stopRemotePicture,
     required this.connectionSupported,
     MethodChannel? channel,
   }) : channel = channel ?? const MethodChannel('dev.sharehub.client/desktop');
@@ -24,11 +29,26 @@ class DesktopLifecycle extends ChangeNotifier {
   final ConnectionController connections;
   final PreviewController preview;
   final TransferQueue transfers;
+  final Future<void> Function()? closeNetworkTransfers;
+  final bool Function()? controlActive;
+  final Listenable? controlChanges;
+  final Future<void> Function()? stopControl;
+  final Future<bool> Function()? stopRemotePicture;
   final bool connectionSupported;
   final MethodChannel channel;
   Future<bool>? _exit;
   bool exiting = false, exited = false, _disposed = false, _ready = false;
+  bool controlNoticeEnabled = true;
   String? error;
+  Future<void> setControlNoticeEnabled(bool enabled) async {
+    if (exiting || exited || _disposed || controlNoticeEnabled == enabled) {
+      return;
+    }
+    controlNoticeEnabled = enabled;
+    _notify();
+    await _publish();
+  }
+
   Future<void> initialize() async {
     channel.setMethodCallHandler((call) async {
       switch (call.method) {
@@ -44,20 +64,34 @@ class DesktopLifecycle extends ChangeNotifier {
           await _publish();
           return connections.accepting;
         case 'stopControl':
-          // No remote input engine is shipped yet; never disconnect a grant
-          // or pretend that stopping local preview stops remote control.
-          return false;
+          if (exiting ||
+              exited ||
+              controlActive?.call() != true ||
+              stopControl == null) {
+            return false;
+          }
+          try {
+            await stopControl!();
+            await _publish();
+            return controlActive?.call() != true;
+          } catch (_) {
+            error = '停止控制失败，请在主窗口重试。';
+            _notify();
+            return false;
+          }
         default:
           throw MissingPluginException(call.method);
       }
     });
     connections.addListener(_connectionChanged);
+    controlChanges?.addListener(_connectionChanged);
     try {
       final preferences = await channel.invokeMapMethod<String, dynamic>(
         'initialize',
         {'connectionSupported': connectionSupported},
       );
       if (_disposed) return;
+      controlNoticeEnabled = preferences?['controlNoticeEnabled'] != false;
       _ready = true;
       if (preferences?['allowConnections'] == true &&
           connectionSupported &&
@@ -83,6 +117,8 @@ class DesktopLifecycle extends ChangeNotifier {
     try {
       await channel.invokeMethod<void>('state', {
         'allowConnections': connections.accepting,
+        'controlActive': controlActive?.call() == true,
+        'controlNoticeEnabled': controlNoticeEnabled,
       });
     } catch (_) {
       if (!_disposed) {
@@ -103,10 +139,29 @@ class DesktopLifecycle extends ChangeNotifier {
     try {
       // Revoke authorization synchronously before any native cleanup await.
       final disconnect = connections.disconnectAll();
-      await _exitStep('stop-capture+disconnect', () => Future.wait([preview.stop(), disconnect]));
+      final remoteStop = stopRemotePicture?.call();
+      await _exitStep(
+        'stop-capture+disconnect+remote',
+        () => Future.wait([
+          preview.stop(),
+          disconnect,
+          if (remoteStop != null)
+            remoteStop.then<void>((clean) {
+              if (!clean) throw StateError('remote cleanup');
+            }),
+        ]),
+      );
       if (preview.cleanupFailed) throw StateError('capture cleanup');
       // Cancel a native picker before waiting for its queued result/releases.
-      if (_ready) await _exitStep('cancel-picker', () => channel.invokeMethod<void>('prepareExit'));
+      if (_ready) {
+        await _exitStep(
+          'cancel-picker',
+          () => channel.invokeMethod<void>('prepareExit'),
+        );
+      }
+      if (closeNetworkTransfers case final closeNetwork?) {
+        await _exitStep('close-network-transfers', closeNetwork);
+      }
       await _exitStep('close-transfers', () => transfers.close());
       if (transfers.items.isNotEmpty) throw StateError('file cleanup');
       await _exitStep('stop-discovery', () => devices.stopForExit());
@@ -144,10 +199,11 @@ class DesktopLifecycle extends ChangeNotifier {
     try {
       final temp = Platform.environment['TEMP'] ?? Platform.environment['TMP'];
       if (temp == null) return;
-      File('$temp${Platform.pathSeparator}share_hub_exit.log').writeAsStringSync(
-        '${DateTime.now().toIso8601String()} $message\n',
-        mode: FileMode.append,
-      );
+      File('$temp${Platform.pathSeparator}share_hub_exit.log')
+          .writeAsStringSync(
+            '${DateTime.now().toIso8601String()} $message\n',
+            mode: FileMode.append,
+          );
     } catch (_) {
       /* Logging must never break the quit path. */
     }
@@ -171,6 +227,7 @@ class DesktopLifecycle extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     connections.removeListener(_connectionChanged);
+    controlChanges?.removeListener(_connectionChanged);
     channel.setMethodCallHandler(null);
     super.dispose();
   }

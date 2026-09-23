@@ -385,13 +385,20 @@ packages:
       relative: true
     source: path
     version: "0.1.0-dev.1"
+  share_hub_file_transfer:
+    dependency: "direct main"
+    description:
+      path: "packages/share_hub_file_transfer"
+      relative: true
+    source: path
+    version: "0.1.0"
   share_hub_media_api:
     dependency: "direct main"
     description:
       path: "packages/share_hub_media_api"
       relative: true
     source: path
-    version: "0.3.0"
+    version: "0.4.0"
   share_hub_media_sdk:
     dependency: "direct main"
     description:

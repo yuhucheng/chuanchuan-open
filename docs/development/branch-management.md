@@ -1,6 +1,6 @@
 # 分支与提交约定
 
-开发目标见[版本说明](../version-plan.md)。统一工作区开发时，业务仓必须与管理仓当前分支同名；当前统一为 release/v0.1.0，用于已批准的 D1/S1。main 保持主线，独立检出按已批准的版本分支工作；产品构建和钩子不依赖管理仓；未经明确批准不新增分支/worktree，不 force-push，不丢弃他人改动。
+开发目标见[版本说明](../version-plan.md)。统一工作区开发时，业务仓必须与管理仓当前分支同名；当前统一为 release/v0.2.0，用于已批准的 0.2.0 开发及前置验收；release/v0.1.0 保留其 D1/S1 历史范围。main 保持主线，独立检出按已批准的版本分支工作；产品构建和钩子不依赖管理仓；未经明确批准不新增分支/worktree，不 force-push，不丢弃他人改动。
 
 提交标题为 type(v目标版本): 描述，版本读取根 VERSION。允许 feat、fix、refactor、docs、test、build、ci、chore、merge。提交前运行对应产品检查。
 

@@ -6,6 +6,17 @@ export 'src/video_ice_candidate.dart';
 export 'src/video_presentation_receipt.dart';
 export 'src/video_session_messages.dart';
 export 'src/video_playback.dart';
+export 'src/control/control_start.dart';
+export 'src/control/control_context.dart';
+export 'src/control/control_geometry.dart';
+export 'src/control/control_input.dart';
+export 'src/control/control_input_codec.dart';
+export 'src/control/control_input_state.dart';
+export 'src/control/control_stage.dart';
+export 'src/control/control_stage_codec.dart';
+export 'src/control/control_clipboard_state.dart';
+export 'src/control/control_clipboard_codec.dart';
+export 'src/control/control_clipboard_echo.dart';
 
 import 'package:flutter/widgets.dart';
 

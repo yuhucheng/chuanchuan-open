@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:ui' show AppExitResponse;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:share_hub_open/platform/mac_platform.dart';
 import 'package:share_hub_open/features/preview/preview_engine.dart';
@@ -13,6 +14,91 @@ import 'fakes.dart';
 import 'file_fakes.dart';
 
 void main() {
+  testWidgets(
+    'macOS native drop reaches the local queue and releases on removal',
+    (tester) async {
+      tester.view.physicalSize = const Size(1180, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      const drops = MethodChannel('dev.sharehub.client/file-drop');
+      const native = MethodChannel('dev.sharehub.client/platform');
+      const codec = StandardMethodCodec();
+      final events = <String>[], released = <String>[];
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(drops, (
+        call,
+      ) async {
+        events.add(call.method);
+        return null;
+      });
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(native, (
+        call,
+      ) async {
+        if (call.method == 'files.finish') return null;
+        if (call.method == 'files.release') {
+          released.add(call.arguments as String);
+          return null;
+        }
+        throw MissingPluginException();
+      });
+      addTearDown(() {
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          drops,
+          null,
+        );
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          native,
+          null,
+        );
+      });
+      final platform = FakePlatform();
+      await tester.pumpWidget(
+        ShareHubApp(
+          targetPlatform: TargetPlatform.macOS,
+          platform: platform,
+          previewEngine: FakePreviewEngine(),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(events, ['listen']);
+      Future<Object?> invoke(String method, Object? arguments) {
+        final result = Completer<Object?>();
+        tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+          drops.name,
+          codec.encodeMethodCall(MethodCall(method, arguments)),
+          (reply) => result.complete(
+            reply == null ? null : codec.decodeEnvelope(reply),
+          ),
+        );
+        return result.future;
+      }
+
+      final point = tester.getCenter(
+        find.byKey(const ValueKey('local-device')),
+      );
+      expect(await invoke('locate', {'x': point.dx, 'y': point.dy}), true);
+      expect(
+        await invoke('drop', {
+          'x': point.dx,
+          'y': point.dy,
+          'files': [
+            {'token': 'os-drop', 'name': '来自访达.txt', 'size': 0},
+          ],
+        }),
+        true,
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('来自访达.txt'), findsOneWidget);
+      await tester.tap(find.text('清空队列'));
+      await tester.pumpAndSettle();
+      expect(released, ['os-drop']);
+      expect(find.text('来自访达.txt'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+      expect(events, ['listen', 'cancel']);
+      await platform.events.close();
+    },
+  );
   testWidgets(
     'parent rebuild keeps capture and visible texture on the same engine',
     (tester) async {
@@ -81,7 +167,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byType(Switch), findsNothing);
       expect(platform.starts, 1);
-      await openFieldTool(tester, '文件准备');
+      await openFieldTool(tester, '文件传送');
       await tester.pumpAndSettle();
       expect(find.text('选择文件'), findsOneWidget);
       await tester.tap(find.text('选择文件'));
@@ -92,7 +178,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('辅助功能'), findsNothing);
       expect(find.text('已允许'), findsNothing);
-      expect(find.textContaining('远控提示、网络文件'), findsOneWidget);
+      expect(find.textContaining('文件接收位置可在文件页面更改'), findsOneWidget);
       await openFieldTool(tester, '屏幕预览');
       await tester.pumpAndSettle();
       expect(find.text('屏幕录制设置'), findsNothing);

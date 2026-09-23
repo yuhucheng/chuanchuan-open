@@ -71,9 +71,18 @@ bool FlutterWindow::OnCreate() {
       flutter_controller_->engine()->messenger(), GetHandle(),
       L"Software\\ShareHub\\Client");
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
+  platform_bridge_->ConfigureFileDrop(flutter_controller_->view()->GetNativeWindow());
   taskbar_created_ = RegisterWindowMessageW(L"TaskbarCreated");
   desktop_ = std::make_unique<flutter::MethodChannel<Value>>(
       flutter_controller_->engine()->messenger(), "dev.sharehub.client/desktop",
+      &flutter::StandardMethodCodec::GetInstance());
+  control_display_ = std::make_unique<flutter::MethodChannel<Value>>(
+      flutter_controller_->engine()->messenger(),
+      "dev.sharehub.client/control-display",
+      &flutter::StandardMethodCodec::GetInstance());
+  control_clipboard_ = std::make_unique<flutter::MethodChannel<Value>>(
+      flutter_controller_->engine()->messenger(),
+      "dev.sharehub.client/control-clipboard",
       &flutter::StandardMethodCodec::GetInstance());
   desktop_->SetMethodCallHandler([this](const flutter::MethodCall<Value>& call,
       std::unique_ptr<flutter::MethodResult<Value>> result) {
@@ -85,9 +94,16 @@ bool FlutterWindow::OnCreate() {
       DWORD allowed = 0, size = sizeof(allowed);
       RegGetValueW(HKEY_CURRENT_USER, L"Software\\ShareHub\\Client", L"AllowConnections",
           RRF_RT_REG_DWORD, nullptr, &allowed, &size);
-      result->Success(Value(Map{{Value("allowConnections"), Value(allowed == 1)}}));
+      DWORD notice = 1; size = sizeof(notice);
+      RegGetValueW(HKEY_CURRENT_USER, L"Software\\ShareHub\\Client", L"ControlNoticeEnabled",
+          RRF_RT_REG_DWORD, nullptr, &notice, &size);
+      control_notice_enabled_ = notice != 0;
+      result->Success(Value(Map{{Value("allowConnections"), Value(allowed == 1)},
+                                 {Value("controlNoticeEnabled"), Value(control_notice_enabled_)}}));
     } else if (call.method_name() == "state") {
       allow_connections_ = BooleanField(call.arguments(), "allowConnections");
+      control_active_ = BooleanField(call.arguments(), "controlActive");
+      control_notice_enabled_ = BooleanField(call.arguments(), "controlNoticeEnabled");
       HKEY key = nullptr;
       if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\ShareHub\\Client", 0, nullptr, 0,
           KEY_SET_VALUE, nullptr, &key, nullptr) != ERROR_SUCCESS) {
@@ -96,8 +112,14 @@ bool FlutterWindow::OnCreate() {
       const DWORD allowed = allow_connections_ ? 1 : 0;
       const auto saved = RegSetValueExW(key, L"AllowConnections", 0, REG_DWORD,
           reinterpret_cast<const BYTE*>(&allowed), sizeof(allowed));
+      const DWORD notice = control_notice_enabled_ ? 1 : 0;
+      const auto saved_notice = RegSetValueExW(key, L"ControlNoticeEnabled", 0, REG_DWORD,
+          reinterpret_cast<const BYTE*>(&notice), sizeof(notice));
       RegCloseKey(key);
-      if (saved != ERROR_SUCCESS) { result->Error("preferences_failed", "Cannot save admission preference"); return; }
+      if (saved != ERROR_SUCCESS || saved_notice != ERROR_SUCCESS) { result->Error("preferences_failed", "Cannot save desktop preferences"); return; }
+      wcscpy_s(tray_.szTip, control_active_ && control_notice_enabled_
+          ? L"串串 · 正在被远程控制" : L"串串 · 后台连接与会话");
+      if (tray_installed_) Shell_NotifyIconW(NIM_MODIFY, &tray_);
       result->Success();
     } else if (call.method_name() == "appearance.read") {
       DWORD theme = 0, size = sizeof(theme);
@@ -112,6 +134,30 @@ bool FlutterWindow::OnCreate() {
       const auto saved = RegSetValueExW(key, L"Appearance", 0, REG_DWORD, reinterpret_cast<const BYTE*>(&value), sizeof(value));
       RegCloseKey(key);
       if (saved != ERROR_SUCCESS) { result->Error("preferences_failed", "Cannot save theme"); return; }
+      result->Success();
+    } else if (call.method_name() == "controlClipboard.read") {
+      DWORD enabled = 1, size = sizeof(enabled);
+      const auto status = RegGetValueW(HKEY_CURRENT_USER, L"Software\\ShareHub\\Client",
+          L"ControlClipboardSyncEnabled", RRF_RT_REG_DWORD, nullptr, &enabled, &size);
+      if (status != ERROR_SUCCESS && status != ERROR_FILE_NOT_FOUND) {
+        result->Error("preferences_failed", "Cannot read clipboard preference"); return;
+      }
+      result->Success(Value(enabled != 0));
+    } else if (call.method_name() == "controlClipboard.write") {
+      const auto* enabled = call.arguments() ? std::get_if<bool>(call.arguments()) : nullptr;
+      if (!enabled) { result->Error("invalid_preference", "Expected boolean"); return; }
+      HKEY key = nullptr;
+      if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\ShareHub\\Client", 0, nullptr, 0,
+          KEY_SET_VALUE, nullptr, &key, nullptr) != ERROR_SUCCESS) {
+        result->Error("preferences_failed", "Cannot save clipboard preference"); return;
+      }
+      const DWORD value = *enabled ? 1 : 0;
+      const auto saved = RegSetValueExW(key, L"ControlClipboardSyncEnabled", 0,
+          REG_DWORD, reinterpret_cast<const BYTE*>(&value), sizeof(value));
+      RegCloseKey(key);
+      if (saved != ERROR_SUCCESS) {
+        result->Error("preferences_failed", "Cannot save clipboard preference"); return;
+      }
       result->Success();
     } else if (call.method_name() == "exit") {
       result->Success(); RequestQuit();
@@ -163,6 +209,8 @@ void FlutterWindow::OnDestroy() {
   if (tray_installed_) Shell_NotifyIconW(NIM_DELETE, &tray_);
   tray_installed_ = false;
   desktop_.reset();
+  control_display_.reset();
+  control_clipboard_.reset();
   TraceAppExit("OnDestroy: bridge+controller teardown begin");
   platform_bridge_.reset();
   if (flutter_controller_) {
@@ -197,6 +245,13 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
   }
   if (message == WM_CLOSE) {
     if (desktop_ready_) { CloseToBackground(); return 0; }
+  }
+  if ((message == WM_DISPLAYCHANGE || message == WM_DPICHANGED) &&
+      control_display_) {
+    control_display_->InvokeMethod("changed", nullptr);
+  }
+  if (message == WM_CLIPBOARDUPDATE && control_clipboard_) {
+    control_clipboard_->InvokeMethod("changed", nullptr);
   }
   if (platform_bridge_ && platform_bridge_->HandleMessage(message, wparam)) return 0;
   if (message == WM_GETMINMAXINFO) {
@@ -254,7 +309,8 @@ std::vector<TrayItem> FlutterWindow::TrayItems() const {
     {L"打开主窗口", true, false, kOpen, false},
     {connection_supported_ ? L"允许连接" : L"允许连接（当前平台不可用）",
      connection_supported_ && !quit_pending_, allow_connections_, kAllow, false},
-    {L"停止控制（当前无远控会话）", !quit_pending_, false, kStopControl, false},
+    {control_active_ ? L"停止控制" : L"停止控制（当前无远控会话）",
+     control_active_ && !quit_pending_, false, kStopControl, false},
     {L"退出串串", !quit_pending_, false, kQuit, true},
   };
 }

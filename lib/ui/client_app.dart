@@ -3,6 +3,7 @@ import 'dart:ui' show AppExitResponse;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:share_hub_media_api/share_hub_media_api.dart';
 
 import '../features/connections/connection_controller.dart';
 import 'field/appearance.dart';
@@ -13,8 +14,13 @@ import '../features/preview/preview_controller.dart';
 import '../features/preview/preview_engine.dart';
 import '../features/remote/remote_media.dart';
 import '../features/remote/remote_session_controller.dart';
+import '../features/remote/control_clipboard_preference.dart';
 import '../features/transfers/file_access.dart';
 import '../features/transfers/transfer_queue.dart';
+import '../features/transfers/network_transfers.dart';
+import '../features/transfers/native_file_drop.dart';
+import '../features/transfers/receive_access.dart';
+import '../features/transfers/source_access.dart';
 import '../platform/client_platform.dart';
 
 class ShareHubApp extends StatefulWidget {
@@ -23,17 +29,23 @@ class ShareHubApp extends StatefulWidget {
     this.platform,
     required this.previewEngine,
     this.fileAccess,
+    this.receiveAccess,
+    this.sourceAccess,
     this.remoteMedia,
+    this.controlClipboardPreference,
     this.targetPlatform,
     this.appTitle = 'Share Hub',
   });
   final ClientPlatform? platform;
   final PreviewEngine previewEngine;
   final FileAccess? fileAccess;
+  final ReceiveAccess? receiveAccess;
+  final SourceAccess? sourceAccess;
 
   /// Remote send/watch implementation. Defaults to the media SDK adapter; tests
   /// inject a fake so no capture device or peer is needed.
   final RemotePictureFactory? remoteMedia;
+  final ControlClipboardPreference? controlClipboardPreference;
   final TargetPlatform? targetPlatform;
   final String appTitle;
 
@@ -44,6 +56,9 @@ class ShareHubApp extends StatefulWidget {
 class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
   // Keep controller ownership and its rendered texture stable across rebuilds.
   final _appearance = Appearance();
+  late final _clipboardPreference =
+      widget.controlClipboardPreference ?? ControlClipboardPreference();
+  final _messages = GlobalKey<ScaffoldMessengerState>();
   late final _platform = widget.platform ?? MethodChannelClientPlatform();
   late final _engine = widget.previewEngine;
   late final _fileAccess = widget.fileAccess ?? MethodChannelFileAccess();
@@ -67,11 +82,26 @@ class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
     localCaptureActive: () => _preview.occupiesPicture,
   );
   late final _transfers = TransferQueue(_fileAccess);
+  late final _networkTransfers = NetworkTransfers(
+    connections: _connections,
+    queue: _transfers,
+    source: widget.sourceAccess ?? MethodChannelSourceAccess(),
+    receive: widget.receiveAccess ?? MethodChannelReceiveAccess(),
+  );
   late final _desktop = DesktopLifecycle(
     devices: _devices,
     connections: _connections,
     preview: _preview,
     transfers: _transfers,
+    closeNetworkTransfers: _networkTransfers.close,
+    controlActive: () =>
+        _remote.occupied && _remote.operation == SessionOperation.control,
+    controlChanges: _remote,
+    stopControl: _remote.stop,
+    stopRemotePicture: () async {
+      await _remote.stop();
+      return !_remote.occupied;
+    },
     connectionSupported: connectionHostSupported(
       widget.targetPlatform ?? defaultTargetPlatform,
     ),
@@ -82,6 +112,7 @@ class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     unawaited(_appearance.load());
+    unawaited(_clipboardPreference.load());
     unawaited(_devices.initialize());
     unawaited(_desktop.initialize());
   }
@@ -103,39 +134,65 @@ class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _appearance.dispose();
+    if (widget.controlClipboardPreference == null) {
+      _clipboardPreference.dispose();
+    }
     _desktop.dispose();
     _devices.dispose();
     _connections.dispose();
     _preview.dispose();
     _remote.dispose();
+    _networkTransfers.dispose();
     _transfers.dispose();
     super.dispose();
   }
 
   @override
-  Widget build(BuildContext context) => AnimatedBuilder(
-    animation: _appearance,
-    builder: (context, _) => MaterialApp(
-      title: widget.appTitle,
-      debugShowCheckedModeBanner: false,
-      theme: fieldTheme(
-        Brightness.light,
-        widget.targetPlatform ?? defaultTargetPlatform,
-      ),
-      darkTheme: fieldTheme(
-        Brightness.dark,
-        widget.targetPlatform ?? defaultTargetPlatform,
-      ),
-      themeMode: _appearance.mode,
-      home: FieldShell(
-        devices: _devices,
-        connections: _connections,
-        preview: _preview,
-        remote: _remote,
-        transfers: _transfers,
-        desktop: _desktop,
-        appearance: _appearance,
-        targetPlatform: widget.targetPlatform ?? defaultTargetPlatform,
+  Widget build(BuildContext context) => NativeFileDropHost(
+    enabled:
+        _fileAccess is MethodChannelFileAccess &&
+        {
+          TargetPlatform.windows,
+          TargetPlatform.macOS,
+        }.contains(widget.targetPlatform ?? defaultTargetPlatform),
+    canAccept: () => !_desktop.exiting && !_desktop.exited,
+    onError: (message) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _messages.currentState?.showSnackBar(
+            SnackBar(content: Text(message)),
+          );
+        }
+      });
+      WidgetsBinding.instance.scheduleFrame();
+    },
+    child: AnimatedBuilder(
+      animation: _appearance,
+      builder: (context, _) => MaterialApp(
+        title: widget.appTitle,
+        debugShowCheckedModeBanner: false,
+        scaffoldMessengerKey: _messages,
+        theme: fieldTheme(
+          Brightness.light,
+          widget.targetPlatform ?? defaultTargetPlatform,
+        ),
+        darkTheme: fieldTheme(
+          Brightness.dark,
+          widget.targetPlatform ?? defaultTargetPlatform,
+        ),
+        themeMode: _appearance.mode,
+        home: FieldShell(
+          devices: _devices,
+          connections: _connections,
+          preview: _preview,
+          remote: _remote,
+          transfers: _transfers,
+          networkTransfers: _networkTransfers,
+          desktop: _desktop,
+          appearance: _appearance,
+          clipboardPreference: _clipboardPreference,
+          targetPlatform: widget.targetPlatform ?? defaultTargetPlatform,
+        ),
       ),
     ),
   );

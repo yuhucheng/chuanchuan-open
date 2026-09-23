@@ -45,6 +45,22 @@ bool CheckClockIsMonotonic() {
   return true;
 }
 
+bool CheckClockMatchesNativeOutput() {
+  const auto precise = reinterpret_cast<decltype(&QueryInterruptTimePrecise)>(
+      GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "QueryInterruptTimePrecise"));
+  if (!precise) return true;  // Older Windows uses the existing tick fallback.
+  for (int i = 0; i < 100; ++i) {
+    ULONGLONG before = 0, after = 0;
+    uint64_t actual = 0;
+    precise(&before);
+    CHECK(share_hub::ConnectionSecurity::ContinuousMicros(&actual));
+    precise(&after);
+    CHECK(actual >= before / 10);
+    CHECK(actual <= after / 10);
+  }
+  return true;
+}
+
 bool CheckIdentityPersistsProtected() {
   TemporaryKey key;
   CHECK(key.valid);
@@ -74,6 +90,7 @@ bool CheckIdentityPersistsProtected() {
 
 int main() {
   if (!CheckClockIsMonotonic()) return 1;
+  if (!CheckClockMatchesNativeOutput()) return 1;
   if (!CheckIdentityPersistsProtected()) return 1;
   std::cout << "connection_security_tests passed\n";
   return 0;

@@ -170,6 +170,46 @@ void main() {
     },
   );
   test(
+    'sealed grant lineage survives resume but excludes replacement endpoints',
+    () async {
+      await resume();
+      final original = await a.authorizeLocal(SessionOperation.file, 'old', '');
+      final remote = await b.open(await a.sealRequest(original));
+      expect(original.hasSameGrantAs(remote), isFalse);
+      a.suspend();
+      b.suspend();
+      await resume();
+      final fresh = await a.authorizeLocal(SessionOperation.file, 'fresh', '');
+      expect(original.hasSameGrantAs(fresh), isTrue);
+      expect(fresh.hasSameGrantAs(original), isTrue);
+      await expectLater(original.check(), throwsA(isA<SessionFailure>()));
+      await fresh.check();
+      a.revoke();
+      b.revoke();
+      expect(original.hasSameGrantAs(fresh), isTrue);
+      await expectLater(fresh.check(), throwsA(isA<SessionFailure>()));
+
+      a = endpoint(GrantRole.initiator, root: List.filled(32, 99));
+      b = endpoint(GrantRole.receiver, root: List.filled(32, 99));
+      addTearDown(() {
+        a.revoke();
+        b.revoke();
+      });
+      await resume();
+      final replacement = await a.authorizeLocal(
+        SessionOperation.file,
+        'replacement',
+        '',
+      );
+      final registry = GrantRegistry()..register(a);
+      await registry.verify(replacement);
+      expect(identical(replacement.grant, original.grant), isTrue);
+      expect(replacement.expiresMicros, original.expiresMicros);
+      expect(original.hasSameGrantAs(replacement), isFalse);
+      expect(replacement.hasSameGrantAs(original), isFalse);
+    },
+  );
+  test(
     'mutual possession, directions and immutable original deadline',
     () async {
       await resume();

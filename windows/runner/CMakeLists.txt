@@ -16,7 +16,18 @@ add_executable(${BINARY_NAME} WIN32
   "../platform/device_preferences.cpp"
   "../platform/native_discovery.cpp"
   "../platform/platform_bridge.cpp"
+  "../platform/control_display_geometry.cpp"
+  "../platform/control_pointer_input.cpp"
+  "../platform/control_pointer_bridge.cpp"
+  "../platform/control_text_input.cpp"
+  "../platform/control_clipboard_store.cpp"
+  "../platform/control_clipboard_bridge.cpp"
+  "../platform/file_drop_target.cpp"
+  "../platform/file_drop_session.cpp"
   "../platform/selected_file_store.cpp"
+  "../platform/source_bridge.cpp"
+  "../platform/receive_store.cpp"
+  "../platform/receive_bridge.cpp"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"
   "Runner.rc"
   "runner.exe.manifest"
@@ -41,7 +52,7 @@ target_compile_definitions(${BINARY_NAME} PRIVATE WIN32_LEAN_AND_MEAN)
 # dependencies here.
 target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app)
 target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib")
-target_link_libraries(${BINARY_NAME} PRIVATE dnsapi ws2_32 advapi32 ole32 shell32 uuid crypt32 bcrypt)
+target_link_libraries(${BINARY_NAME} PRIVATE dnsapi ws2_32 advapi32 ole32 shell32 uuid crypt32 bcrypt normaliz)
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.

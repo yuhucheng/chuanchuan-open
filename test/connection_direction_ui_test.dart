@@ -78,9 +78,14 @@ class _NoopLink implements RemotePictureLink {
   @override
   Future<RemotePicture> start(SessionOperation operation, String sessionId) =>
       throw StateError('UI fixture must not create media');
+  @override
+  Future<RemotePicture> startControl(String sessionId, ControlStart start) =>
+      throw StateError('UI fixture must not create control');
 }
 
 class _NoopMedia implements RemotePictureFactory {
+  @override
+  Set<ControlCapability> get controlCapabilities => const {};
   @override
   MediaCapabilities get capabilities => MediaCapabilities(
     protocolVersion: sessionProtocolVersion,
@@ -302,6 +307,9 @@ void main() {
       await tester.tap(find.text('断开该设备并撤销全部授权'));
       expect(incoming.isClosed, isTrue);
       expect(outgoing.isClosed, isTrue);
+      // Recoverable connections allow a bounded 200 ms revocation notice to
+      // reach the peer after synchronous local invalidation.
+      await tester.pump(const Duration(milliseconds: 250));
       await tester.pumpWidget(const SizedBox());
     },
   );

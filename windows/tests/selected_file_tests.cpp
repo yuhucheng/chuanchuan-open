@@ -99,10 +99,10 @@ void OrdinaryEmptyUnicodeAndBounds() {
         "second chunk bytes");
   store.Finish(selected[0].token);
   store.Finish(selected[1].token);
-  store.Release(selected[0].token);
-  store.Release(selected[0].token);
+  store.Release(selected[0].token); store.CleanupReleased();
+  store.Release(selected[0].token); store.CleanupReleased();
   Check(CanOpenExclusive(ordinary), "release idempotently closes handle");
-  store.Shutdown();
+  store.Shutdown(); store.CleanupReleased();
   Check(CanOpenExclusive(empty), "shutdown closes empty file handle");
   Reject([&] { store.Read(selected[1].token, 0, 1); }, SelectedFileError::closed,
          "shutdown rejects reads");
@@ -127,13 +127,13 @@ void InvalidTokenLimitsAndAtomicSelection() {
   Reject([&] { store.AddPickerPaths({path, bad}); }, SelectedFileError::unavailable,
          "invalid batch rejected atomically");
   Check(store.count() == 1, "failed batch retains no new handles");
-  store.Release(chosen[0].token);
+  store.Release(chosen[0].token); store.CleanupReleased();
   Check(CanOpenExclusive(path), "failed batch and release leave no handles");
   auto at_limit = store.AddPickerPaths(std::vector<std::wstring>(64, path));
   Check(at_limit.size() == 64 && store.count() == 64, "exactly 64 files retained");
   Reject([&] { store.AddPickerPaths({path}); }, SelectedFileError::limit,
          "65th retained file rejected");
-  store.Shutdown();
+  store.Shutdown(); store.CleanupReleased();
   Check(CanOpenExclusive(path), "limit batch handles released on shutdown");
 }
 
@@ -162,7 +162,7 @@ void ChangesAndReplacement() {
   files.Write(path, "abcd");
   Reject([&] { store.Read(token, 0, 3); }, SelectedFileError::changed,
          "length-changing replacement before read rejected");
-  store.Release(token);
+  store.Release(token); store.CleanupReleased();
   files.Write(path, "abc");
   token = store.AddPickerPaths({path})[0].token;
   store.Read(token, 0, 3);
@@ -171,7 +171,7 @@ void ChangesAndReplacement() {
   files.Write(path, "changed");
   Reject([&] { store.Finish(token); }, SelectedFileError::changed,
          "replacement before finish rejected");
-  store.Release(token);
+  store.Release(token); store.CleanupReleased();
   files.Write(path, "abc");
   token = store.AddPickerPaths({path})[0].token;
   auto third_moved = files.Path(L"third-moved.txt");
@@ -179,8 +179,48 @@ void ChangesAndReplacement() {
   files.Write(path, "abc");
   Reject([&] { store.Read(token, 0, 3); }, SelectedFileError::changed,
          "same-length replacement rejected");
-  store.Shutdown();
+  store.Shutdown(); store.CleanupReleased();
   Check(CanOpenExclusive(third_moved), "shutdown releases replaced source handle");
+}
+
+void ReadPassIsolation() {
+  TempFiles files;
+  auto path = files.Path(L"passes.txt");
+  files.Write(path, "abc");
+  SelectedFileStore store;
+  auto token = store.AddPickerPaths({path})[0].token;
+  store.Read(token, 0, 3); store.Finish(token);
+  Reject([&] { store.BeginReadPass("unknown"); }, SelectedFileError::invalid_token, "unknown pass token rejected");
+  auto first = store.BeginReadPass(token);
+  Check(store.ReadPass(token, first, 0, 1) == std::vector<uint8_t>({'a'}), "pass restarts prepared EOF");
+  auto second = store.BeginReadPass(token);
+  Check(first != second, "new pass unique");
+  Reject([&] { store.ReadPass(token, first, 0, 1); }, SelectedFileError::invalid_read, "stale read rejected");
+  Reject([&] { store.FinishPass(token, first); }, SelectedFileError::invalid_read, "stale finish rejected");
+  Reject([&] { store.Read(token, 0, 1); }, SelectedFileError::invalid_read, "legacy read blocked");
+  Reject([&] { store.Finish(token); }, SelectedFileError::invalid_read, "legacy finish blocked");
+  Reject([&] { store.ReadPass(token, "", 0, 1); }, SelectedFileError::invalid_read, "empty pass rejected");
+  Reject([&] { store.ReadPass(token, second, 1, 1); }, SelectedFileError::invalid_read, "seek rejected");
+  Reject([&] { store.ReadPass(token, second, 0, 262145); }, SelectedFileError::invalid_read, "oversized pass read rejected");
+  Reject([&] { store.FinishPass(token, second); }, SelectedFileError::incomplete, "partial pass rejected");
+  Check(store.ReadPass(token, second, 0, 3).size() == 3, "stale callbacks preserve cursor");
+  store.FinishPass(token, second);
+  Reject([&] { store.ReadPass(token, second, 3, 1); }, SelectedFileError::invalid_read, "EOF rejected");
+  store.Release(token); store.CleanupReleased();
+  Reject([&] { store.BeginReadPass(token); }, SelectedFileError::invalid_token, "released begin rejected");
+  Reject([&] { store.ReadPass(token, second, 0, 1); }, SelectedFileError::invalid_token, "released read rejected");
+  token = store.AddPickerPaths({path})[0].token;
+  auto pass = store.BeginReadPass(token);
+  auto moved = files.Path(L"moved-pass.txt");
+  Check(MoveFileExW(path.c_str(), moved.c_str(), 0) != 0, "move pass source");
+  files.Write(path, "abc");
+  Reject([&] { store.BeginReadPass(token); }, SelectedFileError::changed, "replacement blocks pass");
+  Reject([&] { store.ReadPass(token, pass, 0, 1); }, SelectedFileError::invalid_read, "failed begin invalidates old pass");
+  auto empty = files.Path(L"empty-pass.txt"); files.Write(empty, "");
+  auto emptyToken = store.AddPickerPaths({empty})[0].token;
+  store.FinishPass(emptyToken, store.BeginReadPass(emptyToken));
+  store.Shutdown(); store.CleanupReleased();
+  Reject([&] { store.BeginReadPass(emptyToken); }, SelectedFileError::closed, "shutdown rejects pass");
 }
 
 void OpenWriterCannotChangeUnnoticed() {
@@ -197,7 +237,7 @@ void OpenWriterCannotChangeUnnoticed() {
   if (writer != INVALID_HANDLE_VALUE) CloseHandle(writer);
   store.Read(token, 0, 3);
   store.Finish(token);
-  store.Release(token);
+  store.Release(token); store.CleanupReleased();
   writer = CreateFileW(path.c_str(), GENERIC_WRITE,
       FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
       FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -207,6 +247,7 @@ void OpenWriterCannotChangeUnnoticed() {
 }
 
 int main() {
+  ReadPassIsolation();
   OrdinaryEmptyUnicodeAndBounds();
   InvalidTokenLimitsAndAtomicSelection();
   MaximumChunkBoundary();

@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:share_hub_connection/share_hub_connection.dart';
 import 'package:share_hub_media_api/share_hub_media_api.dart';
@@ -45,6 +47,7 @@ class _FakePicture implements SourceSelectableRemotePicture {
   final _events = StreamController<MediaSessionEvent>.broadcast(sync: true);
   VideoEndReason? endedBy;
   bool failStop = false;
+  Completer<void>? stopGate;
   final stopReasons = <VideoEndReason>[];
   int stops = 0, resumes = 0;
   bool stoppedFlag = false;
@@ -108,14 +111,57 @@ class _FakePicture implements SourceSelectableRemotePicture {
   Future<void> stop({VideoEndReason reason = VideoEndReason.stopped}) async {
     stops++;
     stopReasons.add(reason);
+    if (stopGate != null) await stopGate!.future;
     if (failStop) throw StateError('cleanup failed');
     stoppedFlag = true;
     finish();
   }
 }
 
+class _FakeControlPicture extends _FakePicture implements RemoteControlPicture {
+  _FakeControlPicture({required super.id})
+    : super(operation: SessionOperation.control, sends: false);
+  final _inputRevision = ValueNotifier<int>(0);
+  RemoteControlInputScope? readyScope;
+  final inputs = <ControlInput>[];
+  int releases = 0;
+  Completer<void>? sendGate;
+
+  @override
+  Listenable get inputChanges => _inputRevision;
+  @override
+  RemoteControlInputScope? get inputScope => stopped ? null : readyScope;
+  void ready(RemoteControlInputScope scope) {
+    readyScope = scope;
+    _inputRevision.value++;
+  }
+
+  @override
+  Future<void> sendInput(ControlInput input) async {
+    await sendGate?.future;
+    if (readyScope == null || stopped) {
+      throw const SessionFailure('not_ready');
+    }
+    inputs.add(input);
+  }
+
+  @override
+  Future<void> releaseInput() async {
+    releases++;
+    readyScope = null;
+    _inputRevision.value++;
+  }
+}
+
 class _FakeLink {
-  _FakeLink(this.transport, this.onSession, this.onFailure);
+  _FakeLink(this.transport, this.onSession, this.onFailure) {
+    // Mirror the SDK's receiver ownership, while media events remain faked.
+    transport.attachReceiver(
+      onRequest: (_) {},
+      resolveSession: (_) => null,
+      onSignal: (_) {},
+    );
+  }
   final SessionTransport transport;
   final void Function(RemotePicture) onSession;
   final void Function(String, String) onFailure;
@@ -127,19 +173,22 @@ class _FakeLink {
 
   Future<void> close() async {
     closed = true;
+    transport.detachReceiver();
     picture?.finish();
   }
 }
 
 class _FakeFactory implements RemotePictureFactory {
-  _FakeFactory({MediaCapabilities? declared})
-    : declared =
-          declared ??
-          MediaCapabilities(
-            protocolVersion: sessionProtocolVersion,
-            operations: const {SessionOperation.watch, SessionOperation.cast},
-            maxVideoSessions: 1,
-          );
+  _FakeFactory({
+    MediaCapabilities? declared,
+    this.controlCapabilities = const {},
+  }) : declared =
+           declared ??
+           MediaCapabilities(
+             protocolVersion: sessionProtocolVersion,
+             operations: const {SessionOperation.watch, SessionOperation.cast},
+             maxVideoSessions: 1,
+           );
   final MediaCapabilities declared;
   final links = <_FakeLink>[];
   final delivered = <RemotePicture>[];
@@ -147,6 +196,9 @@ class _FakeFactory implements RemotePictureFactory {
 
   @override
   MediaCapabilities get capabilities => declared;
+
+  @override
+  final Set<ControlCapability> controlCapabilities;
 
   _FakeLink get link => links.last;
   _FakePicture get current => links.last.picture!;
@@ -170,8 +222,16 @@ class _FakeFactory implements RemotePictureFactory {
     (via ?? link).onSession(picture);
   }
 
-  _FakeLink forConnection(TrustedConnection connection) =>
-      links.singleWhere((link) => identical(link.transport, connection));
+  _FakeLink forConnection(TrustedConnection connection) => links.singleWhere(
+    (link) => identical(
+      link.transport,
+      connection.operationTransport({
+        SessionOperation.watch,
+        SessionOperation.cast,
+        if (controlCapabilities.isNotEmpty) SessionOperation.control,
+      }),
+    ),
+  );
 
   void reportFailure(String sessionId, String code, {_FakeLink? via}) {
     (via ?? link).onFailure(sessionId, code);
@@ -191,6 +251,27 @@ class _GrantCheckedLink implements RemotePictureLink {
   final SessionTransport _transport;
   final Future<CaptureSource> Function() _resolveSource;
   final _FakeFactory _factory;
+
+  @override
+  Future<RemotePicture> startControl(
+    String sessionId,
+    ControlStart start,
+  ) async {
+    if (!_factory.controlCapabilities.containsAll(start.capabilities)) {
+      throw const SessionFailure('capability_unavailable');
+    }
+    _link.starts.add(SessionOperation.control);
+    await _transport.createRequest(
+      SessionOperation.control,
+      sessionId,
+      start.encode(),
+    );
+    final picture = _FakeControlPicture(id: sessionId)
+      ..failStop = _link.failStop;
+    _link.picture = picture;
+    _factory.deliver(picture, via: _link);
+    return picture;
+  }
 
   @override
   Future<RemotePicture> start(
@@ -319,6 +400,161 @@ void main() {
     expect(factoryA.links, hasLength(1));
     expect(factoryA.links.single.starts, isEmpty);
   });
+
+  test('concurrent stop callers await the same native cleanup', () async {
+    build();
+    await remoteA.start(
+      SessionOperation.watch,
+      peerKey: a.sessions.single.peerKey,
+    );
+    final picture = factoryA.current;
+    picture.stopGate = Completer<void>();
+    final first = remoteA.stop();
+    var secondFinished = false;
+    final second = remoteA.stop().then((_) => secondFinished = true);
+    await Future<void>.delayed(Duration.zero);
+    expect(secondFinished, isFalse);
+    picture.stopGate!.complete();
+    await Future.wait([first, second]);
+    expect(picture.stops, 1);
+    expect(remoteA.occupied, isFalse);
+  });
+
+  test('partial native control cannot appear as a product action', () async {
+    factoryA = _FakeFactory(
+      declared: MediaCapabilities(
+        protocolVersion: sessionProtocolVersion,
+        operations: {SessionOperation.control},
+        maxVideoSessions: 1,
+      ),
+      controlCapabilities: {ControlCapability.pointer},
+    );
+    build();
+    expect(remoteA.offeredOperations, isEmpty);
+    await remoteA.start(
+      SessionOperation.control,
+      peerKey: a.sessions.single.peerKey,
+    );
+    expect(factoryA.links.single.starts, isEmpty);
+    expect(remoteA.occupied, isFalse);
+  });
+
+  test(
+    'explicit control capability starts and stops without revoking connection',
+    () async {
+      factoryA = _FakeFactory(
+        declared: MediaCapabilities(
+          protocolVersion: sessionProtocolVersion,
+          operations: {SessionOperation.control},
+          maxVideoSessions: 1,
+        ),
+        controlCapabilities: {
+          ControlCapability.pointer,
+          ControlCapability.wheel,
+          ControlCapability.physicalKey,
+          ControlCapability.textInput,
+          ControlCapability.clipboardText,
+        },
+      );
+      build();
+      expect(remoteA.offeredOperations, {'control'});
+      final peerKey = a.sessions.single.peerKey;
+      await remoteA.start(SessionOperation.control, peerKey: peerKey);
+      expect(factoryA.links.single.starts, [SessionOperation.control]);
+      expect(remoteA.operation, SessionOperation.control);
+      expect(remoteA.receiving, isTrue);
+      expect(remoteA.occupied, isTrue);
+      final control = factoryA.current as _FakeControlPicture;
+      expect(await remoteA.sendControlPointerMove(.5, .5), isFalse);
+      control.emit(MediaEventKind.firstFrame);
+      expect(await remoteA.sendControlPointerMove(.5, .5), isFalse);
+      control.ready(
+        const RemoteControlInputScope(
+          inputEpoch: 7,
+          geometryRevision: 3,
+          mediaRevision: 0,
+          width: 640,
+          height: 360,
+        ),
+      );
+      expect(await remoteA.sendControlPointerMove(.25, .5), isTrue);
+      expect(
+        await remoteA.sendControlPointerButton(
+          .25,
+          .5,
+          ControlButton.primary,
+          true,
+        ),
+        isTrue,
+      );
+      expect(control.inputs, hasLength(2));
+      expect((control.inputs.first as ControlPointerMove).inputEpoch, 7);
+      expect((control.inputs.first as ControlPointerMove).geometryRevision, 3);
+      expect(control.inputs.first.sequence, 1);
+      expect(control.inputs.last.sequence, 2);
+      await remoteA.releaseControlInput();
+      expect(control.releases, 1);
+      expect(remoteA.controlInputScope, isNull);
+      expect(await remoteA.sendControlPointerMove(.5, .5), isFalse);
+      final first = remoteA.session!.id;
+      await remoteA.pause();
+      expect(remoteA.phase, RemotePhase.active);
+      await remoteA.stop();
+      expect(remoteA.occupied, isFalse);
+      expect(a.sessions.single.isClosed, isFalse);
+      await remoteA.start(SessionOperation.control, peerKey: peerKey);
+      expect(remoteA.session!.id, isNot(first));
+      expect(factoryA.links.single.starts, [
+        SessionOperation.control,
+        SessionOperation.control,
+      ]);
+      await remoteA.stop();
+    },
+  );
+
+  test(
+    'focus release does not turn an expired queued move into failure',
+    () async {
+      factoryA = _FakeFactory(
+        declared: MediaCapabilities(
+          protocolVersion: sessionProtocolVersion,
+          operations: {SessionOperation.control},
+          maxVideoSessions: 1,
+        ),
+        controlCapabilities: {
+          ControlCapability.pointer,
+          ControlCapability.wheel,
+          ControlCapability.physicalKey,
+          ControlCapability.textInput,
+          ControlCapability.clipboardText,
+        },
+      );
+      build();
+      await remoteA.start(
+        SessionOperation.control,
+        peerKey: a.sessions.single.peerKey,
+      );
+      final control = factoryA.current as _FakeControlPicture;
+      control.emit(MediaEventKind.firstFrame);
+      control.ready(
+        const RemoteControlInputScope(
+          inputEpoch: 7,
+          geometryRevision: 3,
+          mediaRevision: 0,
+          width: 640,
+          height: 360,
+        ),
+      );
+      control.sendGate = Completer<void>();
+      final queued = remoteA.sendControlPointerMove(.5, .5);
+      await remoteA.releaseControlInput();
+      control.sendGate!.complete();
+      expect(await queued, isFalse);
+      expect(remoteA.phase, RemotePhase.active);
+      expect(remoteA.occupied, isTrue);
+      await remoteA.stop();
+    },
+  );
 
   test(
     'an unconnected peer is refused before the code flow, with no capture',
@@ -1106,4 +1342,215 @@ void main() {
     await tester.pump();
     expect(remoteA.occupied, isFalse);
   });
+
+  testWidgets('control picture keeps stop visible and has no pause', (
+    tester,
+  ) async {
+    factoryA = _FakeFactory(
+      declared: MediaCapabilities(
+        protocolVersion: sessionProtocolVersion,
+        operations: {SessionOperation.control},
+        maxVideoSessions: 1,
+      ),
+      controlCapabilities: {
+        ControlCapability.pointer,
+        ControlCapability.wheel,
+        ControlCapability.physicalKey,
+        ControlCapability.textInput,
+        ControlCapability.clipboardText,
+      },
+    );
+    build();
+    await tester.runAsync(
+      () => remoteA.start(
+        SessionOperation.control,
+        peerKey: a.sessions.single.peerKey,
+        label: '另一台电脑',
+      ),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: RemotePicturePanel(controller: remoteA)),
+      ),
+    );
+    factoryA.current.emit(MediaEventKind.firstFrame);
+    await tester.pump();
+    expect(find.text('控制 另一台电脑'), findsOneWidget);
+    expect(find.text('停止控制'), findsOneWidget);
+    expect(find.text('暂停'), findsNothing);
+    await tester.runAsync(() => remoteA.stop());
+  });
+
+  testWidgets('control surface maps video area and releases on focus loss', (
+    tester,
+  ) async {
+    factoryA = _FakeFactory(
+      declared: MediaCapabilities(
+        protocolVersion: sessionProtocolVersion,
+        operations: {SessionOperation.control},
+        maxVideoSessions: 1,
+      ),
+      controlCapabilities: {
+        ControlCapability.pointer,
+        ControlCapability.wheel,
+        ControlCapability.physicalKey,
+        ControlCapability.textInput,
+        ControlCapability.clipboardText,
+      },
+    );
+    build();
+    await tester.runAsync(
+      () => remoteA.start(
+        SessionOperation.control,
+        peerKey: a.sessions.single.peerKey,
+      ),
+    );
+    final control = factoryA.current as _FakeControlPicture;
+    control.emit(MediaEventKind.firstFrame);
+    control.ready(
+      const RemoteControlInputScope(
+        inputEpoch: 4,
+        geometryRevision: 2,
+        mediaRevision: 0,
+        width: 640,
+        height: 360,
+      ),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: RemotePicturePanel(controller: remoteA)),
+      ),
+    );
+    final rect = tester.getRect(
+      find.byKey(const ValueKey('control-input-surface')),
+    );
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: rect.center);
+    await mouse.moveTo(Offset(rect.left + 4, rect.center.dy));
+    await tester.pump();
+    expect(control.inputs, isEmpty);
+    await mouse.moveTo(rect.center);
+    await tester.pump();
+    expect(control.inputs, hasLength(1));
+    final move = control.inputs.single as ControlPointerMove;
+    expect(move.x, closeTo(.5, .01));
+    expect(move.y, closeTo(.5, .01));
+    await mouse.down(rect.center);
+    await tester.pump();
+    expect(control.inputs.last, isA<ControlPointerButton>());
+    FocusManager.instance.primaryFocus?.unfocus();
+    await tester.pump();
+    expect(control.releases, greaterThanOrEqualTo(1));
+    expect(remoteA.controlInputScope, isNull);
+    await mouse.removePointer();
+    control.ready(
+      const RemoteControlInputScope(
+        inputEpoch: 5,
+        geometryRevision: 2,
+        mediaRevision: 0,
+        width: 640,
+        height: 360,
+      ),
+    );
+    final nextMouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await nextMouse.addPointer(location: rect.center);
+    await nextMouse.down(rect.center);
+    await tester.pump();
+    final beforeInactive = control.releases;
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    await tester.pump();
+    expect(control.releases, greaterThan(beforeInactive));
+    expect(remoteA.controlInputScope, isNull);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await nextMouse.removePointer();
+    await tester.runAsync(() => remoteA.stop());
+  });
+
+  testWidgets(
+    'control surface sends physical shortcut and committed text separately',
+    (tester) async {
+      factoryA = _FakeFactory(
+        declared: MediaCapabilities(
+          protocolVersion: sessionProtocolVersion,
+          operations: {SessionOperation.control},
+          maxVideoSessions: 1,
+        ),
+        controlCapabilities: {
+          ControlCapability.pointer,
+          ControlCapability.wheel,
+          ControlCapability.physicalKey,
+          ControlCapability.textInput,
+          ControlCapability.clipboardText,
+        },
+      );
+      build();
+      await tester.runAsync(
+        () => remoteA.start(
+          SessionOperation.control,
+          peerKey: a.sessions.single.peerKey,
+        ),
+      );
+      final control = factoryA.current as _FakeControlPicture;
+      control.emit(MediaEventKind.firstFrame);
+      control.ready(
+        const RemoteControlInputScope(
+          inputEpoch: 4,
+          geometryRevision: 2,
+          mediaRevision: 0,
+          width: 640,
+          height: 360,
+        ),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(body: RemotePicturePanel(controller: remoteA)),
+        ),
+      );
+      await tester.tap(find.byKey(const ValueKey('control-input-surface')));
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.keyB);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.keyB);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.keyA);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.keyA);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+      final keys = control.inputs.whereType<ControlKey>().toList();
+      expect(keys.map((key) => (key.usage, key.action)), [
+        (0xe0, ControlKeyAction.down),
+        (0x04, ControlKeyAction.down),
+        (0x04, ControlKeyAction.up),
+        (0xe0, ControlKeyAction.up),
+      ]);
+
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.tap(find.byKey(const ValueKey('control-committed-text')));
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+      expect(
+        control.inputs.whereType<ControlKey>().last.action,
+        ControlKeyAction.up,
+      );
+      expect(control.inputs.whereType<ControlKey>().last.usage, 0xe0);
+
+      await tester.enterText(
+        find.byKey(const ValueKey('control-committed-text')),
+        '中文\nA😀',
+      );
+      await tester.tap(find.text('发送文本'));
+      await tester.pump();
+      final text = control.inputs.whereType<ControlTextInput>().single;
+      expect(text.text, '中文\nA😀');
+      expect(text.inputEpoch, 4);
+      expect(text.geometryRevision, 2);
+      await tester.enterText(
+        find.byKey(const ValueKey('control-committed-text')),
+        'x' * (ControlTextInput.maximumBytes + 1),
+      );
+      await tester.tap(find.text('发送文本'));
+      await tester.pump();
+      expect(control.inputs.whereType<ControlTextInput>(), hasLength(1));
+      expect(remoteA.phase, RemotePhase.active);
+      await tester.runAsync(() => remoteA.stop());
+    },
+  );
 }

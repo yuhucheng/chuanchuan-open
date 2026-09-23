@@ -1,0 +1,12 @@
+name: share_hub_file_transfer
+description: Strict versioned file wire codec and authenticated transfer validation.
+version: 0.1.0
+publish_to: none
+environment:
+  sdk: '>=3.13.2 <4.0.0'
+dependencies:
+  share_hub_session_api:
+    path: ../share_hub_session_api
+dev_dependencies:
+  test: ^1.26.0
+  lints: ^6.0.0

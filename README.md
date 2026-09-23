@@ -14,7 +14,7 @@ Agent 配置、OpenSpec 和内部计划已迁至独立私有管理仓，本仓�
 
 ## 构建
 
-两个业务仓在统一工作区内跟随管理仓当前同名分支，当前为 `release/v0.1.0`，目标 `v0.1.0`；`main` 保持主线。开发和提交前阅读 [版本计划](docs/version-plan.md) 与 [分支管理规则](docs/development/branch-management.md)，运行 `pwsh -File tool/install_git_hooks.ps1` 启用本地检查。
+两个业务仓在统一工作区内跟随管理仓当前同名分支，当前在 `release/v0.2.0` 开发，产品 VERSION 暂保留 0.1.0；`main` 保持主线。开发和提交前阅读 [版本计划](docs/version-plan.md) 与 [分支管理规则](docs/development/branch-management.md)，运行 `pwsh -File tool/install_git_hooks.ps1` 启用本地检查。
 
 安装 Flutter 3.47.2 / Dart 3.13.2；Windows 需要 VS 2022 C++ 桌面工具链和 Windows SDK，脚本使用 PowerShell 7；Mac 需要完整 Xcode。
 
@@ -44,10 +44,13 @@ macOS 使用相同 `lib/main.dart`，运行 `flutter build macos --debug --no-pu
 | 公共媒体契约 | `packages/share_hub_media_api`，客户端与 SDK 共享 |
 | 媒体实现 | SDK 包；当前内部开发适配器尚不是可分发二进制 SDK |
 | 界面、设备发现 | `lib/ui`、`lib/features/devices`；手动 DNS-SD / Bonjour 发现 |
-| 文件准备 | `lib/features/transfers`；macOS 已实现本地选文件和摘要；Windows 系统选择器、令牌读取、摘要与普通退出释放已通过实机验收；尚未发送网络数据 |
+| 文件准备 | `lib/features/transfers`；macOS 已实现本地选文件和摘要；Windows 系统选择器、令牌读取、摘要与普通退出释放已通过实机验收；准备完成仍不等于对端收妥 |
+| 网络文件开发 | 双向自动接收、确认、暂停/进程内恢复和断线取消已接入客户端；接收目录设置由原生层保存，失效时要求重新选择。Windows 构建、本机 TCP/模拟文件与原生存储测试通过；macOS 新存储/持久化实现及真实双机验收待完成 |
+| 文件拖放开发 | 系统文件拖到本机节点/文件面板后准备，拖到已连接设备后准备并向原连接发送。Windows 原生边界/令牌释放有自动测试，真实手势及多显示器 DPI 待验收；macOS 已补 AppKit 入口与安全作用域交接源码，尚未编译或执行原生测试 |
 | 平台宿主 | 全部在本仓库的 `windows`、`macos` |
 | 短接码连接 | `packages/share_hub_connection` 与 macOS 设备页已接入；协议测试通过，双机/休眠待验收 |
 | 网络传输、远控、Android | 尚未完成 |
+| Windows 远控屏幕几何探测 | 已提供只读本机 source ID 重新枚举与几何查询；执行侧仍需绑定画面、授权及原生输入，不代表远控可用 |
 
 UI 必须显式获得媒体引擎，测试可以注入 fake，但 fake 只存在于测试工具，不用于产品入口。启动应用不会自动采集屏幕，仍需用户选择并开始预览。
 

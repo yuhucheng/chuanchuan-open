@@ -15,6 +15,7 @@ class PlatformBridge {
   bool HandleMessage(UINT message, WPARAM wparam);
   void Close();
   void CancelFilePicker();
+  void ConfigureFileDrop(HWND flutter_view);
  private:
   struct Impl;
   std::shared_ptr<Impl> impl_;

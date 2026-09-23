@@ -111,15 +111,17 @@ bool ConnectionSecurity::LoadIdentitySeed(std::vector<uint8_t>* seed) {
 }
 
 bool ConnectionSecurity::ContinuousMicros(uint64_t* micros) {
-  // QueryInterruptTimePrecise returns 100ns ticks that include system sleep and
+  // QueryInterruptTimePrecise writes 100ns ticks that include system sleep and
   // ignore wall-clock edits, matching the macOS mach_continuous_time contract.
   // It is resolved at runtime so the app still loads on older Windows, where it
   // falls back to GetTickCount64 (milliseconds, also sleep-inclusive).
-  using Precise = ULONGLONG(WINAPI*)();
+  using Precise = decltype(&QueryInterruptTimePrecise);
   static const auto precise = reinterpret_cast<Precise>(
       GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "QueryInterruptTimePrecise"));
   if (precise) {
-    *micros = static_cast<uint64_t>(precise()) / 10;
+    ULONGLONG ticks = 0;
+    precise(&ticks);
+    *micros = static_cast<uint64_t>(ticks) / 10;
     return *micros != 0;
   }
   *micros = static_cast<uint64_t>(GetTickCount64()) * 1000;

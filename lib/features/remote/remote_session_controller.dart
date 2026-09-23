@@ -51,7 +51,7 @@ class RemoteSessionController extends ChangeNotifier {
   final Duration firstFrameDeadline;
   final Duration permissionPoll;
 
-  /// One budget for watch, cast and (later) control-with-video in this process.
+  /// One budget for watch, cast and control-with-video in this process.
   final MediaSessionBudget budget;
 
   final MediaCapabilities _capabilities;
@@ -66,6 +66,7 @@ class RemoteSessionController extends ChangeNotifier {
   bool _disposed = false;
   bool _busy = false;
   bool _stopping = false;
+  Future<void>? _stopInFlight;
   bool _checkingPermission = false;
   RemotePhase _phase = RemotePhase.idle;
   String? _error;
@@ -96,10 +97,21 @@ class RemoteSessionController extends ChangeNotifier {
     if (_capabilities.protocolVersion != sessionProtocolVersion) {
       return const {};
     }
+    const requiredControlCapabilities = {
+      ControlCapability.pointer,
+      ControlCapability.wheel,
+      ControlCapability.physicalKey,
+      ControlCapability.textInput,
+      ControlCapability.clipboardText,
+    };
     return {
       for (final operation in _capabilities.operations)
         if (operation == SessionOperation.watch ||
-            operation == SessionOperation.cast)
+            operation == SessionOperation.cast ||
+            (operation == SessionOperation.control &&
+                factory.controlCapabilities.containsAll(
+                  requiredControlCapabilities,
+                )))
           operation.name,
     };
   }
@@ -108,6 +120,11 @@ class RemoteSessionController extends ChangeNotifier {
       connections.outgoingFor(peerKey) != null ? offeredOperations : const {};
 
   RemotePicture? get session => _attempt?.picture;
+  RemoteControlPicture? get controlSession => switch (session) {
+    RemoteControlPicture control when !control.sends => control,
+    _ => null,
+  };
+  RemoteControlInputScope? get controlInputScope => controlSession?.inputScope;
   SessionOperation? get operation => _attempt?.operation;
   String? get peerKey => _attempt?.peerKey;
   String? get peerLabel => _attempt?.label;
@@ -122,6 +139,126 @@ class RemoteSessionController extends ChangeNotifier {
 
   /// A live picture occupies the single picture budget for the whole process.
   bool get occupied => _attempt != null;
+
+  Future<bool> sendControlPointerMove(double x, double y) => _sendControlInput(
+    (scope, sequence) => ControlPointerMove(
+      sequence: sequence,
+      inputEpoch: scope.inputEpoch,
+      geometryRevision: scope.geometryRevision,
+      x: x,
+      y: y,
+    ),
+  );
+
+  Future<bool> sendControlPointerButton(
+    double x,
+    double y,
+    ControlButton button,
+    bool down,
+  ) => _sendControlInput(
+    (scope, sequence) => ControlPointerButton(
+      sequence: sequence,
+      inputEpoch: scope.inputEpoch,
+      geometryRevision: scope.geometryRevision,
+      x: x,
+      y: y,
+      button: button,
+      down: down,
+    ),
+  );
+
+  Future<bool> sendControlWheel(
+    double x,
+    double y,
+    double deltaX,
+    double deltaY,
+  ) => _sendControlInput(
+    (scope, sequence) => ControlWheel(
+      sequence: sequence,
+      inputEpoch: scope.inputEpoch,
+      geometryRevision: scope.geometryRevision,
+      x: x,
+      y: y,
+      deltaX: deltaX,
+      deltaY: deltaY,
+    ),
+  );
+
+  Future<bool> sendControlKey(int usage, ControlKeyAction action) =>
+      _sendControlInput(
+        (scope, sequence) => ControlKey(
+          sequence: sequence,
+          inputEpoch: scope.inputEpoch,
+          geometryRevision: scope.geometryRevision,
+          usage: usage,
+          action: action,
+        ),
+      );
+
+  Future<bool> sendControlText(String text) => _sendControlInput(
+    (scope, sequence) => ControlTextInput(
+      sequence: sequence,
+      inputEpoch: scope.inputEpoch,
+      geometryRevision: scope.geometryRevision,
+      text: text,
+    ),
+  );
+
+  Future<bool> _sendControlInput(
+    ControlInput Function(RemoteControlInputScope scope, int sequence) build,
+  ) async {
+    final attempt = _attempt;
+    final picture = attempt?.picture;
+    if (attempt == null ||
+        !_isCurrent(attempt) ||
+        _phase != RemotePhase.active ||
+        picture is! RemoteControlPicture ||
+        picture.sends ||
+        picture.inputScope == null) {
+      return false;
+    }
+    final scope = picture.inputScope!;
+    final ControlInput input;
+    try {
+      input = build(scope, attempt.inputSequence + 1);
+    } on SessionFailure {
+      return false;
+    }
+    attempt.inputSequence++;
+    try {
+      await picture.sendInput(input);
+      return _isCurrent(attempt);
+    } catch (_) {
+      final currentScope = picture.inputScope;
+      final scopeExpired =
+          currentScope == null ||
+          currentScope.inputEpoch != scope.inputEpoch ||
+          currentScope.geometryRevision != scope.geometryRevision;
+      if (_isCurrent(attempt) && !scopeExpired) {
+        await stop(reason: '控制输入已失效，当前控制操作已停止。', failed: true);
+      }
+      return false;
+    }
+  }
+
+  Future<void> releaseControlInput() async {
+    final attempt = _attempt;
+    final picture = attempt?.picture;
+    if (attempt == null ||
+        !_isCurrent(attempt) ||
+        picture is! RemoteControlPicture ||
+        picture.sends ||
+        picture.inputScope == null) {
+      return;
+    }
+    try {
+      await picture.releaseInput();
+    } catch (_) {
+      if (_isCurrent(attempt)) {
+        await stop(reason: '无法释放控制输入，当前控制操作已停止。', failed: true);
+      }
+    }
+  }
 
   @override
   void dispose() {
@@ -146,7 +283,7 @@ class RemoteSessionController extends ChangeNotifier {
 
   // ------------------------------------------------------------------ starting
 
-  /// Starts a watch or cast towards an already verified peer. A peer that is not
+  /// Starts an offered operation towards an already verified peer. A peer that is not
   /// connected yet is refused here: the caller runs the short-code flow first
   /// and only then asks for the operation.
   Future<void> start(
@@ -156,7 +293,8 @@ class RemoteSessionController extends ChangeNotifier {
   }) async {
     if (_disposed || _busy) return;
     if (operation != SessionOperation.watch &&
-        operation != SessionOperation.cast) {
+        operation != SessionOperation.cast &&
+        operation != SessionOperation.control) {
       _fail('本版本不提供该远端操作。');
       return;
     }
@@ -191,8 +329,13 @@ class RemoteSessionController extends ChangeNotifier {
     _phase = RemotePhase.connecting;
     _notify();
     try {
-      final started = await _linkFor(connection)
-          .start(operation, attempt.sessionId);
+      final link = _linkFor(connection);
+      final started = operation == SessionOperation.control
+          ? await link.startControl(
+              attempt.sessionId,
+              ControlStart(factory.controlCapabilities),
+            )
+          : await link.start(operation, attempt.sessionId);
       if (_disposed || attempt.cancelled || token != _generation) {
         // A cancelled or superseded start must not leave a live session behind.
         if (!_disposed && identical(_attempt, attempt)) {
@@ -234,6 +377,7 @@ class RemoteSessionController extends ChangeNotifier {
   Future<void> cancel() => stop(reason: '已取消远端画面，未建立远端画面。');
 
   Future<void> pause() async {
+    if (_attempt?.operation == SessionOperation.control) return;
     final picture = _attempt?.picture;
     if (_disposed || picture == null || sourceBusy) return;
     try {
@@ -246,6 +390,7 @@ class RemoteSessionController extends ChangeNotifier {
   }
 
   Future<void> resume() async {
+    if (_attempt?.operation == SessionOperation.control) return;
     final attempt = _attempt;
     final picture = attempt?.picture;
     if (_disposed || attempt == null || picture == null || sourceBusy) return;
@@ -268,9 +413,17 @@ class RemoteSessionController extends ChangeNotifier {
 
   /// Stops the current picture and releases its resources. A failed release
   /// stays visible and the same session can be stopped again.
-  Future<void> stop({String? reason, bool failed = false}) async {
+  Future<void> stop({String? reason, bool failed = false}) {
+    if (_disposed || _attempt == null) return Future<void>.value();
+    return _stopInFlight ??= _stopNow(
+      reason: reason,
+      failed: failed,
+    ).whenComplete(() => _stopInFlight = null);
+  }
+
+  Future<void> _stopNow({String? reason, bool failed = false}) async {
     final attempt = _attempt;
-    if (_disposed || attempt == null || _stopping) return;
+    if (attempt == null) return;
     _stopping = true;
     _sourceChoices = const [];
     _sourceError = null;
@@ -330,7 +483,12 @@ class RemoteSessionController extends ChangeNotifier {
     final existing = _links[connection];
     if (existing != null) return existing;
     final link = factory.create(
-      transport: connection,
+      transport: connection.operationTransport({
+        SessionOperation.watch,
+        SessionOperation.cast,
+        if (offeredOperations.contains(SessionOperation.control.name))
+          SessionOperation.control,
+      }),
       budget: budget,
       resolveSource: _resolveLocalSource,
       onSession: (session) => _adopt(connection, session),
@@ -387,6 +545,12 @@ class RemoteSessionController extends ChangeNotifier {
     final owned = attempt;
     owned.picture = session;
     owned.events = session.events.listen((event) => _onEvent(owned, event));
+    if (session is RemoteControlPicture) {
+      owned.inputListener = () {
+        if (_isCurrent(owned)) _notify();
+      };
+      session.inputChanges.addListener(owned.inputListener!);
+    }
     _startPermissionWatch(owned);
     _armFirstFrameDeadline(owned);
     _notify();
@@ -714,6 +878,11 @@ class RemoteSessionController extends ChangeNotifier {
   // ---------------------------------------------------------------- plumbing
 
   Future<void> _cancelEvents(_Attempt? attempt) async {
+    final picture = attempt?.picture;
+    if (picture is RemoteControlPicture && attempt?.inputListener != null) {
+      picture.inputChanges.removeListener(attempt!.inputListener!);
+      attempt.inputListener = null;
+    }
     final subscription = attempt?.events;
     attempt?.events = null;
     if (subscription != null) await subscription.cancel();
@@ -747,6 +916,8 @@ class _Attempt {
   String sessionId = '';
   RemotePicture? picture;
   StreamSubscription<MediaSessionEvent>? events;
+  VoidCallback? inputListener;
+  int inputSequence = 0;
   bool transportReady = false;
   bool firstFrame = false;
   int minimumRevision = 0;

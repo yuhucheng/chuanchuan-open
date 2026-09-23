@@ -150,6 +150,13 @@ sealed class SessionAuthorization {
   GrantRole get sender;
   Future<void> check() => _owner._check(_epoch, GrantPhase.active);
 
+  /// Whether both authorizations originate from the same local grant endpoint.
+  /// This compares sealed provenance only, including across transport generations.
+  /// It does not validate or refresh either authorization; callers still check
+  /// the current authorization before effects.
+  bool hasSameGrantAs(SessionAuthorization other) =>
+      identical(_owner, other._owner);
+
   /// Close the microtask gap after awaiting check(), immediately before effects.
   void requireCurrent() {
     if (_owner._epoch != _epoch || _owner.phase != GrantPhase.active) {

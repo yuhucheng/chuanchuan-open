@@ -28,6 +28,13 @@ try {
     Invoke-FixtureGit -Arguments @('commit', '--allow-empty', '-m', 'fix(v0.2.0): wrong version') -ExpectFailure; $checks++
     Invoke-FixtureGit -Arguments @('commit', '--allow-empty', '-m', 'fix: no target version') -ExpectFailure; $checks++
     Invoke-FixtureGit -Arguments @('commit', '--allow-empty', '-m', 'fix(v0.1.0): ') -ExpectFailure; $checks++
+    Invoke-FixtureGit -Arguments @('checkout', '-b', 'release/v0.1.0')
+    Invoke-FixtureGit -Arguments @('commit', '--allow-empty', '-m', 'fix(v0.1.0): approved existing release branch'); $checks++
+    Invoke-FixtureGit -Arguments @('checkout', '-b', 'release/v0.2.0')
+    Invoke-FixtureGit -Arguments @('commit', '--allow-empty', '-m', 'fix(v0.1.0): approved next release branch'); $checks++
+    Invoke-FixtureGit -Arguments @('commit', '--allow-empty', '-m', 'fix(v0.2.0): branch version does not override staged VERSION') -ExpectFailure; $checks++
+    Invoke-FixtureGit -Arguments @('checkout', '-b', 'release/v0.3.0')
+    Invoke-FixtureGit -Arguments @('commit', '--allow-empty', '-m', 'fix(v0.1.0): unapproved release branch') -ExpectFailure; $checks++
     Invoke-FixtureGit -Arguments @('checkout', '-b', 'codex/unplanned-fixture')
     Invoke-FixtureGit -Arguments @('commit', '--allow-empty', '-m', 'fix(v0.1.0): unplanned branch') -ExpectFailure; $checks++
     Invoke-FixtureGit -Arguments @('checkout', '--detach')

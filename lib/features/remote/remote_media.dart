@@ -38,10 +38,31 @@ abstract interface class SourceSelectableRemotePicture
   Future<void> changeSource(CaptureSource source);
 }
 
+final class RemoteControlInputScope {
+  const RemoteControlInputScope({
+    required this.inputEpoch,
+    required this.geometryRevision,
+    required this.mediaRevision,
+    required this.width,
+    required this.height,
+  });
+  final int inputEpoch, geometryRevision, mediaRevision, width, height;
+}
+
+/// Input is available only after the SDK has matched an actual painted frame
+/// with authenticated geometry and the target's input-ready acknowledgement.
+abstract interface class RemoteControlPicture implements RemotePicture {
+  Listenable get inputChanges;
+  RemoteControlInputScope? get inputScope;
+  Future<void> sendInput(ControlInput input);
+  Future<void> releaseInput();
+}
+
 /// One trusted connection's media receiver. The client owns exactly one per
 /// live connection, so a peer-initiated operation is routed instead of dropped.
 abstract interface class RemotePictureLink {
   Future<RemotePicture> start(SessionOperation operation, String sessionId);
+  Future<RemotePicture> startControl(String sessionId, ControlStart start);
   Future<void> close();
 }
 
@@ -49,6 +70,7 @@ abstract interface class RemotePictureLink {
 /// the session itself; nothing here is inferred from a platform name or UI flag.
 abstract interface class RemotePictureFactory {
   MediaCapabilities get capabilities;
+  Set<ControlCapability> get controlCapabilities;
   RemotePictureLink create({
     required SessionTransport transport,
     required MediaSessionBudget budget,
@@ -70,6 +92,9 @@ class RtcRemotePictureFactory implements RemotePictureFactory {
   MediaCapabilities get capabilities => _media.capabilities;
 
   @override
+  Set<ControlCapability> get controlCapabilities => _media.controlCapabilities;
+
+  @override
   RemotePictureLink create({
     required SessionTransport transport,
     required MediaSessionBudget budget,
@@ -83,6 +108,7 @@ class RtcRemotePictureFactory implements RemotePictureFactory {
       resolveSource: resolveSource,
       onSession: (session) => onSession(_SdkPicture(session)),
       onFailure: onFailure,
+      onControlSession: (session) => onSession(_SdkControlPicture(session)),
     ),
   );
 }
@@ -98,7 +124,62 @@ class _SdkLink implements RemotePictureLink {
   ) async => _SdkPicture(await _link.start(operation, sessionId));
 
   @override
+  Future<RemotePicture> startControl(
+    String sessionId,
+    ControlStart start,
+  ) async => _SdkControlPicture(await _link.startControl(sessionId, start));
+
+  @override
   Future<void> close() => _link.close();
+}
+
+class _SdkControlPicture implements RemoteControlPicture {
+  _SdkControlPicture(this._operation);
+  final sdk.RtcControlOperation _operation;
+
+  @override
+  Listenable get inputChanges => _operation.controllerInputChanges;
+  @override
+  RemoteControlInputScope? get inputScope {
+    final state = _operation.controllerInputScope;
+    if (state == null) return null;
+    return RemoteControlInputScope(
+      inputEpoch: state.inputEpoch,
+      geometryRevision: state.geometryRevision,
+      mediaRevision: state.mediaRevision,
+      width: state.width,
+      height: state.height,
+    );
+  }
+
+  @override
+  Future<void> sendInput(ControlInput input) => _operation.sendInput(input);
+  @override
+  Future<void> releaseInput() => _operation.releaseInput();
+
+  @override
+  String get id => _operation.picture.id;
+  @override
+  SessionOperation get operation => SessionOperation.control;
+  @override
+  bool get sends => !_operation.context.localIsController;
+  @override
+  Stream<MediaSessionEvent> get events => _operation.picture.events;
+  @override
+  Widget get view => _operation.view;
+  @override
+  int get mediaRevision => _operation.picture.mediaRevision;
+  @override
+  bool get stopped => _operation.stopped;
+  @override
+  VideoEndReason? get remoteEndReason => _operation.picture.remoteEndReason;
+  @override
+  Future<void> pause() => throw const SessionFailure('capability_unavailable');
+  @override
+  Future<void> resume() => throw const SessionFailure('capability_unavailable');
+  @override
+  Future<void> stop({VideoEndReason reason = VideoEndReason.stopped}) =>
+      _operation.stop();
 }
 
 class _SdkPicture implements SourceSelectableRemotePicture {

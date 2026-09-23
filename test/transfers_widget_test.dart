@@ -10,8 +10,40 @@ import 'package:share_hub_open/ui/client_app.dart';
 
 import 'fakes.dart';
 import 'file_fakes.dart';
+import 'network_file_fakes.dart';
 
 void main() {
+  testWidgets('file settings select and display the receive destination', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1180, 780);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final platform = FakePlatform();
+    final disk = MemoryReceiveAccess();
+    await tester.pumpWidget(
+      ShareHubApp(
+        platform: platform,
+        previewEngine: FakePreviewEngine(),
+        fileAccess: TestFileAccess(),
+        receiveAccess: disk,
+      ),
+    );
+    await tester.pumpAndSettle();
+    await openFieldTool(tester, '文件传送');
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('更改保存位置'));
+    await tester.tap(find.text('更改保存位置'));
+    await tester.pumpAndSettle();
+    expect(find.text('接收位置：Chosen'), findsOneWidget);
+    expect(find.text('有效连接内自动接收，重名文件会保留两份。'), findsOneWidget);
+    expect(disk.directoryPicks, 1);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+    expect(disk.directoryReleases, ['default', 'chosen-1']);
+    await platform.events.close();
+  });
   testWidgets(
     'file page shows checked-but-unsent status and releases on removal',
     (tester) async {
@@ -33,7 +65,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      await openFieldTool(tester, '文件准备');
+      await openFieldTool(tester, '文件传送');
       await tester.pumpAndSettle();
       expect(files.reads, isEmpty);
       await tester.tap(find.text('选择文件'));
@@ -80,7 +112,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      await openFieldTool(tester, '文件准备');
+      await openFieldTool(tester, '文件传送');
       await tester.pumpAndSettle();
       await tester.tap(find.text('选择文件'));
       await tester.pumpAndSettle();

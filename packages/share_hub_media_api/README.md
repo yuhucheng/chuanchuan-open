@@ -1,6 +1,41 @@
-# Share Hub Media API 0.3.0
+# Share Hub Media API 0.4.0
 
 Apache-2.0 公共契约。客户端和媒体实现共享此包，SDK 不依赖客户端 UI 或平台宿主。产品版本与 API 版本独立。
+
+## Control contract (0.4.0)
+
+The public entrypoint now exports version-1 `ControlStart`, geometry, input,
+stage and clipboard messages, strict codecs, `ControlContext`, and pure input
+and clipboard state helpers. A control request remains one authenticated
+`SessionOperation.control` with the original grant deadline. `ControlContext`
+checks the exact sealed authorization, requested capability and message sender;
+it does not reserve a picture, negotiate native capability, present a frame,
+grant OS permission or execute an input event. Watch/cast/file authority cannot
+be upgraded by supplying a control body.
+
+The target must bind a locally verified source and current presented geometry
+before accepting input. Input sequence, inputEpoch, release-all and stop gates
+are separate from clipboardEpoch. The pure input state bounds pending events to
+64, coalesces only adjacent unsent pointer moves, limits admissions to 240/s
+with burst 64, and records only successful native key/button results. An SDK
+owner must stop new native admission synchronously, drain in-flight calls and
+release only its own actually held keys/buttons before reporting cleanup.
+`ControlInputState.invalidatePicture()` immediately seals the old geometry on
+local source loss; cleanup must finish before a newer geometry can complete its
+own presented-frame handshake and use a new input epoch.
+
+Clipboard messages distinguish no plain-text format from an empty string and
+carry at most 32 KiB of UTF-8 text in a 48 KiB body. Proposal/commit send
+helpers use a 4/s, burst-2 budget. `ClipboardEchoGuard` matches OS change token
+and SHA-256 text digest; the host must provide a real token, check the current
+owner/epoch/settings at the final write boundary, and keep existing OS text
+when sync stops. `text-input` submits text separately and never reads or
+replaces the system clipboard.
+
+This API version exposes contracts for SDK integration. It does not enable
+client controls, advertise platform input/clipboard capabilities, or claim
+Windows/macOS native execution or two-device acceptance. The product version
+and existing preview/video behavior are unchanged.
 
 `CaptureSource`、`CaptureSourceType` 和 `PreviewEngine` 保持源码兼容。`unavailableReason == null` 只表示存在媒体实现，不代表录屏权限、远端连接或真实首帧。
 
