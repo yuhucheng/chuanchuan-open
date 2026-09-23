@@ -4,6 +4,23 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:share_hub_connection/share_hub_connection.dart';
 import 'package:share_hub_media_api/share_hub_media_api.dart';
 import 'package:share_hub_open/features/connections/connection_controller.dart';
+import 'package:share_hub_open/features/connections/auxiliary_route_controller.dart';
+
+final class _RouteStore implements AuxiliaryRouteStore {
+  @override
+  Future<AuxiliaryRouteChoice?> read() async => null;
+  @override
+  Future<void> write(AuxiliaryRouteChoice choice) async {}
+}
+
+final class _UnavailableAuxiliary implements AuxiliaryTransport {
+  @override
+  Future<Map<String, Object?>> post(
+    String path,
+    Map<String, String> body,
+    AuxiliaryCancellation cancellation,
+  ) => Future.error(const AuxiliaryFailure('unreachable'));
+}
 
 class FakeConnectionPlatform implements ConnectionPlatform {
   final seed = Completer<DeviceIdentity>();
@@ -20,6 +37,45 @@ class FakeConnectionPlatform implements ConnectionPlatform {
 }
 
 void main() {
+  test('official auxiliary failure does not block local pairing', () async {
+    final aPlatform = FakeConnectionPlatform();
+    final bPlatform = FakeConnectionPlatform();
+    final alice = await DeviceIdentity.fromSeed(List.filled(32, 91));
+    final bob = await DeviceIdentity.fromSeed(List.filled(32, 92));
+    aPlatform.seed.complete(alice);
+    bPlatform.seed.complete(bob);
+    final routes = AuxiliaryRouteController(
+      identity: () async => alice,
+      officialOrigin: 'https://offline.example',
+      store: _RouteStore(),
+      transportFactory: (_) =>
+          (transport: _UnavailableAuxiliary(), close: () {}),
+    );
+    await routes.load();
+    routes.setNeeded(true);
+    final a = ConnectionController(aPlatform, auxiliaryRoutes: routes);
+    final b = ConnectionController(bPlatform);
+    addTearDown(() async {
+      await a.disconnectAll();
+      await b.disconnectAll();
+      a.dispose();
+      b.dispose();
+      routes.stop();
+    });
+    await b.open();
+    final port = bPlatform.advertisements.whereType<int>().last;
+    final connected = await a.connect(
+      '127.0.0.1',
+      port,
+      b.code!,
+      expectedPeerKey: bob.encodedKey,
+    );
+    expect(connected, isNotNull);
+    expect(a.sessions.single.isConnected, isTrue);
+    expect(b.sessions.single.isConnected, isTrue);
+    expect(a.problem, isNull);
+  });
+
   test('client v2 grants bind both identities and off revokes before I/O', () async {
     final aPlatform = FakeConnectionPlatform();
     final bPlatform = FakeConnectionPlatform();
