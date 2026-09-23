@@ -4,6 +4,10 @@ import 'package:share_hub_connection/share_hub_connection.dart';
 import 'package:share_hub_media_api/share_hub_media_api.dart';
 
 typedef RecoveryRoute = ({String host, int port});
+typedef RelayRecoveryOpener = Future<ConnectionWire> Function(
+  TrustedConnection previous,
+  AuxiliaryCancellation cancellation,
+);
 
 /// Process-owned retry/cleanup. A caller-facing timeout never erases an
 /// unsettled adapter; shutdown waits for run() to finish its actual owners.
@@ -18,6 +22,8 @@ class ConnectionRecovery {
     required this.window,
     required this.backoff,
     required this.attemptTimeout,
+    this.openRelay,
+    this.requireAdmission,
   });
   final TrustedConnection previous;
   final RecoveryRoute? route;
@@ -27,10 +33,14 @@ class ConnectionRecovery {
   final void Function() onFailed;
   final Duration window, attemptTimeout;
   final List<Duration> backoff;
+  final RelayRecoveryOpener? openRelay;
+  final void Function()? requireAdmission;
   bool _cancelled = false;
   Timer? _deadline, _delayTimer;
   Completer<void>? _delay;
   ConnectionRecoveryAttempt? _attempt;
+  AuxiliaryCancellation? _relayCancellation;
+  bool _relayActive = false;
   StreamSubscription<void>? _invalidation;
   int? _began, _last;
 
@@ -72,9 +82,71 @@ class ConnectionRecovery {
     _deadline?.cancel();
     _delayTimer?.cancel();
     if (_delay case final wait? when !wait.isCompleted) wait.complete();
+    if (revoke || !_relayActive) _relayCancellation?.cancel();
     if (revoke) {
       _attempt?.cancel();
       previous.close('revoked');
+    }
+  }
+
+  bool _publish(TrustedConnection connection, {required bool relay}) {
+    _relayActive = relay;
+    bool accepted;
+    try {
+      accepted = onRecovered(connection);
+    } catch (_) {
+      accepted = false;
+    }
+    if (!accepted) {
+      _relayActive = false;
+      connection.close('admission_rejected');
+      return false;
+    }
+    cancel(revoke: false);
+    return true;
+  }
+
+  Future<bool> _relay({required bool receiver}) async {
+    final opener = openRelay;
+    if (opener == null) return false;
+    final cancellation = _relayCancellation = AuxiliaryCancellation();
+    ConnectionWire? wire;
+    TrustedConnection? recovered;
+    try {
+      await verifyIdentity();
+      await _checkTime();
+      if (receiver) {
+        wire = await opener(previous, cancellation);
+        await _checkTime();
+        recovered = await previous.acceptRecoveryWire(wire, () {
+          _current();
+          requireAdmission?.call();
+        });
+      } else {
+        final attempt = _attempt = ConnectionRecoveryAttempt(
+          previous,
+          timeout: attemptTimeout,
+        );
+        recovered = await attempt.connectWire(() async {
+          wire = await opener(previous, cancellation);
+          return wire!;
+        });
+      }
+      await verifyIdentity();
+      await _checkTime();
+      if (wire?.isClosed ?? true) {
+        throw const ConnectionFailure('cancelled');
+      }
+      recovered.startMonitoring();
+      return _publish(recovered, relay: true);
+    } catch (_) {
+      recovered?.close('recovery_rejected');
+      wire?.close();
+      return false;
+    } finally {
+      if (!_relayActive) cancellation.cancel();
+      await _attempt?.settled;
+      _attempt = null;
     }
   }
 
@@ -92,6 +164,8 @@ class ConnectionRecovery {
     try {
       await _checkTime();
       if (route == null) {
+        if (await _relay(receiver: true)) return;
+        if (_cancelled) return;
         await _wait(window); // Receiver waits for authenticated peer recovery.
         if (!_cancelled) _failed();
         return;
@@ -112,20 +186,12 @@ class ConnectionRecovery {
           await verifyIdentity();
           await _checkTime();
           _attempt = null;
-          bool accepted;
-          try {
-            accepted = onRecovered(recovered);
-          } catch (_) {
-            accepted = false;
-          }
-          if (!accepted) {
-            recovered.close('admission_rejected');
+          if (!_publish(recovered, relay: false)) {
             // Authentication alone is not admission. A rejected candidate
             // must not leave the original grant suspended with no retry owner.
             _failed();
             return;
           }
-          cancel(revoke: false);
           return;
         } catch (_) {
           recovered?.close('recovery_rejected');
@@ -141,6 +207,7 @@ class ConnectionRecovery {
           if (identical(_attempt, attempt)) _attempt = null;
         }
       }
+      if (!_cancelled && await _relay(receiver: false)) return;
       _failed();
     } catch (_) {
       _failed();

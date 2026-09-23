@@ -20,7 +20,7 @@ an already available credential. This package alone does not establish relay;
 official deployment, custom intranet selection and a real selected-pair proof
 remain necessary.
 
-## Socket recovery adapter
+## Connection recovery adapter
 
 `PairingHost` and `PairingAttempt` accept an optional `enableRecovery` flag
 (default false). Both endpoints must opt in on pairing protocol 2. The initiator
@@ -123,8 +123,12 @@ vectors. `RelayServiceClient` now opens a cancellable HTTPS room only from a
 process-owned grant and matching device identity; it refuses a lost send
 acknowledgement rather than guessing the next sequence. The Python auxiliary
 service offers an opt-in bounded room route, with a local Dart-to-Python TLS
-probe. The production connection owner and media link do not yet select this
-route. A room never authorizes an operation, and first-time cross-network
+probe. The production connection owner tries its saved local TCP route first,
+then the explicitly selected HTTPS room within the original recovery window.
+Both endpoints seal resume frames with the original pairing's directional keys,
+complete the existing two-way grant proof and install new transport/session keys
+without changing the original deadline. The local Python HTTPS probe exercises
+this full recovery. A room never authorizes an operation, and first-time cross-network
 pairing needs a separate rendezvous design. A caller supplying
 `HttpsAuxiliaryTransport` for relay polling must set a timeout longer than the
 selected service's configured `poll_wait_seconds`; the local TLS probe uses
@@ -136,7 +140,7 @@ selected service's configured `poll_wait_seconds`; the local TLS probe uses
 traffic, recovery after an owned proxy cuts the socket, old-permit/packet rejection,
 unchanged identity/deadline, forged final proof, lost encrypted final acknowledgement,
 wrong process, opt-out peers, cancellation, expiry and a timed-out platform read.
-They are not two-device, real sleep, relay, OS permission or media-resumption
+They are not two-device, real sleep, deployed relay, OS permission or media-resumption
 acceptance. Client integration tests additionally exercise repeated recovery,
 short-code rotation, explicit close, both identity changes, cancellation/off/exit,
 pending platform admission and deadline cleanup. Recovery cancellation is visible

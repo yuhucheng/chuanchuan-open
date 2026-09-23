@@ -48,6 +48,64 @@ final class NativeAuxiliaryRouteStore implements AuxiliaryRouteStore {
 typedef AuxiliaryTransportFactory =
     ({AuxiliaryTransport transport, void Function() close}) Function(Uri);
 
+final class _SignalOwner {
+  _SignalOwner(this.cancellation, this.closeTransport, this.onClosed);
+  final AuxiliaryCancellation cancellation;
+  final void Function() closeTransport, onClosed;
+  RelaySignalChannel? channel;
+  ConnectionWire? wire;
+  bool closed = false;
+
+  Future<void> close({bool immediate = false}) async {
+    if (closed) return;
+    closed = true;
+    wire?.close();
+    cancellation.cancel();
+    try {
+      final leaving = channel?.close();
+      if (leaving != null) {
+        if (immediate) {
+          await leaving.timeout(const Duration(milliseconds: 500));
+        } else {
+          await leaving;
+        }
+      }
+    } catch (_) {
+      // Local invalidation has already won. The service room also has a TTL.
+    } finally {
+      closeTransport();
+      onClosed();
+    }
+  }
+}
+
+final class _SelectedSignalWire implements ConnectionWire {
+  _SelectedSignalWire(this._wire, this._owner);
+  final ConnectionWire _wire;
+  final _SignalOwner _owner;
+
+  @override
+  bool get isClosed => _owner.closed || _wire.isClosed;
+  @override
+  void enableSessionFrames() => _wire.enableSessionFrames();
+  @override
+  void send(Map<String, dynamic> message) => _wire.send(message);
+  @override
+  Future<void> flush() => _wire.flush();
+  @override
+  Future<Map<String, dynamic>> next() async {
+    try {
+      return await _wire.next();
+    } catch (_) {
+      close();
+      rethrow;
+    }
+  }
+
+  @override
+  void close() => unawaited(_owner.close());
+}
+
 /// Owns exactly one auxiliary origin. Switching first cancels the old network
 /// owner and discards its lease; no failure can silently select the other route.
 final class AuxiliaryRouteController extends ChangeNotifier {
@@ -63,6 +121,8 @@ final class AuxiliaryRouteController extends ChangeNotifier {
   final AuxiliaryRouteStore store;
   final AuxiliaryTransportFactory _transportFactory;
   RelayCredentialOwner? _owner;
+  Uri? _selectedUri;
+  final _signalOwners = <_SignalOwner>{};
   bool _needed = false, _stopped = false, _loaded = false;
   int _revision = 0;
   Future<void> _writeQueue = Future.value();
@@ -83,7 +143,7 @@ final class AuxiliaryRouteController extends ChangeNotifier {
     return (transport: transport, close: transport.close);
   }
 
-  RelayCredentialOwner? _create(AuxiliaryRouteChoice selected) {
+  Uri? _uriFor(AuxiliaryRouteChoice selected) {
     final origin = selected.mode == AuxiliaryRouteMode.official
         ? officialOrigin
         : selected.customOrigin;
@@ -100,6 +160,12 @@ final class AuxiliaryRouteController extends ChangeNotifier {
         uri.hasFragment) {
       throw const FormatException('Invalid auxiliary origin');
     }
+    return uri;
+  }
+
+  RelayCredentialOwner? _create(AuxiliaryRouteChoice selected) {
+    final uri = _uriFor(selected);
+    if (uri == null) return null;
     final endpoint = _transportFactory(uri);
     return RelayCredentialOwner(
       identity,
@@ -109,14 +175,61 @@ final class AuxiliaryRouteController extends ChangeNotifier {
   }
 
   void _install(AuxiliaryRouteChoice selected, RelayCredentialOwner? next) {
+    for (final owner in _signalOwners.toList()) {
+      unawaited(owner.close(immediate: true));
+    }
     final previous = _owner;
     previous?.removeListener(notifyListeners);
     previous?.stop();
     _owner = next;
     choice = selected;
+    _selectedUri = next == null ? null : _uriFor(selected);
     next?.addListener(notifyListeners);
     if (_needed && next != null) unawaited(next.start());
     notifyListeners();
+  }
+
+  /// A relay attempt owns a fresh transport at the selected origin. Changing
+  /// the choice cancels it before another origin can be used; no error falls
+  /// back to the official service when custom mode is selected.
+  Future<ConnectionWire> openSignalWire(
+    TrustedConnection previous,
+    DeviceIdentity device,
+    AuxiliaryCancellation cancellation,
+  ) async {
+    final uri = _selectedUri;
+    if (_stopped || !_loaded || uri == null) {
+      throw const AuxiliaryFailure('route_unavailable');
+    }
+    final revision = _revision;
+    final endpoint = _transportFactory(uri);
+    late final _SignalOwner owner;
+    owner = _SignalOwner(
+      cancellation,
+      endpoint.close,
+      () => _signalOwners.remove(owner),
+    );
+    _signalOwners.add(owner);
+    try {
+      final grant =
+          previous.grant ??
+          (throw const ConnectionFailure('recovery_unavailable'));
+      final channel = owner.channel =
+          await RelayServiceClient(endpoint.transport).open(
+            grant,
+            device,
+            generation: grant.generation + 1,
+            cancellation: cancellation,
+          );
+      final wire = owner.wire = await previous.openRelayWire(channel);
+      if (_stopped || revision != _revision || owner.closed) {
+        throw const AuxiliaryFailure('cancelled');
+      }
+      return _SelectedSignalWire(wire, owner);
+    } catch (_) {
+      await owner.close();
+      rethrow;
+    }
   }
 
   /// An unread or corrupt preference is not permission to use the official
@@ -197,6 +310,9 @@ final class AuxiliaryRouteController extends ChangeNotifier {
     if (_stopped) return;
     _stopped = true;
     ++_revision;
+    for (final owner in _signalOwners.toList()) {
+      unawaited(owner.close(immediate: true));
+    }
     _owner?.removeListener(notifyListeners);
     _owner?.stop();
     _owner = null;

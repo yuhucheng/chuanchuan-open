@@ -64,7 +64,7 @@ macOS 反复调试可按[本机开发签名](docs/development/macos-local-signin
 
 短接码使用、密码协议及验证边界见[本地连接协议与 v2 接入](docs/protocols/short-code-connection.md)。连接授权不等于媒体、输入或文件权限。
 
-辅助服务的官方默认 HTTPS origin 由构建参数 `CHUANCHUAN_AUX_ORIGIN` 提供，不内置公网地址；设置内可选择并保存自定义内网 HTTPS origin。切换会取消旧辅助请求与凭据，自定义配置失败不会自动转回官方服务，局域网直连仍独立尝试。当前没有已上线官方服务或完整跨网信令；协议与验证边界见[辅助服务说明](docs/protocols/auxiliary-service.md)。
+辅助服务的官方默认 HTTPS origin 由构建参数 `CHUANCHUAN_AUX_ORIGIN` 提供，不内置公网地址；设置内可选择并保存自定义内网 HTTPS origin。切换会取消旧辅助请求与凭据，自定义配置失败不会自动转回官方服务，局域网直连仍独立尝试。已建立授权的短断线恢复可在本地路径失败后使用所选 HTTPS 信令服务；当前没有已上线官方服务或首次跨网陌生设备短码会合，双机路径尚未验收。协议与验证边界见[辅助服务说明](docs/protocols/auxiliary-service.md)。
 
 
 SDK 源码消费的兼容边界、旧预览实现及公共远端入口验证见[消费矩阵](docs/sdk/consumption-matrix.md)。公共 API 0.8.0 使用可选组合端口，缺能力不呈现永久禁用入口；该验证不代表正式 SDK 二进制已交付。

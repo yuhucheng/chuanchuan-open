@@ -6,6 +6,7 @@ import 'package:share_hub_connection/share_hub_connection.dart';
 import 'package:share_hub_media_api/share_hub_media_api.dart';
 
 import 'connection_recovery.dart';
+import 'auxiliary_route_controller.dart';
 
 /// Identity, a continuous clock and the discovery advertisement come from the
 /// platform channel. macOS and Windows implement the same channel, so this is
@@ -61,10 +62,12 @@ class ConnectionController extends ChangeNotifier {
       Duration(seconds: 4),
     ],
     this.recoveryAttemptTimeout = const Duration(seconds: 5),
+    this.auxiliaryRoutes,
   });
   final ConnectionPlatform platform;
   final Duration recoveryWindow, recoveryAttemptTimeout;
   final List<Duration> recoveryBackoff;
+  final AuxiliaryRouteController? auxiliaryRoutes;
   final _recoveries = <GrantEndpoint, ConnectionRecovery>{};
   final _routes = <GrantEndpoint, RecoveryRoute>{};
   final _pendingRecoveries = <Future<void>>{};
@@ -523,10 +526,29 @@ class ConnectionController extends ChangeNotifier {
       window: recoveryWindow,
       backoff: recoveryBackoff,
       attemptTimeout: recoveryAttemptTimeout,
+      openRelay: auxiliaryRoutes == null
+          ? null
+          : (previous, cancellation) async {
+              final device = await _loadIdentity();
+              cancellation.throwIfCancelled();
+              await _verifyRecoveryIdentity();
+              cancellation.throwIfCancelled();
+              return auxiliaryRoutes!.openSignalWire(
+                previous,
+                device,
+                cancellation,
+              );
+            },
+      requireAdmission: () {
+        if (!accepting || _disposed || _disconnecting || _shutdownRequested) {
+          throw const ConnectionFailure('cancelled');
+        }
+      },
       onRecovered: (connection) {
         if (!identical(_recoveries[grant], recovery) || recovery.cancelled) {
           return false;
         }
+        if (grant.role == GrantRole.receiver && !accepting) return false;
         final accepted = _track(connection);
         if (accepted) {
           _notice = const ConnectionNotice.status('连接已认证恢复，原授权截止时间不变。');

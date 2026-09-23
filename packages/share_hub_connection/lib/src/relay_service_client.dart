@@ -140,8 +140,9 @@ final class RelaySignalChannel {
   final Queue<RelaySignalEnvelope> _buffered = Queue();
   late final StreamSubscription<void> _invalidations;
   int _sequence = 0;
-  bool _closed = false, _left = false, _sending = false, _receiving = false;
+  bool _closed = false, _sending = false, _receiving = false;
   bool _ready;
+  Future<void>? _closing;
 
   bool get closed => _closed || _cancellation.isCancelled;
 
@@ -270,9 +271,9 @@ final class RelaySignalChannel {
     }
   }
 
-  Future<void> close() async {
-    if (_left) return;
-    _left = true;
+  Future<void> close() => _closing ??= _leave();
+
+  Future<void> _leave() async {
     _closed = true;
     _cancellation.cancel();
     try {
@@ -363,8 +364,19 @@ final class RelayConnectionWire implements ConnectionWire {
           throw const ConnectionFailure('invalid_message');
         }
         return decoded;
-      } catch (_) {
+      } catch (error) {
         close();
+        if (error is AuxiliaryFailure) {
+          throw ConnectionFailure(switch (error.code) {
+            'cancelled' ||
+            'timeout' ||
+            'unreachable' ||
+            'server_error' ||
+            'room_closed' ||
+            'capacity_limited' => 'disconnected',
+            _ => 'authentication_failed',
+          });
+        }
         rethrow;
       }
     }

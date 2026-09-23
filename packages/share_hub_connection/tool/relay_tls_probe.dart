@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -22,6 +23,124 @@ SessionEnvelope decodeSealed(List<int> bytes) {
     ciphertext: base64Url.decode(value[2] as String),
     mac: base64Url.decode(value[3] as String),
   );
+}
+
+final class _CuttableProxy {
+  late ServerSocket server;
+  final sockets = <Socket>[];
+
+  Future<void> start(int target) async {
+    server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    server.listen((client) async {
+      sockets.add(client);
+      final remote = await Socket.connect('127.0.0.1', target);
+      sockets.add(remote);
+      client.listen(remote.add, onDone: remote.destroy);
+      remote.listen(client.add, onDone: client.destroy);
+    });
+  }
+
+  void cut() {
+    for (final socket in sockets) {
+      socket.destroy();
+    }
+    sockets.clear();
+  }
+
+  Future<void> close() async {
+    cut();
+    await server.close();
+  }
+}
+
+Future<void> probeRecovery(
+  RelayServiceClient client,
+  DeviceIdentity alice,
+  DeviceIdentity bob,
+) async {
+  var now = 1000000;
+  final accepted = <TrustedConnection>[];
+  final host = PairingHost(
+    identity: bob,
+    clock: () async => now,
+    protocolVersion: 2,
+    enableRecovery: true,
+    onConnection: accepted.add,
+  );
+  await host.open(address: InternetAddress.loopbackIPv4);
+  final proxy = _CuttableProxy();
+  await proxy.start(host.port!);
+  TrustedConnection? original, resumed, resumedRemote;
+  try {
+    original = await PairingAttempt(
+      identity: alice,
+      clock: () async => now,
+      protocolVersion: 2,
+      enableRecovery: true,
+    ).connect('127.0.0.1', proxy.server.port, host.offer!.code);
+    final previousRemote = accepted.single;
+    final expiry = original.grant!.expiresMicros;
+    proxy.cut();
+    if (await original.whenClosed != 'transport_suspended' ||
+        await previousRemote.whenClosed != 'transport_suspended') {
+      throw StateError('The original TCP grant was not suspended');
+    }
+    now += const Duration(minutes: 3).inMicroseconds;
+    final generation = original.grant!.generation + 1;
+    final ca = await client.open(
+      original.grant!,
+      alice,
+      generation: generation,
+      cancellation: AuxiliaryCancellation(),
+    );
+    final cb = await client.open(
+      previousRemote.grant!,
+      bob,
+      generation: generation,
+      cancellation: AuxiliaryCancellation(),
+    );
+    final aWire = await original.openRelayWire(ca);
+    final bWire = await previousRemote.openRelayWire(cb);
+    final connecting = ConnectionRecoveryAttempt(original)
+        .connectWire(() async => aWire);
+    final accepting = previousRemote.acceptRecoveryWire(bWire, () {});
+    resumed = await connecting.timeout(const Duration(seconds: 10));
+    resumedRemote = await accepting.timeout(const Duration(seconds: 10));
+    resumedRemote.startMonitoring();
+    if (resumed.grant != original.grant ||
+        resumedRemote.grant != previousRemote.grant ||
+        resumed.grant!.generation != generation ||
+        resumed.grant!.expiresMicros != expiry) {
+      throw StateError('Relay recovery replaced or renewed the grant');
+    }
+    final delivered = Completer<VerifiedSessionMessage>();
+    resumedRemote.attachReceiver(
+      onRequest: delivered.complete,
+      resolveSession: (_) => null,
+      onSignal: (_) {},
+    );
+    await resumed.sendRequest(
+      await resumed.createRequest(
+        SessionOperation.watch,
+        'tls-recovered-watch',
+        '',
+      ),
+    );
+    if ((await delivered.future.timeout(const Duration(seconds: 10)))
+            .transportGeneration !=
+        generation) {
+      throw StateError('Recovered operation used the wrong generation');
+    }
+  } finally {
+    resumed?.close();
+    resumedRemote?.close();
+    original?.close();
+    for (final connection in accepted) {
+      connection.close();
+    }
+    await proxy.close();
+    await host.close();
+  }
 }
 
 Future<void> main(List<String> args) async {
@@ -95,8 +214,9 @@ Future<void> main(List<String> args) async {
     await cb.close();
     a.revoke();
     b.revoke();
+    await probeRecovery(client, alice, bob);
     stdout.writeln(
-      'TLS relay: both device proofs, sealed request and cancel passed',
+      'TLS relay: device proofs, sealed request/cancel and original-grant recovery passed',
     );
   } finally {
     transport.close();

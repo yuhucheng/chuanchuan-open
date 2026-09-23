@@ -61,6 +61,7 @@ class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
   late final _devices = DeviceController(_platform);
   late final _connections = ConnectionController(
     MethodChannelConnectionPlatform(),
+    auxiliaryRoutes: widget.auxiliaryRoutes,
   );
   // Both sides consult the other so the single picture budget is respected in
   // either direction. The closures are lazy, so a late field is only read after
