@@ -17,6 +17,7 @@ class _Auxiliary implements AuxiliaryTransport {
   int challenges = 0, issued = 0;
   bool failOnce = false;
   int failChallenges = 0;
+  String failureCode = 'unreachable';
 
   @override
   Future<Map<String, Object?>> post(
@@ -29,7 +30,7 @@ class _Auxiliary implements AuxiliaryTransport {
       if (failOnce || failChallenges > 0) {
         failOnce = false;
         if (failChallenges > 0) failChallenges--;
-        throw const AuxiliaryFailure('unreachable');
+        throw AuxiliaryFailure(failureCode);
       }
       if (holdChallenge case final pending?) await pending.future;
       return {'nonce': nonce, 'expiresAt': 1800000030};
@@ -184,6 +185,28 @@ void main() {
     expect(transport.challenges, 2);
     expect(owner.current, isNull);
   });
+
+  test(
+    'final authentication rejection does not enter a cooldown loop',
+    () async {
+      owner.stop();
+      owner = RelayCredentialOwner(
+        () async => identity,
+        AuxiliaryServiceClient(transport),
+        () => closes++,
+        retryDelays: const [Duration(milliseconds: 1)],
+        recoveryDelay: const Duration(milliseconds: 10),
+        maxRecoveryDelay: const Duration(milliseconds: 20),
+      );
+      transport.failChallenges = 1;
+      transport.failureCode = 'not_eligible';
+      await owner.start();
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      expect(owner.lastFailure, 'not_eligible');
+      expect(transport.challenges, 1);
+      expect(owner.current, isNull);
+    },
+  );
 
   testWidgets('idle product app never requests auxiliary credentials', (
     tester,
