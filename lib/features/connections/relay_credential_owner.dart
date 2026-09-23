@@ -99,6 +99,9 @@ final class RelayCredentialOwner extends ChangeNotifier {
     notifyListeners();
     final previous = _pending;
     if (previous != null) {
+      // A refresh supersedes the in-flight request. Its late response must
+      // never become the credential selected for this attempt.
+      _cancellation?.cancel();
       return previous.then((_) {
         if (_needed && !_stopped) return _attempt(0);
       });

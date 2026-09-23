@@ -145,6 +145,18 @@ void main() {
     expect(transport.challenges, 3);
   });
 
+  test('refresh cancels an in-flight credential request', () async {
+    transport.holdChallenge = Completer<void>();
+    final old = owner.start();
+    await Future<void>.delayed(Duration.zero);
+    final fresh = owner.refresh();
+    transport.holdChallenge!.complete();
+    await Future.wait([old, fresh]);
+    expect(owner.current, isNotNull);
+    expect(transport.issued, 1);
+    expect(transport.challenges, 3);
+  });
+
   test(
     'transient failure retries with a bound; direct path never waits',
     () async {
