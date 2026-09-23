@@ -45,4 +45,6 @@ dart test
 
 客户端显式使用协议版本 2，不向旧 v1 对端静默降级。配对协议包保留 v1 测试入口；上文 v1 帧格式仅描述该兼容模式。v2 在同一 PAKE/身份绑定基础上生成方向授权，字段及信任边界见 [Session API](../../packages/share_hub_session_api/README.md)。v2 已接入有界的认证操作请求与双向信令路由，并由公共媒体 API 连接远端媒体编排。当前客户端双方显式协商恢复后，短暂断线可在原授权截止内沿原路线有界恢复；类型/时长继续使用可扩展 grant 策略，当前仍为八小时。短码刷新保留监听端口，主动断开/关开关/退出/身份变化/到期拒绝恢复。协议、重试和取消清理边界见[连接包契约](../../packages/share_hub_connection/README.md)。连接恢复不代表媒体自动恢复、首帧或双设备验收已完成。
 
+v2 加密 `connected` 回复带本地选定的 `grantType` 与 `lifetimeSeconds`；发起端必须与自己的产品策略核对，随后连接租约与已认证 grant 使用同一类型和期限。为兼容此前的 v2 对端，缺少 `grantType` 只按 `short-code` 解读，不能由此启用其他类型。当前正式客户端仍只选择 `short-code` / 28800 秒；新类型须先独立批准准入策略，不能由对端报文自行启用。v1 的旧帧格式和八小时行为不变。
+
 `ConnectionController` 在成功握手后将真实 grant 注册到进程内 `GrantRegistry`，SDK 使用该注册表核验收到的 permit；不根据 UI 布尔值或发现名称签发授权。关闭开关和退出先同步 `revokeAll()`，再等待套接字清理；单连接结束删除对应注册。重新开启生成新码及新上下文。客户端契约样例见 `test/connection_controller_test.dart`，覆盖两端身份、对端注册表隔离、关闭前同步撤销及关闭后主动出站；SDK 消费样例在 SDK 包的 `test/session_contract_test.dart`。这些测试不替代双机、Windows 或后台验收。

@@ -15,14 +15,20 @@ import 'relay_service_client.dart';
 /// Must advance through sleep and never go backwards. Hosts supply an OS
 /// continuous clock; a process restart discards every authorization.
 typedef ContinuousClock = Future<int> Function();
-const connectionLifetime = Duration(hours: 8);
+const connectionLifetime = grantLifetime;
 
 class SessionLease {
-  SessionLease({required this.startedMicros});
+  SessionLease({
+    required this.startedMicros,
+    this.policy = GrantPolicy.shortCode,
+  }) {
+    policy.validate();
+  }
   final int startedMicros;
+  final GrantPolicy policy;
   int? _last;
   bool _revoked = false;
-  int get expiresMicros => startedMicros + connectionLifetime.inMicroseconds;
+  int get expiresMicros => startedMicros + policy.lifetime.inMicroseconds;
   bool get revoked => _revoked;
   bool check(int now) {
     if (now < startedMicros || (_last != null && now < _last!)) revoke();

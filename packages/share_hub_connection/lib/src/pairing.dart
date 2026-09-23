@@ -98,14 +98,22 @@ class PairingHost {
     this.protocolVersion = 1,
     this.handshakeTimeout = defaultHandshakeTimeout,
     this.enableRecovery = false,
+    this.grantPolicy = GrantPolicy.shortCode,
   }) {
     if (protocolVersion != 1 && protocolVersion != 2) {
       throw ArgumentError.value(protocolVersion);
+    }
+    grantPolicy.validate();
+    if (protocolVersion == 1 &&
+        (grantPolicy.type != GrantPolicy.shortCode.type ||
+            grantPolicy.lifetime != GrantPolicy.shortCode.lifetime)) {
+      throw ArgumentError.value(grantPolicy, 'grantPolicy');
     }
   }
   final int protocolVersion;
   final bool enableRecovery;
   final Duration handshakeTimeout;
+  final GrantPolicy grantPolicy;
   final DeviceIdentity identity;
   final ContinuousClock clock;
   final void Function(TrustedConnection) onConnection;
@@ -263,7 +271,7 @@ class PairingHost {
       }
       // Atomic consumption, with no await between generation check and consume.
       offer.consume(now);
-      final lease = SessionLease(startedMicros: now);
+      final lease = SessionLease(startedMicros: now, policy: grantPolicy);
       final recoverable =
           enableRecovery &&
           protocolVersion == 2 &&
@@ -285,6 +293,7 @@ class PairingHost {
                 now,
                 clock,
                 GrantRole.receiver,
+                grantPolicy,
               )
             : null,
       );
@@ -293,7 +302,8 @@ class PairingHost {
       }
       await cipher.send({
         'type': 'connected',
-        'lifetimeSeconds': connectionLifetime.inSeconds,
+        'lifetimeSeconds': grantPolicy.lifetime.inSeconds,
+        if (protocolVersion == 2) 'grantType': grantPolicy.type,
         if (recoverable) 'recovery': 1,
       });
       if (connection.grant case final endpoint?) {
@@ -389,14 +399,22 @@ class PairingAttempt {
     this.protocolVersion = 1,
     this.handshakeTimeout = defaultHandshakeTimeout,
     this.enableRecovery = false,
+    this.grantPolicy = GrantPolicy.shortCode,
   }) {
     if (protocolVersion != 1 && protocolVersion != 2) {
       throw ArgumentError.value(protocolVersion);
+    }
+    grantPolicy.validate();
+    if (protocolVersion == 1 &&
+        (grantPolicy.type != GrantPolicy.shortCode.type ||
+            grantPolicy.lifetime != GrantPolicy.shortCode.lifetime)) {
+      throw ArgumentError.value(grantPolicy, 'grantPolicy');
     }
   }
   final int protocolVersion;
   final bool enableRecovery;
   final Duration handshakeTimeout;
+  final GrantPolicy grantPolicy;
   final DeviceIdentity identity;
   final ContinuousClock clock;
   bool _cancelled = false;
@@ -512,14 +530,16 @@ class PairingAttempt {
       });
       final grant = await cipher.next();
       if (grant['type'] != 'connected' ||
-          grant['lifetimeSeconds'] != connectionLifetime.inSeconds) {
+          grant['lifetimeSeconds'] != grantPolicy.lifetime.inSeconds ||
+          (grant['grantType'] ?? GrantPolicy.shortCode.type) !=
+              grantPolicy.type) {
         throw const ConnectionFailure('invalid_message');
       }
       _check();
       final connection = _connection = TrustedConnection(
         cipher,
         peer,
-        SessionLease(startedMicros: localStart),
+        SessionLease(startedMicros: localStart, policy: grantPolicy),
         clock,
         enableRecovery:
             enableRecovery &&
@@ -536,6 +556,7 @@ class PairingAttempt {
                 localStart,
                 clock,
                 GrantRole.initiator,
+                grantPolicy,
               )
             : null,
       );
@@ -635,6 +656,7 @@ Future<GrantEndpoint> _grant(
   int started,
   ContinuousClock clock,
   GrantRole role,
+  GrantPolicy policy,
 ) async {
   final exporter =
       await crypto.Hkdf(hmac: crypto.Hmac.sha256(), outputLength: 32).deriveKey(
@@ -649,6 +671,7 @@ Future<GrantEndpoint> _grant(
       id: decodeBytes(cipher.sessionId, 32),
       initiatorKey: role == GrantRole.initiator ? local : remote,
       receiverKey: role == GrantRole.receiver ? local : remote,
+      policy: policy,
     ),
     role: role,
     establishedMicros: started,

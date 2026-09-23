@@ -22,6 +22,15 @@ remain necessary.
 
 ## Connection recovery adapter
 
+Pairing protocol 2 binds the encrypted `connected` reply, the local connection
+lease and the authenticated `GrantBinding` to the same locally selected
+`GrantPolicy` type and lifetime. The production client selects only
+`short-code` / eight hours. A future product profile needs its own admission
+decision at both endpoints; a peer cannot activate it by sending a longer
+lifetime or a new type. A missing `grantType` in an older v2 reply is interpreted
+as `short-code` only, while a mismatched type or lifetime is rejected. Protocol
+1 remains limited to the existing short-code profile.
+
 `PairingHost` and `PairingAttempt` accept an optional `enableRecovery` flag
 (default false). Both endpoints must opt in on pairing protocol 2. The initiator
 sends integer `recovery: 1` in encrypted `ready`; an enabled host acknowledges

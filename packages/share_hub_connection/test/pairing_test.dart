@@ -5,9 +5,83 @@ import 'dart:convert';
 import 'package:share_hub_connection/src/channel.dart';
 
 import 'package:share_hub_connection/share_hub_connection.dart';
+import 'package:share_hub_session_api/share_hub_session_api.dart';
 import 'package:test/test.dart';
 
 void main() {
+  test(
+    'v2 pairing binds its lease and grant to the same local policy',
+    () async {
+      const policy = GrantPolicy(
+        type: 'short-code.next',
+        lifetime: Duration(hours: 1),
+      );
+      final hostIdentity = await DeviceIdentity.fromSeed(List.filled(32, 31));
+      final clientIdentity = await DeviceIdentity.fromSeed(List.filled(32, 32));
+      final accepted = <TrustedConnection>[];
+      const now = 1000000;
+      final host = PairingHost(
+        identity: hostIdentity,
+        clock: () async => now,
+        onConnection: accepted.add,
+        protocolVersion: 2,
+        grantPolicy: policy,
+      );
+      addTearDown(host.close);
+      await host.open(address: InternetAddress.loopbackIPv4);
+      final client = await PairingAttempt(
+        identity: clientIdentity,
+        clock: () async => now,
+        protocolVersion: 2,
+        grantPolicy: policy,
+      ).connect('127.0.0.1', host.port!, host.offer!.code);
+      addTearDown(client.close);
+      expect(accepted, hasLength(1));
+      for (final connection in [client, accepted.single]) {
+        expect(connection.lease.policy.type, policy.type);
+        expect(
+          connection.lease.expiresMicros,
+          now + policy.lifetime.inMicroseconds,
+        );
+        expect(connection.grant!.binding.policy.type, policy.type);
+        expect(connection.grant!.expiresMicros, connection.lease.expiresMicros);
+      }
+    },
+  );
+
+  test('v2 pairing rejects a different local grant policy', () async {
+    final hostIdentity = await DeviceIdentity.fromSeed(List.filled(32, 33));
+    final clientIdentity = await DeviceIdentity.fromSeed(List.filled(32, 34));
+    final accepted = <TrustedConnection>[];
+    final host = PairingHost(
+      identity: hostIdentity,
+      clock: () async => 1000000,
+      onConnection: accepted.add,
+      protocolVersion: 2,
+      grantPolicy: const GrantPolicy(
+        type: 'short-code.next',
+        lifetime: Duration(hours: 1),
+      ),
+    );
+    addTearDown(host.close);
+    await host.open(address: InternetAddress.loopbackIPv4);
+    await expectLater(
+      PairingAttempt(
+        identity: clientIdentity,
+        clock: () async => 1000000,
+        protocolVersion: 2,
+      ).connect('127.0.0.1', host.port!, host.offer!.code),
+      throwsA(
+        isA<ConnectionFailure>().having(
+          (error) => error.code,
+          'code',
+          'invalid_message',
+        ),
+      ),
+    );
+    expect(accepted, isEmpty);
+  });
+
   for (final version in [1, 2]) {
     group("protocol v$version", () {
       late DeviceIdentity hostIdentity;
@@ -328,9 +402,7 @@ void main() {
       );
       addTearDown(host.close);
       await host.open(address: InternetAddress.loopbackIPv4);
-      final wire = WireChannel(
-        await Socket.connect('127.0.0.1', host.port!),
-      );
+      final wire = WireChannel(await Socket.connect('127.0.0.1', host.port!));
       wire.send({
         'v': 1,
         'type': 'hello',
