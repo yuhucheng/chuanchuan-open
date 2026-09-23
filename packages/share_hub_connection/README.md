@@ -119,8 +119,16 @@ does not force an eight-hour-only schema. Envelope fields are `v`, `room`,
 bytes, never SDP interpreted by the relay. `RelaySignalInbox` rejects a wrong
 member, room, old generation, replay or any data after cancellation. The
 public Dart and private Python packages pin identical wire, room and signature
-vectors. These primitives do not yet create a live relay route or authorize an
-operation. First-time cross-network pairing needs a separate rendezvous design.
+vectors. `RelayServiceClient` now opens a cancellable HTTPS room only from a
+process-owned grant and matching device identity; it refuses a lost send
+acknowledgement rather than guessing the next sequence. The Python auxiliary
+service offers an opt-in bounded room route, with a local Dart-to-Python TLS
+probe. The production connection owner and media link do not yet select this
+route. A room never authorizes an operation, and first-time cross-network
+pairing needs a separate rendezvous design. A caller supplying
+`HttpsAuxiliaryTransport` for relay polling must set a timeout longer than the
+selected service's configured `poll_wait_seconds`; the local TLS probe uses
+35 seconds for the service's bounded one-second poll.
 
 ## Verification boundary
 

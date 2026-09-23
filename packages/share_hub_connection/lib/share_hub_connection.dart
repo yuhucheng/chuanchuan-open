@@ -14,6 +14,8 @@ export 'src/pairing.dart'
 export 'src/relay_signal_envelope.dart'
     show RelaySignalEnvelope, RelaySignalInbox, RelaySignalKind;
 export 'src/relay_room_claim.dart' show RelayRoomClaim;
+export 'src/relay_service_client.dart'
+    show RelayServiceClient, RelaySignalChannel;
 export 'src/session.dart'
     show
         TrustedConnection,

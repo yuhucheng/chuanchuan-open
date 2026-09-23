@@ -140,9 +140,10 @@ final class HttpsAuxiliaryTransport implements AuxiliaryTransport {
       opened.add(payload);
       final response = await waitFor(opened.close());
       cancellation.throwIfCancelled();
+      final responseLimit = path == '/v1/signal/poll' ? 210000 : 4096;
       final bytes = await waitFor(
         response.fold<List<int>>(<int>[], (value, chunk) {
-          if (value.length + chunk.length > 4096) {
+          if (value.length + chunk.length > responseLimit) {
             throw const AuxiliaryFailure('invalid_response');
           }
           value.addAll(chunk);
@@ -158,8 +159,16 @@ final class HttpsAuxiliaryTransport implements AuxiliaryTransport {
       final error = decoded['error'];
       if (error is String &&
           (response.statusCode == 400 && error == 'invalid_request' ||
+              response.statusCode == 400 &&
+                  (error == 'invalid_relay_claim' ||
+                      error == 'invalid_relay_envelope' ||
+                      error == 'relay_message_limit') ||
               response.statusCode == 403 &&
-                  (error == 'invalid_proof' || error == 'not_eligible') ||
+                  (error == 'invalid_proof' ||
+                      error == 'not_eligible' ||
+                      error == 'not_member') ||
+              response.statusCode == 409 &&
+                  (error == 'room_closed' || error == 'stale_relay_message') ||
               response.statusCode == 429 && error == 'capacity_limited')) {
         throw AuxiliaryFailure(error);
       }
