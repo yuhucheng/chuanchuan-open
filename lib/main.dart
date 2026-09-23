@@ -1,42 +1,30 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
-import 'package:share_hub_connection/share_hub_connection.dart';
 import 'package:share_hub_media_sdk/share_hub_media_sdk.dart';
 
 import 'features/connections/connection_controller.dart';
-import 'features/connections/relay_credential_owner.dart';
+import 'features/connections/auxiliary_route_controller.dart';
 import 'ui/client_app.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  // Supply an audited official HTTPS origin at build time. Empty or invalid
-  // configuration leaves local/direct connections available without a cloud
-  // request; no production endpoint is silently assumed.
+  // Supply the official HTTPS origin at build time. A persisted custom LAN
+  // choice never falls back to this origin when it is invalid or unreachable.
   const origin = String.fromEnvironment('CHUANCHUAN_AUX_ORIGIN');
-  RelayCredentialOwner? relay;
-  if (origin.isNotEmpty) {
-    try {
-      final transport = HttpsAuxiliaryTransport(Uri.parse(origin));
-      relay = RelayCredentialOwner(
-        MethodChannelConnectionPlatform().identity,
-        AuxiliaryServiceClient(transport),
-        transport.close,
-      );
-    } on FormatException {
-      debugPrint(
-        'Invalid auxiliary service origin; direct connection remains available.',
-      );
-    } on ArgumentError {
-      debugPrint(
-        'Invalid auxiliary service origin; direct connection remains available.',
-      );
-    }
-  }
+  final routes = AuxiliaryRouteController(
+    identity: MethodChannelConnectionPlatform().identity,
+    officialOrigin: origin,
+    store: const NativeAuxiliaryRouteStore(),
+  );
+  unawaited(routes.load());
   runApp(
     ShareHubApp(
       appTitle: 'chuanchuan',
+      auxiliaryRoutes: routes,
       previewEngine: createPreviewEngine(
         currentRelayLease: () {
-          final lease = relay?.current;
+          final lease = routes.current;
           if (lease == null) return null;
           return RelayIceLease(
             urls: lease.urls,
@@ -46,10 +34,10 @@ void main() {
           );
         },
       ),
-      stopAuxiliary: relay?.stop,
-      setAuxiliaryNeeded: relay?.setNeeded,
-      relayCredentialAvailable: () => relay?.current != null,
-      relayCredentialChanges: relay,
+      stopAuxiliary: routes.stop,
+      setAuxiliaryNeeded: routes.setNeeded,
+      relayCredentialAvailable: () => routes.current != null,
+      relayCredentialChanges: routes,
     ),
   );
 }

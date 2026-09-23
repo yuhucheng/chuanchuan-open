@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../features/connections/connection_controller.dart';
+import '../features/connections/auxiliary_route_controller.dart';
 import 'field/appearance.dart';
 import 'field/field_shell.dart';
 import '../features/desktop/desktop_lifecycle.dart';
@@ -24,6 +25,7 @@ class ShareHubApp extends StatefulWidget {
     required this.previewEngine,
     this.fileAccess,
     this.remoteMedia,
+    this.auxiliaryRoutes,
     this.setAuxiliaryNeeded,
     this.relayCredentialAvailable,
     this.relayCredentialChanges,
@@ -38,6 +40,7 @@ class ShareHubApp extends StatefulWidget {
   /// Remote send/watch implementation. Defaults to the optional public SDK port; tests
   /// inject a fake so no capture device or peer is needed.
   final RemotePictureFactory? remoteMedia;
+  final AuxiliaryRouteController? auxiliaryRoutes;
   final void Function(bool)? setAuxiliaryNeeded;
   final bool Function()? relayCredentialAvailable;
   final Listenable? relayCredentialChanges;
@@ -160,6 +163,7 @@ class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
         transfers: _transfers,
         desktop: _desktop,
         appearance: _appearance,
+        auxiliaryRoutes: widget.auxiliaryRoutes,
         targetPlatform: widget.targetPlatform ?? defaultTargetPlatform,
       ),
     ),

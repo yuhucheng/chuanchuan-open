@@ -58,6 +58,7 @@ final class RelayCredentialOwner extends ChangeNotifier {
     if (_needed) return _pending ?? Future.value();
     _needed = true;
     _failedBursts = 0;
+    lastFailure = null;
     final previous = _pending;
     if (previous != null) {
       return previous.then((_) {
@@ -77,6 +78,7 @@ final class RelayCredentialOwner extends ChangeNotifier {
     _renewal?.cancel();
     _expiry?.cancel();
     _lease = null;
+    lastFailure = null;
     notifyListeners();
   }
 
@@ -93,6 +95,14 @@ final class RelayCredentialOwner extends ChangeNotifier {
     if (!_needed || _stopped) return Future.value();
     _renewal?.cancel();
     _failedBursts = 0;
+    lastFailure = null;
+    notifyListeners();
+    final previous = _pending;
+    if (previous != null) {
+      return previous.then((_) {
+        if (_needed && !_stopped) return _attempt(0);
+      });
+    }
     return _attempt(0);
   }
 
@@ -149,6 +159,8 @@ final class RelayCredentialOwner extends ChangeNotifier {
     } on AuxiliaryFailure catch (error) {
       if (_stopped || !_needed || cancellation.isCancelled) return;
       lastFailure = error.code;
+      notifyListeners();
+      if (_stopped || !_needed) return;
       if (_retryable(error.code)) {
         _renewal?.cancel();
         final shortRetry = retryIndex < retryDelays.length;
@@ -161,6 +173,7 @@ final class RelayCredentialOwner extends ChangeNotifier {
     } catch (_) {
       if (!_stopped && _needed && !cancellation.isCancelled) {
         lastFailure = 'unexpected';
+        notifyListeners();
       }
     }
   }
@@ -186,6 +199,7 @@ final class RelayCredentialOwner extends ChangeNotifier {
     _renewal?.cancel();
     _expiry?.cancel();
     _lease = null;
+    lastFailure = null;
     notifyListeners();
     _closeTransport();
   }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:share_hub_connection/share_hub_connection.dart';
 
 import '../../features/connections/connection_controller.dart';
+import '../../features/connections/auxiliary_route_controller.dart';
 import '../../features/connections/connection_panel.dart';
 import '../../features/connections/grant_status_text.dart';
 import '../../features/desktop/desktop_lifecycle.dart';
@@ -15,6 +16,7 @@ import '../../features/transfers/transfers_page.dart';
 import '../../platform/client_platform.dart';
 import '../remote/remote_panel.dart';
 import 'appearance.dart';
+import 'auxiliary_route_settings.dart';
 import 'brand_mark.dart';
 import 'brand_wordmark.dart';
 import 'device_field.dart';
@@ -30,6 +32,7 @@ class FieldShell extends StatefulWidget {
     required this.transfers,
     required this.desktop,
     required this.appearance,
+    this.auxiliaryRoutes,
     required this.targetPlatform,
   });
   final DeviceController devices;
@@ -39,6 +42,7 @@ class FieldShell extends StatefulWidget {
   final TransferQueue transfers;
   final DesktopLifecycle desktop;
   final Appearance appearance;
+  final AuxiliaryRouteController? auxiliaryRoutes;
   final TargetPlatform targetPlatform;
   @override
   State<FieldShell> createState() => _FieldShellState();
@@ -138,6 +142,7 @@ class _FieldShellState extends State<FieldShell> {
       widget.remote,
       widget.desktop,
       widget.appearance,
+      ?widget.auxiliaryRoutes,
     ]),
     builder: (context, _) => Scaffold(
       body: SafeArea(
@@ -730,6 +735,14 @@ class _FieldShellState extends State<FieldShell> {
       ),
     if (widget.connections.problem case final String message)
       FieldIssue('connection', message, '查看连接', localActions),
+    if (widget.auxiliaryRoutes case final routes?)
+      if (routes.connectionFailure case final String code)
+        FieldIssue(
+          'auxiliary',
+          '所选辅助服务失败（$code），本地直连仍可用。',
+          '重试辅助服务',
+          routes.refresh,
+        ),
     if (!widget.remote.occupied && widget.remote.error != null)
       FieldIssue('media', widget.remote.error!, '查看本机', localActions),
     if (widget.appearance.error case final String message)
@@ -776,6 +789,10 @@ class _FieldShellState extends State<FieldShell> {
         ),
       ],
       const SizedBox(height: 24),
+      if (widget.auxiliaryRoutes case final routes?) ...[
+        AuxiliaryRouteSettings(routes: routes),
+        const SizedBox(height: 24),
+      ],
       TextField(
         key: const ValueKey('device-name'),
         controller: name,
