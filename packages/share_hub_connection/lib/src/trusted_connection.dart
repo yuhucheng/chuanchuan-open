@@ -14,6 +14,7 @@ class TrustedConnection implements SessionTransport {
     ConnectionRecoveryHandle? recovery,
   }) : _physical = _PhysicalTransport(channel),
        _sessionId = channel.sessionId,
+       _relaySource = channel,
        _recovery = recovery {
     if (recovery != null) {
       if (grant == null ||
@@ -30,6 +31,7 @@ class TrustedConnection implements SessionTransport {
   final SessionLease lease;
   final ContinuousClock _clock;
   final ConnectionRecoveryHandle? _recovery;
+  CipherChannel? _relaySource;
   _PhysicalTransport? _physical;
   String _sessionId;
   String get sessionId => _sessionId;
@@ -50,6 +52,50 @@ class TrustedConnection implements SessionTransport {
   Future<int?>? _auditing;
   int _minimumGeneration = 0;
   ConnectionRecoveryAttempt? _attempt;
+
+  /// A proved room carries only frames sealed under the original pairing's
+  /// directional keys. The inner recovery handshake still proves the live
+  /// grant before any physical epoch is installed by the recovery service.
+  Future<ConnectionWire> openRelayWire(RelaySignalChannel channel) async {
+    try {
+      final endpoint = grant;
+      final source = _relaySource;
+      if (_recovery == null ||
+          source == null ||
+          isClosed ||
+          phase != ConnectionPhase.suspended ||
+          endpoint == null ||
+          endpoint.phase != GrantPhase.suspended) {
+        throw const ConnectionFailure('recovery_unavailable');
+      }
+      final generation = endpoint.generation + 1;
+      if (channel.claim.encode() !=
+          RelayRoomClaim.fromBinding(endpoint.binding, generation).encode()) {
+        throw const ConnectionFailure('invalid_relay_claim');
+      }
+      await _recovery.check();
+      final transcript = utf8.encode(
+        jsonEncode([
+          'chuanchuan.connection.relay.v1',
+          channel.room,
+          generation,
+        ]),
+      );
+      final wire = await source.protectRelay(channel, transcript);
+      await channel.awaitReady();
+      if (isClosed ||
+          phase != ConnectionPhase.suspended ||
+          endpoint.phase != GrantPhase.suspended ||
+          endpoint.generation + 1 != generation) {
+        throw const ConnectionFailure('recovery_unavailable');
+      }
+      await _recovery.check();
+      return wire;
+    } catch (_) {
+      unawaited(channel.close());
+      rethrow;
+    }
+  }
 
   /// Called synchronously after admission closes and before grant invalidation.
   /// File owners establish native pause intent here, without awaiting a result.
@@ -396,6 +442,7 @@ class TrustedConnection implements SessionTransport {
     if (isClosed) return;
     final epoch = _physical;
     _physical = null;
+    _relaySource = null;
     _phase = ConnectionPhase.closed;
     _attempt = null;
     _operationRouter?.close();
@@ -424,7 +471,7 @@ class TrustedConnection implements SessionTransport {
           'type': 'connection-revoked',
           'reason': 'revoked',
         });
-        await epoch.channel.wire.socket.flush();
+        await epoch.channel.wire.flush();
       })().timeout(const Duration(milliseconds: 200));
     } catch (_) {
       /* Local revocation does not wait for delivery. */

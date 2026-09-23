@@ -1,10 +1,15 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
+import 'package:share_hub_connection/src/auxiliary_service.dart';
 import 'package:share_hub_connection/src/channel.dart';
 import 'package:share_hub_connection/src/identity.dart';
 import 'package:share_hub_connection/src/recovery.dart';
 import 'package:share_hub_connection/src/recovery_protocol.dart';
+import 'package:share_hub_connection/src/relay_room_claim.dart';
+import 'package:share_hub_connection/src/relay_service_client.dart';
+import 'package:share_hub_connection/src/relay_signal_envelope.dart';
 import 'package:share_hub_connection/src/session.dart';
 import 'package:share_hub_session_api/share_hub_session_api.dart';
 import 'package:test/test.dart';
@@ -60,6 +65,130 @@ void main() {
       );
     },
   );
+
+  test(
+    'caller-provided wires reuse the registered stable recovery owner',
+    () async {
+      final original = pair.a.grant!;
+      final transport = pair.b.operationTransport({SessionOperation.file});
+      await pair.lose();
+      final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      final accepted = server.first;
+      final outgoing = WireChannel(
+        await Socket.connect('127.0.0.1', server.port),
+      );
+      final incoming = WireChannel(await accepted);
+      await server.close();
+      pair.wires.addAll([outgoing, incoming]);
+      await Future.wait([
+        pair.left.reconnectVia(pair.a, () async => outgoing),
+        pair.right.acceptVia(pair.b, () async => incoming),
+      ]).timeout(const Duration(seconds: 2));
+      expect(pair.a.grant, same(original));
+      expect(pair.a.grant!.generation, 2);
+      expect(pair.b.grant!.generation, 2);
+      expect(pair.a.phase, ConnectionPhase.active);
+      expect(pair.b.phase, ConnectionPhase.active);
+      expect(
+        pair.b.operationTransport({SessionOperation.file}),
+        same(transport),
+      );
+    },
+  );
+
+  test(
+    'sealed relay recovery keeps one grant and one connection owner',
+    () async {
+      await pair.close();
+      final alice = await DeviceIdentity.fromSeed(List<int>.filled(32, 11));
+      final bob = await DeviceIdentity.fromSeed(List<int>.filled(32, 12));
+      pair = await _Pair.create(
+        initiatorKey: alice.publicKey.bytes,
+        receiverKey: bob.publicKey.bytes,
+      );
+      final grant = pair.a.grant!;
+      final transportOwner = pair.b.operationTransport({SessionOperation.file});
+      await pair.lose();
+      final relay = _RelayTransport([alice, bob]);
+      final client = RelayServiceClient(relay);
+      final ca = await client.open(
+        pair.a.grant!,
+        alice,
+        cancellation: AuxiliaryCancellation(),
+        generation: 2,
+      );
+      final cb = await client.open(
+        pair.b.grant!,
+        bob,
+        cancellation: AuxiliaryCancellation(),
+        generation: 2,
+      );
+      await Future.wait([
+        pair.left.reconnectVia(pair.a, () => pair.a.openRelayWire(ca)),
+        pair.right.acceptVia(pair.b, () => pair.b.openRelayWire(cb)),
+      ]).timeout(const Duration(seconds: 5));
+      expect(pair.a.grant, same(grant));
+      expect(pair.a.phase, ConnectionPhase.active);
+      expect(pair.b.phase, ConnectionPhase.active);
+      expect(pair.a.sessionId, pair.b.sessionId);
+      expect(
+        pair.b.operationTransport({SessionOperation.file}),
+        same(transportOwner),
+      );
+      expect(relay.forwarded, greaterThan(0));
+    },
+  );
+
+  test('relay room for an old generation cannot start recovery', () async {
+    await pair.close();
+    final alice = await DeviceIdentity.fromSeed(List<int>.filled(32, 11));
+    final bob = await DeviceIdentity.fromSeed(List<int>.filled(32, 12));
+    pair = await _Pair.create(
+      initiatorKey: alice.publicKey.bytes,
+      receiverKey: bob.publicKey.bytes,
+    );
+    await pair.lose();
+    final channel = await RelayServiceClient(_RelayTransport([alice, bob]))
+        .open(
+          pair.a.grant!,
+          alice,
+          cancellation: AuxiliaryCancellation(),
+          generation: pair.a.grant!.generation,
+        );
+    await expectLater(
+      pair.a.openRelayWire(channel),
+      throwsA(
+        isA<ConnectionFailure>().having(
+          (error) => error.code,
+          'code',
+          'invalid_relay_claim',
+        ),
+      ),
+    );
+    expect(pair.a.phase, ConnectionPhase.suspended);
+    expect(pair.a.grant!.generation, 1);
+    expect(channel.closed, isTrue);
+  });
+
+  test('late caller-provided wire is closed after candidate timeout', () async {
+    await pair.close();
+    pair = await _Pair.create(timeout: const Duration(milliseconds: 150));
+    await pair.lose();
+    final gate = Completer<ConnectionWire>();
+    final attempted = pair.left.reconnectVia(pair.a, () => gate.future);
+    await expectLater(attempted, throwsA(isA<ConnectionFailure>()));
+    final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    final accepted = server.first;
+    final late = WireChannel(await Socket.connect('127.0.0.1', server.port));
+    final peer = WireChannel(await accepted);
+    await server.close();
+    pair.wires.addAll([late, peer]);
+    gate.complete(late);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(late.isClosed, isTrue);
+    expect(pair.a.phase, ConnectionPhase.suspended);
+    expect(pair.a.grant!.phase, GrantPhase.suspended);
+  });
 
   test(
     'forged and stalled proofs cannot suspend an active original grant',
@@ -450,6 +579,8 @@ class _Pair {
     Duration timeout = const Duration(seconds: 30),
     int id = 1,
     bool registerLeft = true,
+    List<int>? initiatorKey,
+    List<int>? receiverKey,
   }) async {
     final p = _Pair();
     p.left = ConnectionRecoveryService(handshakeTimeout: timeout);
@@ -457,8 +588,8 @@ class _Pair {
     await p.right.open(address: InternetAddress.loopbackIPv4);
     final binding = GrantBinding(
       id: List.filled(32, id),
-      initiatorKey: List.filled(32, 2),
-      receiverKey: List.filled(32, 3),
+      initiatorKey: initiatorKey ?? List.filled(32, 2),
+      receiverKey: receiverKey ?? List.filled(32, 3),
     );
     GrantEndpoint grant(GrantRole role) =>
         GrantEndpoint.fromAuthenticatedPairing(
@@ -568,5 +699,83 @@ class _Pair {
     for (final wire in wires) {
       wire.close();
     }
+  }
+}
+
+final class _RelayTransport implements AuxiliaryTransport {
+  _RelayTransport(this.identities);
+  final List<DeviceIdentity> identities;
+  final joined = <String, String>{};
+  final queues = <String, List<String>>{};
+  final nonce = base64Url.encode(List<int>.generate(32, (i) => i + 32));
+  int forwarded = 0;
+
+  @override
+  Future<Map<String, Object?>> post(
+    String path,
+    Map<String, String> body,
+    AuxiliaryCancellation cancellation,
+  ) async {
+    cancellation.throwIfCancelled();
+    if (path == '/v1/aux/challenge' || path == '/v1/signal/challenge') {
+      return path == '/v1/aux/challenge'
+          ? {'nonce': nonce, 'expiresAt': 1}
+          : {'nonce': nonce};
+    }
+    if (path == '/v1/devices/register') {
+      final identity = identities.singleWhere(
+        (item) => item.encodedKey == body['publicKey'],
+      );
+      return {'deviceId': identity.id};
+    }
+    if (path == '/v1/signal/join') {
+      final claim = RelayRoomClaim.decode(body['claim']!);
+      expect(
+        await claim.verifyJoin(
+          body['sender']!,
+          body['signature'],
+          base64Url.decode(nonce),
+        ),
+        isTrue,
+      );
+      final index = identities.indexWhere(
+        (identity) => identity.encodedKey == body['sender'],
+      );
+      final token = base64Url.encode(List<int>.filled(32, index + 5));
+      joined[token] = body['sender']!;
+      queues[token] = [];
+      return {
+        'room': base64Url.encode(claim.roomId),
+        'token': token,
+        'ready': joined.length == 2,
+      };
+    }
+    if (path == '/v1/signal/send') {
+      final envelope = RelaySignalEnvelope.decode(body['wire']!);
+      expect(base64Url.encode(envelope.sender), joined[body['token']]);
+      final recipient = joined.keys.singleWhere(
+        (token) => token != body['token'],
+      );
+      queues[recipient]!.add(body['wire']!);
+      forwarded++;
+      return {'accepted': true};
+    }
+    if (path == '/v1/signal/poll') {
+      final queued = queues[body['token']]!;
+      if (queued.isEmpty) {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+      cancellation.throwIfCancelled();
+      return {
+        'ready': joined.length == 2,
+        'wire': queued.isEmpty ? '' : queued.removeAt(0),
+      };
+    }
+    if (path == '/v1/signal/leave') {
+      joined.clear();
+      queues.clear();
+      return {'closed': true};
+    }
+    throw StateError(path);
   }
 }

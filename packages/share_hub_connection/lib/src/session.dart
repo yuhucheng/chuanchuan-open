@@ -9,6 +9,8 @@ import 'package:share_hub_session_api/share_hub_session_api.dart';
 import 'channel.dart';
 import 'identity.dart';
 import 'operation_router.dart';
+import 'relay_room_claim.dart';
+import 'relay_service_client.dart';
 
 part 'trusted_connection.dart';
 
@@ -36,7 +38,7 @@ class SessionLease {
 
 class CipherChannel {
   CipherChannel._(this.wire, this._sendKey, this._receiveKey, this.sessionId);
-  final WireChannel wire;
+  final ConnectionWire wire;
   final SecretKey _sendKey;
   final SecretKey _receiveKey;
   final String sessionId;
@@ -52,7 +54,7 @@ class CipherChannel {
   }
 
   static Future<CipherChannel> create(
-    WireChannel wire,
+    ConnectionWire wire,
     List<int> key,
     List<int> transcript, {
     required bool host,
@@ -71,6 +73,58 @@ class CipherChannel {
       host ? toClient : toHost,
       host ? toHost : toClient,
       encodeBytes(digest),
+    );
+  }
+
+  /// Seals relay frames from the original pairing keys without exporting the
+  /// directional key material to the connection or the service client.
+  Future<ConnectionWire> protectRelay(
+    RelaySignalChannel channel,
+    List<int> transcript,
+  ) async {
+    final salt = hashes.sha256.convert(transcript).bytes;
+    final hkdf = Hkdf(hmac: Hmac.sha256(), outputLength: 32);
+    final info = utf8.encode('chuanchuan.connection.relay.frame.v1');
+    final sendKey = await hkdf.deriveKey(
+      secretKey: _sendKey,
+      nonce: salt,
+      info: info,
+    );
+    final receiveKey = await hkdf.deriveKey(
+      secretKey: _receiveKey,
+      nonce: salt,
+      info: info,
+    );
+    final cipher = AesGcm.with256bits();
+    List<int> aad(int sequence) => [
+      ...transcript,
+      ...utf8.encode(jsonEncode(sequence)),
+    ];
+    return RelayConnectionWire.protected(
+      channel,
+      seal: (sequence, clear) async {
+        final box = await cipher.encrypt(
+          clear,
+          secretKey: sendKey,
+          nonce: _nonce(sequence),
+          aad: aad(sequence),
+        );
+        return [...box.cipherText, ...box.mac.bytes];
+      },
+      open: (sequence, sealed) async {
+        if (sealed.length < 16) {
+          throw const ConnectionFailure('authentication_failed');
+        }
+        return cipher.decrypt(
+          SecretBox(
+            sealed.sublist(0, sealed.length - 16),
+            nonce: _nonce(sequence),
+            mac: Mac(sealed.sublist(sealed.length - 16)),
+          ),
+          secretKey: receiveKey,
+          aad: aad(sequence),
+        );
+      },
     );
   }
 

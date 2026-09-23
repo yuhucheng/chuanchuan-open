@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:share_hub_connection/src/channel.dart';
 import 'package:share_hub_connection/src/identity.dart';
+import 'package:share_hub_connection/src/relay_service_client.dart';
 import 'package:share_hub_connection/src/session.dart';
 import 'package:share_hub_session_api/share_hub_session_api.dart';
 import 'package:test/test.dart';
@@ -437,7 +438,12 @@ class _ControlledCipher implements CipherChannel {
   String? gatedType;
   final sendEntered = Completer<void>();
   @override
-  WireChannel get wire => inner.wire;
+  ConnectionWire get wire => inner.wire;
+  @override
+  Future<ConnectionWire> protectRelay(
+    RelaySignalChannel channel,
+    List<int> transcript,
+  ) => inner.protectRelay(channel, transcript);
   @override
   String get sessionId => inner.sessionId;
   @override

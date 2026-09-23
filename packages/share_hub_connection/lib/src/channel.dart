@@ -6,8 +6,18 @@ import 'dart:typed_data';
 
 import 'identity.dart';
 
+/// Bounded message transport for authenticated pairing and recovery frames.
+abstract interface class ConnectionWire {
+  bool get isClosed;
+  void enableSessionFrames();
+  Future<Map<String, dynamic>> next();
+  void send(Map<String, dynamic> message);
+  Future<void> flush();
+  void close();
+}
+
 /// Length-prefixed bounded frames. No payload logging and no unbounded queue.
-class WireChannel {
+class WireChannel implements ConnectionWire {
   WireChannel(this.socket) {
     unawaited(
       socket.done.then<void>((_) => _ended(), onError: (Object _) => _ended()),
@@ -26,8 +36,11 @@ class WireChannel {
   List<int> _buffer = [];
   Completer<Map<String, dynamic>>? _waiting;
   bool _closed = false;
+  @override
+  bool get isClosed => _closed;
   static const maximumFrameBytes = 8192;
   int _frameLimit = maximumFrameBytes;
+  @override
   void enableSessionFrames() => _frameLimit = 131072;
 
   void _receive(Uint8List bytes) {
@@ -69,6 +82,7 @@ class WireChannel {
     }
   }
 
+  @override
   Future<Map<String, dynamic>> next() {
     if (_frames.isNotEmpty) return Future.value(_frames.removeFirst());
     if (_closed) return Future.error(const ConnectionFailure('disconnected'));
@@ -76,6 +90,7 @@ class WireChannel {
     return (_waiting = Completer<Map<String, dynamic>>()).future;
   }
 
+  @override
   void send(Map<String, dynamic> message) {
     if (_closed) throw const ConnectionFailure('disconnected');
     final bytes = utf8.encode(jsonEncode(message));
@@ -85,6 +100,9 @@ class WireChannel {
     final header = ByteData(4)..setUint32(0, bytes.length);
     socket.add([...header.buffer.asUint8List(), ...bytes]);
   }
+
+  @override
+  Future<void> flush() => socket.flush();
 
   void _ended() {
     if (_closed) return;
@@ -98,6 +116,7 @@ class WireChannel {
     waiting?.completeError(const ConnectionFailure('disconnected'));
   }
 
+  @override
   void close() {
     _ended();
     _frames.clear();

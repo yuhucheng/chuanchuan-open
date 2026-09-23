@@ -321,14 +321,14 @@ final class RecoveryCipherMaterial {
   final List<int> _transcript;
   final _Candidate _candidate;
   bool _used = false, _cancelled = false;
-  WireChannel? _claimedWire;
-  WireChannel? _openingWire;
+  ConnectionWire? _claimedWire;
+  ConnectionWire? _openingWire;
   void _check() {
     _candidate._check();
     if (_cancelled) _fail('recovery_unavailable');
   }
 
-  Future<CipherChannel> open(WireChannel wire) async {
+  Future<CipherChannel> open(ConnectionWire wire) async {
     // Reject duplicate ownership before the cleanup region. A duplicate call
     // must not close the first call's wire, even after its cipher is published.
     if (_used) {

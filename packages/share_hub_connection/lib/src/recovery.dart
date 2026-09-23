@@ -123,7 +123,19 @@ final class ConnectionRecoveryService {
 
   /// Only the original grant initiator dials. Concurrent callers share one
   /// bounded attempt; retry/backoff is owned by the application controller.
-  Future<void> reconnect(TrustedConnection owner) {
+  Future<void> reconnect(TrustedConnection owner) => _reconnect(owner, null);
+
+  /// Uses the same bounded candidate and grant proof over a caller-provided
+  /// sealed wire. Opening the wire does not grant authority or replace owner.
+  Future<void> reconnectVia(
+    TrustedConnection owner,
+    Future<ConnectionWire> Function() open,
+  ) => _reconnect(owner, open);
+
+  Future<void> _reconnect(
+    TrustedConnection owner,
+    Future<ConnectionWire> Function()? open,
+  ) {
     final record = _records[owner.grant?.binding.encodedId];
     if (record == null ||
         !identical(record.owner, owner) ||
@@ -139,8 +151,39 @@ final class ConnectionRecoveryService {
     } catch (error, stack) {
       return Future.error(error, stack);
     }
-    return record.dialing = _dial(candidate)
-        .whenComplete(() => record.dialing = null);
+    return record.dialing = _dial(
+      candidate,
+      open: open,
+    ).whenComplete(() => record.dialing = null);
+  }
+
+  /// The receiver supplies its already joined, sealed room. The parsed grant
+  /// identifier must still select this exact registered owner.
+  Future<void> acceptVia(
+    TrustedConnection owner,
+    Future<ConnectionWire> Function() open,
+  ) async {
+    final record = _records[owner.grant?.binding.encodedId];
+    if (record == null ||
+        !identical(record.owner, owner) ||
+        !_owns(record) ||
+        record.credentials.role != GrantRole.receiver) {
+      throw const ConnectionFailure('recovery_unavailable');
+    }
+    final candidate = _admit()..record = record;
+    try {
+      candidate.wire = await candidate.step(() async {
+        final wire = await open();
+        if (!candidate.current) {
+          wire.close();
+          throw const ConnectionFailure('recovery_unavailable');
+        }
+        return candidate.wire = wire;
+      });
+      await _accept(candidate, propagate: true);
+    } finally {
+      candidate.cancel();
+    }
   }
 
   Future<void> _audit(_Candidate candidate) async {
@@ -149,11 +192,22 @@ final class ConnectionRecoveryService {
     candidate.check();
   }
 
-  Future<void> _dial(_Candidate candidate) async {
+  Future<void> _dial(
+    _Candidate candidate, {
+    Future<ConnectionWire> Function()? open,
+  }) async {
     try {
       final record = candidate.record!;
       await _audit(candidate);
       candidate.wire = await candidate.step(() async {
+        if (open != null) {
+          final wire = await open();
+          if (!candidate.current) {
+            wire.close();
+            throw const ConnectionFailure('recovery_unavailable');
+          }
+          return candidate.wire = wire;
+        }
         final socket = await Socket.connect(
           record.address!,
           record.port!,
@@ -200,12 +254,13 @@ final class ConnectionRecoveryService {
     }
   }
 
-  Future<void> _accept(_Candidate candidate) async {
+  Future<void> _accept(_Candidate candidate, {bool propagate = false}) async {
     try {
       final wire = candidate.wire!;
       final hello = RecoveryHello.parse(await candidate.step(wire.next));
       final record = _records[hello.grantId];
       if (record == null ||
+          (candidate.record != null && !identical(candidate.record, record)) ||
           !_owns(record) ||
           record.credentials.role != GrantRole.receiver) {
         throw const ConnectionFailure('recovery_unavailable');
@@ -237,6 +292,7 @@ final class ConnectionRecoveryService {
       await _install(candidate, cipher);
     } catch (_) {
       // Candidate failure is not permission to revoke the original grant.
+      if (propagate) rethrow;
     } finally {
       candidate.cancel();
     }
@@ -379,7 +435,7 @@ final class _Candidate {
   final _stopped = Completer<void>();
   bool _alive = true;
   _Record? record;
-  WireChannel? wire;
+  ConnectionWire? wire;
   RecoveryOffer? offer;
   RecoveryChallenge? challenge;
   RecoveryCipherMaterial? material;
