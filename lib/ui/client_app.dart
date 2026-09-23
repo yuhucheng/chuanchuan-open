@@ -26,6 +26,7 @@ class ShareHubApp extends StatefulWidget {
     this.remoteMedia,
     this.setAuxiliaryNeeded,
     this.relayCredentialAvailable,
+    this.relayCredentialChanges,
     this.stopAuxiliary,
     this.targetPlatform,
     this.appTitle = 'Share Hub',
@@ -39,6 +40,7 @@ class ShareHubApp extends StatefulWidget {
   final RemotePictureFactory? remoteMedia;
   final void Function(bool)? setAuxiliaryNeeded;
   final bool Function()? relayCredentialAvailable;
+  final Listenable? relayCredentialChanges;
   final void Function()? stopAuxiliary;
   final TargetPlatform? targetPlatform;
   final String appTitle;
@@ -72,6 +74,7 @@ class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
     listSources: _engine.sources,
     localCaptureActive: () => _preview.occupiesPicture,
     relayCredentialAvailable: widget.relayCredentialAvailable,
+    relayCredentialChanges: widget.relayCredentialChanges,
   );
   late final _transfers = TransferQueue(_fileAccess);
   late final _desktop = DesktopLifecycle(

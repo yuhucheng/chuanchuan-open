@@ -426,6 +426,8 @@ void main() {
   void build({
     bool Function()? localCaptureOccupied,
     bool Function()? relayCredentialAvailable,
+    Listenable? relayCredentialChanges,
+    Duration relayCredentialGrace = const Duration(seconds: 20),
     Duration statisticsLifetime = const Duration(seconds: 6),
   }) {
     remoteA = RemoteSessionController(
@@ -438,6 +440,8 @@ void main() {
       },
       localCaptureActive: localCaptureOccupied ?? () => previewActive,
       relayCredentialAvailable: relayCredentialAvailable,
+      relayCredentialChanges: relayCredentialChanges,
+      relayCredentialGrace: relayCredentialGrace,
       firstFrameDeadline: const Duration(milliseconds: 150),
       permissionPoll: const Duration(milliseconds: 20),
       statisticsLifetime: statisticsLifetime,
@@ -482,6 +486,85 @@ void main() {
     second.stoppedFlag = true;
     second.emit(MediaEventKind.ended);
     await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(factoryA.link.starts, hasLength(2));
+  });
+
+  test('credential arriving after native release retries only once', () async {
+    final leases = ValueNotifier<int>(0);
+    var relayReady = false;
+    build(
+      relayCredentialAvailable: () => relayReady,
+      relayCredentialChanges: leases,
+      relayCredentialGrace: const Duration(milliseconds: 100),
+    );
+    final peer = a.sessions.single.peerKey;
+    await remoteA.start(SessionOperation.watch, peerKey: peer);
+    final first = factoryA.current;
+    first.emit(MediaEventKind.failed, failureCode: 'media_connection_timeout');
+    first.stoppedFlag = true;
+    first.emit(MediaEventKind.ended);
+    await waitFor(() => remoteA.session == null);
+    expect(factoryA.link.starts, hasLength(1));
+    relayReady = true;
+    leases.value++;
+    await waitFor(() => factoryA.link.starts.length == 2);
+    expect(factoryA.current.id, isNot(first.id));
+    leases.value++;
+    expect(factoryA.link.starts, hasLength(2));
+  });
+
+  test('credential arriving before ended waits for native release', () async {
+    final leases = ValueNotifier<int>(0);
+    var relayReady = false;
+    build(
+      relayCredentialAvailable: () => relayReady,
+      relayCredentialChanges: leases,
+      relayCredentialGrace: const Duration(milliseconds: 100),
+    );
+    await remoteA.start(
+      SessionOperation.cast,
+      peerKey: a.sessions.single.peerKey,
+    );
+    final first = factoryA.current;
+    first.emit(MediaEventKind.failed, failureCode: 'media_transport_lost');
+    relayReady = true;
+    leases.value++;
+    expect(factoryA.link.starts, hasLength(1));
+    first.stoppedFlag = true;
+    first.emit(MediaEventKind.ended);
+    await waitFor(() => factoryA.link.starts.length == 2);
+    expect(factoryA.current.id, isNot(first.id));
+  });
+
+  test('late credential cannot revive a stopped or expired fallback', () async {
+    final leases = ValueNotifier<int>(0);
+    var relayReady = false;
+    build(
+      relayCredentialAvailable: () => relayReady,
+      relayCredentialChanges: leases,
+      relayCredentialGrace: const Duration(milliseconds: 30),
+    );
+    final peer = a.sessions.single.peerKey;
+    await remoteA.start(SessionOperation.watch, peerKey: peer);
+    var first = factoryA.current;
+    first.emit(MediaEventKind.failed, failureCode: 'media_connection_timeout');
+    first.stoppedFlag = true;
+    first.emit(MediaEventKind.ended);
+    await waitFor(() => remoteA.session == null);
+    await remoteA.stop();
+    relayReady = true;
+    leases.value++;
+    expect(factoryA.link.starts, hasLength(1));
+
+    relayReady = false;
+    await remoteA.start(SessionOperation.watch, peerKey: peer);
+    first = factoryA.current;
+    first.emit(MediaEventKind.failed, failureCode: 'media_connection_timeout');
+    first.stoppedFlag = true;
+    first.emit(MediaEventKind.ended);
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+    relayReady = true;
+    leases.value++;
     expect(factoryA.link.starts, hasLength(2));
   });
 

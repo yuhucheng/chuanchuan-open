@@ -1,11 +1,12 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:share_hub_connection/share_hub_connection.dart';
 
 /// Process-owned auxiliary credential cache. No connection or media grant is
 /// created here; ICE reads only an already available, unexpired snapshot.
-final class RelayCredentialOwner {
+final class RelayCredentialOwner extends ChangeNotifier {
   RelayCredentialOwner(
     this._identity,
     this._service,
@@ -44,6 +45,7 @@ final class RelayCredentialOwner {
     if (_stopped || !_needed || lease == null) return null;
     if (!lease.validAt(_now())) {
       _lease = null;
+      notifyListeners();
       return null;
     }
     return lease;
@@ -75,6 +77,7 @@ final class RelayCredentialOwner {
     _renewal?.cancel();
     _expiry?.cancel();
     _lease = null;
+    notifyListeners();
   }
 
   void setNeeded(bool needed) {
@@ -135,8 +138,14 @@ final class RelayCredentialOwner {
       // credentials per device for uninterrupted long sessions.
       _renewal = Timer(remaining * 0.75, () => unawaited(_attempt(0)));
       _expiry = Timer(remaining, () {
-        if (identical(_lease, lease)) _lease = null;
+        if (identical(_lease, lease)) {
+          _lease = null;
+          notifyListeners();
+        }
       });
+      // Publish only after timers are owned; a listener may synchronously
+      // suspend or stop and must be able to cancel both of them.
+      notifyListeners();
     } on AuxiliaryFailure catch (error) {
       if (_stopped || !_needed || cancellation.isCancelled) return;
       lastFailure = error.code;
@@ -177,6 +186,7 @@ final class RelayCredentialOwner {
     _renewal?.cancel();
     _expiry?.cancel();
     _lease = null;
+    notifyListeners();
     _closeTransport();
   }
 }

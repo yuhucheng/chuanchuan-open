@@ -49,6 +49,7 @@ void main() {
       stopAuxiliary: relay?.stop,
       setAuxiliaryNeeded: relay?.setNeeded,
       relayCredentialAvailable: () => relay?.current != null,
+      relayCredentialChanges: relay,
     ),
   );
 }

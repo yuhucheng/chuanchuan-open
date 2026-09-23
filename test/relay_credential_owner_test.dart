@@ -75,14 +75,18 @@ void main() {
   test(
     'connection demand publishes only a valid lease; stop wipes it',
     () async {
+      final states = <bool>[];
+      owner.addListener(() => states.add(owner.current != null));
       expect(owner.current, isNull);
       expect(transport.challenges, 0);
       await owner.start();
       expect(owner.current, isNotNull);
       expect(transport.issued, 1);
       expect(owner.lastFailure, isNull);
+      expect(states, [true]);
       owner.stop();
       expect(owner.current, isNull);
+      expect(states, [true, false]);
       expect(closes, 1);
       owner.stop();
       expect(closes, 1);
@@ -100,6 +104,20 @@ void main() {
       await owner.start();
       expect(owner.current, isNotNull);
       expect(transport.issued, 2);
+    },
+  );
+
+  test(
+    'synchronous listener can stop without leaving a renewal timer',
+    () async {
+      owner.addListener(() {
+        if (owner.current != null) owner.stop();
+      });
+      await owner.start();
+      expect(owner.current, isNull);
+      expect(closes, 1);
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      expect(transport.issued, 1);
     },
   );
 

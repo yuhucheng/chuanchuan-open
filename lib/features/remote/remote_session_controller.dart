@@ -36,6 +36,8 @@ class RemoteSessionController extends ChangeNotifier {
     required this.listSources,
     this.localCaptureActive,
     this.relayCredentialAvailable,
+    this.relayCredentialChanges,
+    this.relayCredentialGrace = const Duration(seconds: 20),
     this.firstFrameDeadline = const Duration(seconds: 15),
     this.permissionPoll = const Duration(seconds: 2),
     this.statisticsLifetime = const Duration(seconds: 6),
@@ -46,6 +48,7 @@ class RemoteSessionController extends ChangeNotifier {
          grants: connections.grants,
        ) {
     connections.addListener(_reconcile);
+    relayCredentialChanges?.addListener(_tryRelayRetry);
     _reconcile();
   }
 
@@ -60,15 +63,19 @@ class RemoteSessionController extends ChangeNotifier {
   /// True while the local preview capturer is active or not yet released.
   final bool Function()? localCaptureActive;
 
-  /// A snapshot only. Media never waits for the auxiliary service; a failed
-  /// direct attempt may use a credential that arrived before its ICE timeout.
+  /// A snapshot only. Media never waits for the auxiliary service on admission.
   final bool Function()? relayCredentialAvailable;
+
+  /// Notifies when a valid lease arrives after direct ICE has failed.
+  final Listenable? relayCredentialChanges;
+  final Duration relayCredentialGrace;
   final Duration firstFrameDeadline;
   final Duration permissionPoll;
   // Diagnostic freshness only; an expired sample does not mean capture failed.
   final Duration statisticsLifetime;
   final Duration mediaRecoveryDeadline;
   _MediaRecovery? _recovery;
+  _RelayRetry? _relayRetry;
   bool get recovering => _recovery != null;
 
   /// One budget for watch, cast and (later) control-with-video in this process.
@@ -237,6 +244,7 @@ class RemoteSessionController extends ChangeNotifier {
     unawaited(shutdown().catchError((Object _) {}));
     _disposed = true;
     connections.removeListener(_reconcile);
+    relayCredentialChanges?.removeListener(_tryRelayRetry);
     super.dispose();
   }
 
@@ -381,6 +389,7 @@ class RemoteSessionController extends ChangeNotifier {
     required String peerKey,
     String? label,
   }) {
+    _clearRelayRetry();
     return _trackWork(() => _start(operation, peerKey: peerKey, label: label));
   }
 
@@ -502,6 +511,7 @@ class RemoteSessionController extends ChangeNotifier {
         }
       }
       _notify();
+      if (identical(_relayRetry?.attempt, attempt)) _tryRelayRetry();
     }
   }
 
@@ -563,6 +573,7 @@ class RemoteSessionController extends ChangeNotifier {
   /// Stops the current picture and releases its resources. A failed release
   /// stays visible and the same session can be stopped again.
   Future<void> stop({String? reason, bool failed = false}) {
+    _clearRelayRetry();
     if (_recovery case final recovery?) _dropRecovery(recovery);
     return _stopTracked(reason: reason, failed: failed, explicit: true);
   }
@@ -695,6 +706,12 @@ class RemoteSessionController extends ChangeNotifier {
   void _reconcile() {
     if (_disposed || _shuttingDown) return;
     final live = connections.sessions.where((c) => !c.isClosed).toSet();
+    if (_relayRetry case final retry?) {
+      if (!live.contains(retry.attempt.connection) ||
+          retry.attempt.connection.grant?.phase != GrantPhase.active) {
+        _clearRelayRetry();
+      }
+    }
     final lost = _attempt;
     if (lost != null && !live.contains(lost.connection)) _retainRecovery(lost);
     for (final connection in _links.keys.toList()) {
@@ -1009,6 +1026,8 @@ class RemoteSessionController extends ChangeNotifier {
       unawaited(_silentStop(session, reason: VideoEndReason.busy));
       return;
     }
+    // A peer-initiated picture supersedes any pending direct-path fallback.
+    if (_attempt == null) _clearRelayRetry();
     var attempt = _attempt;
     if (attempt != null &&
         (!identical(attempt.connection, connection) ||
@@ -1229,30 +1248,57 @@ class RemoteSessionController extends ChangeNotifier {
     try {
       await _cancelEvents(attempt);
     } catch (_) {
+      _clearRelayRetry();
       _cleanupProblem();
       return;
     }
-    // SDK emits ended only after native cleanup and budget release. Re-enter
-    // normal admission with a new operation ID, never with the old picture.
-    if (attempt.relayRetryPending &&
-        !_disposed &&
-        !_shuttingDown &&
-        !_cleanupFailed &&
-        _generation == attempt.token &&
-        _attempt == null &&
-        !_busy &&
-        identical(
+    // SDK emits ended only after native cleanup and budget release. A lease
+    // notification may have arrived while subscription cancellation was busy.
+    if (identical(_relayRetry?.attempt, attempt)) {
+      _relayRetry!.released = true;
+      _tryRelayRetry();
+    }
+  }
+
+  void _clearRelayRetry() {
+    _relayRetry?.deadline.cancel();
+    _relayRetry = null;
+  }
+
+  void _tryRelayRetry() {
+    final retry = _relayRetry;
+    if (retry == null || !retry.released || !_relayReady()) return;
+    // The failed start can still be unwinding after SDK cleanup. Its finally
+    // block calls us again once it has released admission ownership.
+    if (_busy) return;
+    final attempt = retry.attempt;
+    if (_disposed ||
+        _shuttingDown ||
+        _cleanupFailed ||
+        _generation != attempt.token ||
+        _attempt != null ||
+        _recovery != null ||
+        !identical(
           connections.outgoingFor(attempt.peerKey),
           attempt.connection,
-        ) &&
-        _relayReady()) {
-      await _start(
-        attempt.operation,
-        peerKey: attempt.peerKey,
-        label: attempt.label,
-        relayRetry: true,
-      );
+        ) ||
+        attempt.connection.grant?.phase != GrantPhase.active) {
+      _clearRelayRetry();
+      return;
     }
+    _clearRelayRetry();
+    // One new operation consumes the fallback. Its ID and Peer are fresh; a
+    // second ICE failure cannot recursively create another fallback.
+    unawaited(
+      _trackWork(
+        () => _start(
+          attempt.operation,
+          peerKey: attempt.peerKey,
+          label: attempt.label,
+          relayRetry: true,
+        ),
+      ),
+    );
   }
 
   bool _relayReady() {
@@ -1270,8 +1316,13 @@ class RemoteSessionController extends ChangeNotifier {
         !attempt.relayAvailableAtStart &&
         !attempt.relayRetried &&
         _recovery == null &&
-        _relayReady()) {
-      attempt.relayRetryPending = true;
+        (_relayReady() || relayCredentialChanges != null) &&
+        _relayRetry == null) {
+      final retry = _RelayRetry(attempt);
+      retry.deadline = Timer(relayCredentialGrace, () {
+        if (identical(_relayRetry, retry)) _clearRelayRetry();
+      });
+      _relayRetry = retry;
     }
   }
 
@@ -1574,7 +1625,13 @@ class _Attempt {
   bool cancelled = false;
   bool relayAvailableAtStart = false;
   bool relayRetried = false;
-  bool relayRetryPending = false;
+}
+
+class _RelayRetry {
+  _RelayRetry(this.attempt);
+  final _Attempt attempt;
+  late final Timer deadline;
+  bool released = false;
 }
 
 class _MediaRecovery {
