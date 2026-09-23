@@ -11,6 +11,9 @@ export 'src/auxiliary_service.dart'
 export 'src/identity.dart' show DeviceIdentity, ConnectionFailure;
 export 'src/pairing.dart'
     show PairingHost, PairingAttempt, PairingOffer, offerLifetime;
+export 'src/relay_signal_envelope.dart'
+    show RelaySignalEnvelope, RelaySignalInbox, RelaySignalKind;
+export 'src/relay_room_claim.dart' show RelayRoomClaim;
 export 'src/session.dart'
     show
         TrustedConnection,

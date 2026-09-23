@@ -106,6 +106,22 @@ recovery entries; old pairing attempts cannot publish against the new offer.
 Closing/reopening admission cancels pending sockets and removes recovery entries.
 Revoked entries are removed even when no further connection arrives.
 
+## Relay signaling draft wire
+
+`RelayRoomClaim` and `RelaySignalEnvelope` define strict version-1 canonical
+JSON for a relay serving a grant already held by both endpoints in the current
+process. Room IDs hash the canonical claim with the
+`chuanchuan.signal.room.v1\0` domain. A service challenge is signed over the
+`chuanchuan.signal.join.v1\0` domain, room ID, member public key and 32-byte
+nonce. The claim retains the grant's policy type and lifetime as fields; it
+does not force an eight-hour-only schema. Envelope fields are `v`, `room`,
+`sender`, `generation`, `seq`, `kind`, `payload`; the payload is opaque sealed
+bytes, never SDP interpreted by the relay. `RelaySignalInbox` rejects a wrong
+member, room, old generation, replay or any data after cancellation. The
+public Dart and private Python packages pin identical wire, room and signature
+vectors. These primitives do not yet create a live relay route or authorize an
+operation. First-time cross-network pairing needs a separate rendezvous design.
+
 ## Verification boundary
 
 `dart analyze` and `dart test` cover real local TCP, PAKE, encrypted operation
