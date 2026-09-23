@@ -39,6 +39,8 @@ Each endpoint captures its original local sleep-inclusive monotonic deadline at 
 
 SDKs subscribe to invalidation, stop input/media/file execution immediately, recheck permits after every asynchronous operation, and retain occupied media slots until native cleanup succeeds. The client now explicitly selects v2 pairing and owns a process-local `GrantRegistry`. Completed connections register their authenticated grants; disconnect, admission-off and exit revoke them. The connection adapter routes authenticated operation requests/signals over the paired TCP connection; SDK media negotiation and automatic reconnect are not yet implemented. The connection package retains explicit v1 support for compatibility tests, but the client never silently downgrades. A grant alone does not advertise remote capabilities.
 
+Native deadline conversion reads `authorization.readCurrentMicros()`, which validates rollback and expiry in that exact permit epoch. Reading the endpoint's raw clock would skip this check.
+
 ## Verification
 
 Run `dart test` and `dart analyze` here. Executable vectors cover forward/reverse roles, separate reverse grants, stale ciphertext with forged new headers, replay/reflection, identity and secret mismatch, revoke/recovery races, continuous-clock rollback and sleep crossing the deadline. The connection package additionally tests v2 material from real loopback PAKE and legacy rejection. These tests do not establish platform sleep behavior, double-device recovery or a production cryptographic audit.

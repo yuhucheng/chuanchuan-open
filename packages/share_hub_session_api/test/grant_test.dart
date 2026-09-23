@@ -120,6 +120,31 @@ void main() {
     },
   );
   test(
+    'native clock sample rejects a transient rollback before conversion',
+    () async {
+      var sample = now;
+      a = endpoint(GrantRole.initiator, clock: () async => sample);
+      await resume();
+      final request = await a.authorizeLocal(
+        SessionOperation.watch,
+        'native-clock',
+        '',
+      );
+      expect(await request.readCurrentMicros(), now);
+      sample = now - 1;
+      await expectLater(
+        request.readCurrentMicros(),
+        throwsA(isA<SessionFailure>()),
+      );
+      expect(a.phase, GrantPhase.revoked);
+      sample = now;
+      await expectLater(
+        request.readCurrentMicros(),
+        throwsA(isA<SessionFailure>()),
+      );
+    },
+  );
+  test(
     'signal cannot be used as a start request or in another operation',
     () async {
       await resume();
