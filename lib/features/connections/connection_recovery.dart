@@ -158,6 +158,31 @@ class ConnectionRecovery {
     onFailed();
   }
 
+  Future<bool> _retryRelay({required bool receiver}) async {
+    if (openRelay == null) {
+      if (receiver) await _wait(window); // Local listener may still recover.
+      return false;
+    }
+    var failures = 0;
+    while (!_cancelled) {
+      if (await _relay(receiver: receiver)) return true;
+      if (_cancelled) return false;
+      // Either member or the selected service may have been briefly absent.
+      // Each attempt uses a new proof and cancellation token, never an old room.
+      final configured = backoff.isEmpty
+          ? const Duration(seconds: 1)
+          : backoff[failures < backoff.length ? failures : backoff.length - 1];
+      failures++;
+      await _wait(
+        configured > Duration.zero
+            ? configured
+            : const Duration(milliseconds: 100),
+      );
+      await _checkTime();
+    }
+    return false;
+  }
+
   Future<void> run() async {
     _deadline = Timer(window, _failed);
     _invalidation = previous.grant!.invalidated.listen((_) {
@@ -166,9 +191,7 @@ class ConnectionRecovery {
     try {
       await _checkTime();
       if (route == null) {
-        if (await _relay(receiver: true)) return;
-        if (_cancelled) return;
-        await _wait(window); // Receiver waits for authenticated peer recovery.
+        if (await _retryRelay(receiver: true)) return;
         if (!_cancelled) _failed();
         return;
       }
@@ -211,7 +234,7 @@ class ConnectionRecovery {
           if (identical(_attempt, attempt)) _attempt = null;
         }
       }
-      if (!_cancelled && await _relay(receiver: false)) return;
+      if (!_cancelled && await _retryRelay(receiver: false)) return;
       _failed();
     } catch (_) {
       _failed();

@@ -218,6 +218,38 @@ void main() {
     },
   );
 
+  for (final receiver in [true, false]) {
+    test(
+      '${receiver ? 'receiver' : 'initiator'} retries a temporarily unavailable relay within its window',
+      () async {
+        await lose();
+        await proxy.close();
+        var attempts = 0;
+        final previous = receiver ? oldB : oldA;
+        final recovery = ConnectionRecovery(
+          previous: previous,
+          route: receiver ? null : (host: '127.0.0.1', port: proxy.server.port),
+          clock: receiver ? pb.now : pa.now,
+          verifyIdentity: () async {},
+          onRecovered: (_) => false,
+          onFailed: () {},
+          window: const Duration(milliseconds: 500),
+          backoff: const [Duration(milliseconds: 20)],
+          attemptTimeout: const Duration(milliseconds: 100),
+          openRelay: (_, _) async {
+            attempts++;
+            throw StateError('temporarily unavailable');
+          },
+        );
+        final running = recovery.run();
+        await until(() => attempts >= 2);
+        recovery.cancel(revoke: false);
+        await running;
+        expect(previous.grant!.phase, GrantPhase.suspended);
+      },
+    );
+  }
+
   test(
     'closing admission prevents recovery; reopening cannot revive old grants',
     () async {

@@ -90,6 +90,11 @@ final class _Relay implements AuxiliaryTransport {
         'wire': queue.isEmpty ? '' : queue.removeAt(0),
       };
     }
+    if (path == '/v1/signal/peer') {
+      final sender = members[body['token']];
+      final peer = members.values.singleWhere((key) => key != sender);
+      return {'publicKey': peer, 'address': '127.0.0.1'};
+    }
     if (path == '/v1/signal/leave') {
       members.clear();
       queues.clear();
