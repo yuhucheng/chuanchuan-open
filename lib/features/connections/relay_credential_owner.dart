@@ -181,10 +181,12 @@ final class RelayCredentialOwner extends ChangeNotifier {
         );
       }
     } catch (_) {
-      if (!_stopped && _needed && !cancellation.isCancelled) {
-        lastFailure = 'unexpected';
-        notifyListeners();
-      }
+      if (_stopped || !_needed || cancellation.isCancelled) return;
+      lastFailure = 'unexpected';
+      notifyListeners();
+      if (_stopped || !_needed || cancellation.isCancelled) return;
+      _renewal?.cancel();
+      _renewal = Timer(_cooldownDelay(), () => unawaited(_attempt(0)));
     }
   }
 
