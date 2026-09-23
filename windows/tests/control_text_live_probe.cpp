@@ -2,8 +2,10 @@
 
 #include <windows.h>
 
+#include <atomic>
 #include <iostream>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -20,6 +22,7 @@ HWND probe_window = nullptr;
 unsigned hook_target_foreground = 0;
 unsigned hook_other_foreground = 0;
 unsigned hook_target_focus = 0;
+unsigned hook_next_consumed = 0;
 
 LRESULT CALLBACK KeyboardHook(int code, WPARAM message, LPARAM data) {
   if (code == HC_ACTION &&
@@ -43,7 +46,14 @@ LRESULT CALLBACK KeyboardHook(int code, WPARAM message, LPARAM data) {
       if (key->vkCode == VK_F24) ++injected_hook_physical;
     }
   }
-  return CallNextHookEx(nullptr, code, message, data);
+  const LRESULT next = CallNextHookEx(nullptr, code, message, data);
+  if (code == HC_ACTION &&
+      (message == WM_KEYDOWN || message == WM_SYSKEYDOWN) &&
+      (reinterpret_cast<const KBDLLHOOKSTRUCT*>(data)->flags & LLKHF_INJECTED) != 0 &&
+      next != 0) {
+    ++hook_next_consumed;
+  }
+  return next;
 }
 
 std::string ObjectName(HANDLE object) {
@@ -88,7 +98,9 @@ void Pump() {
 }
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+  const bool worker_mode = argc == 2 && std::string(argv[1]) == "--worker";
+  const bool no_hook_mode = argc == 2 && std::string(argv[1]) == "--no-hook";
   DWORD process_session = 0;
   const bool session_known = ProcessIdToSessionId(
       GetCurrentProcessId(), &process_session) != 0;
@@ -181,9 +193,10 @@ int main() {
 
   // A leading BOM, Chinese, LF, ASCII, and a supplementary scalar. The
   // fixture is static and never contains private user input.
-  const HHOOK keyboard_hook = SetWindowsHookExW(
+  const HHOOK keyboard_hook = no_hook_mode ? nullptr : SetWindowsHookExW(
       WH_KEYBOARD_LL, KeyboardHook, instance, 0);
-  const DWORD hook_error = keyboard_hook ? ERROR_SUCCESS : GetLastError();
+  const DWORD hook_error = keyboard_hook || no_hook_mode
+      ? ERROR_SUCCESS : GetLastError();
   const std::wstring expected = L"\ufeff\u4e2d\u6587\nA\U0001F600";
   received.clear();
   LASTINPUTINFO before_input{};
@@ -193,8 +206,20 @@ int main() {
   const bool alt_held = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
   const bool ctrl_held = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
   const bool shift_held = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
-  share_hub::ControlTextInput input;
-  const auto status = input.Submit(expected);
+  share_hub::ControlInjectionResult status;
+  if (worker_mode) {
+    std::atomic<bool> done{false};
+    std::thread sender([&] {
+      share_hub::ControlTextInput input;
+      status = input.Submit(expected);
+      done.store(true);
+    });
+    while (!done.load()) { Pump(); Sleep(1); }
+    sender.join();
+  } else {
+    share_hub::ControlTextInput input;
+    status = input.Submit(expected);
+  }
   const bool still_foreground = GetForegroundWindow() == window;
   const bool still_focused = GetFocus() == window;
   const auto deadline = GetTickCount64() + 2000;
@@ -287,6 +312,9 @@ int main() {
               << " hookTargetForeground=" << hook_target_foreground
               << " hookTargetFocus=" << hook_target_focus
               << " hookOtherForeground=" << hook_other_foreground
+              << " hookNextConsumed=" << hook_next_consumed
+              << " workerMode=" << worker_mode
+              << " noHookMode=" << no_hook_mode
               << " systemPackets=" << system_packet_keydowns
               << " systemChars=" << system_chars
               << " asciiUnicodeAccepted=" << ascii_unicode_accepted
