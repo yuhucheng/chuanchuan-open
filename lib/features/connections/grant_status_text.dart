@@ -3,24 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:share_hub_media_api/share_hub_media_api.dart';
 
-/// An exact, display-only duration. Product admission still owns which grant
-/// types and lifetimes may be issued; displaying a type never enables it.
-String formatGrantDuration(Duration duration) {
-  var seconds = duration.inSeconds;
-  if (seconds <= 0) return '不足 1 秒';
-  final parts = <String>[];
-  for (final (unit, label) in const [
-    (Duration.secondsPerDay, '天'),
-    (Duration.secondsPerHour, '小时'),
-    (Duration.secondsPerMinute, '分钟'),
-    (1, '秒'),
-  ]) {
-    final count = seconds ~/ unit;
-    if (count != 0) parts.add('$count $label');
-    seconds %= unit;
-  }
-  return parts.join(' ');
-}
+import 'grant_duration.dart';
 
 /// Reads the existing grant's sleep-inclusive monotonic clock and deadline.
 /// It never renews, resumes, revokes or otherwise decides authorization.
@@ -219,14 +202,10 @@ class _GrantStatusTextState extends State<GrantStatusText>
   Widget build(BuildContext context) {
     final grant = widget.grant;
     if (grant == null) return const Text('授权期限未提供');
-    final policy = grant.binding.policy;
-    final type = policy.type == GrantPolicy.shortCode.type
-        ? '短接码授权'
-        : '授权类型：${policy.type}';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text('$type · 总期限 ${formatGrantDuration(policy.lifetime)}'),
+        Text(formatGrantPolicy(grant)),
         Text(widget.connectionClosed ? '连接已结束' : _status(grant)),
       ],
     );

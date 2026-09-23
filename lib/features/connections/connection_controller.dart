@@ -7,6 +7,7 @@ import 'package:share_hub_media_api/share_hub_media_api.dart';
 
 import 'connection_recovery.dart';
 import 'auxiliary_route_controller.dart';
+import 'grant_duration.dart';
 
 /// Identity, a continuous clock and the discovery advertisement come from the
 /// platform channel. macOS and Windows implement the same channel, so this is
@@ -184,8 +185,8 @@ class ConnectionController extends ChangeNotifier {
                 }
                 if (!_track(connection)) return;
                 code = null;
-                _notice = const ConnectionNotice.status(
-                  '连接已建立，短接码已消费。授权期限以当前连接为准，可随时断开。',
+                _notice = ConnectionNotice.status(
+                  '连接已建立，短接码已消费。${formatGrantPolicy(connection.grant!)}，可随时断开。',
                 );
                 unawaited(_clearAdvertisement());
                 _emit();
@@ -378,7 +379,9 @@ class ConnectionController extends ChangeNotifier {
         _routes.remove(connection.grant);
         return null;
       }
-      _notice = const ConnectionNotice.status('身份验证通过，已建立本地直连。授权期限以当前连接为准。');
+      _notice = ConnectionNotice.status(
+        '身份验证通过，已建立本地直连。${formatGrantPolicy(connection.grant!)}。',
+      );
       return connection;
     } catch (error) {
       if (!_disposed && generation == _generation) {
