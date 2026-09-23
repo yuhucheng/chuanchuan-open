@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'identity.dart';
 
@@ -213,6 +214,13 @@ final class AuxiliaryServiceClient {
   final AuxiliaryTransport transport;
   final DateTime Function() _now;
 
+  /// Reuse this ID across retries of one allocation, and use a fresh ID for
+  /// renewal. A lost response must not spend another active TURN quota slot.
+  static String newTurnRequestId() {
+    final random = Random.secure();
+    return base64Url.encode(List<int>.generate(16, (_) => random.nextInt(256)));
+  }
+
   Future<void> register(
     DeviceIdentity identity, {
     required AuxiliaryCancellation cancellation,
@@ -231,12 +239,14 @@ final class AuxiliaryServiceClient {
   Future<AuxiliaryTurnCredential> issueTurn(
     DeviceIdentity identity, {
     required AuxiliaryCancellation cancellation,
+    String? requestId,
   }) async {
     final result = await _prove(
       identity,
       'turn',
       '/v1/turn/credentials',
       cancellation,
+      extraFields: {'requestId': requestId ?? newTurnRequestId()},
     );
     final expiry = DateTime.tryParse(
       result['expiresAt'] is String ? result['expiresAt'] as String : '',
@@ -287,8 +297,9 @@ final class AuxiliaryServiceClient {
     DeviceIdentity identity,
     String purpose,
     String path,
-    AuxiliaryCancellation cancellation,
-  ) async {
+    AuxiliaryCancellation cancellation, {
+    Map<String, String> extraFields = const {},
+  }) async {
     cancellation.throwIfCancelled();
     final challenge = await transport.post('/v1/aux/challenge', {
       'publicKey': identity.encodedKey,
@@ -323,6 +334,7 @@ final class AuxiliaryServiceClient {
       'publicKey': identity.encodedKey,
       'nonce': nonce,
       'signature': signature,
+      ...extraFields,
     }, cancellation);
     cancellation.throwIfCancelled();
     return result;

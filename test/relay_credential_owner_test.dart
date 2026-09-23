@@ -15,7 +15,9 @@ class _Auxiliary implements AuxiliaryTransport {
   final nonce = base64Url.encode(List<int>.filled(32, 3));
   Completer<void>? holdChallenge;
   int challenges = 0, issued = 0;
+  final requestIds = <String>[];
   bool failOnce = false;
+  bool loseCredentialOnce = false;
   int failChallenges = 0;
   String failureCode = 'unreachable';
 
@@ -37,6 +39,11 @@ class _Auxiliary implements AuxiliaryTransport {
     }
     if (path == '/v1/devices/register') return {'deviceId': identity.id};
     issued++;
+    requestIds.add(body['requestId']!);
+    if (loseCredentialOnce) {
+      loseCredentialOnce = false;
+      throw const AuxiliaryFailure('unreachable');
+    }
     return {
       'expiresAt': DateTime.now()
           .toUtc()
@@ -171,6 +178,17 @@ void main() {
       expect(owner.lastFailure, isNull);
     },
   );
+
+  test('lost credential response retries the same allocation ID', () async {
+    transport.loseCredentialOnce = true;
+    await owner.start();
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    expect(owner.current, isNotNull);
+    expect(transport.requestIds, hasLength(2));
+    expect(transport.requestIds[0], transport.requestIds[1]);
+    await owner.refresh();
+    expect(transport.requestIds.last, isNot(transport.requestIds.first));
+  });
 
   test('long-lived demand recovers after a cooled-down retry burst', () async {
     owner.stop();

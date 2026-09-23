@@ -14,13 +14,15 @@ UTF8("chuanchuan-aux-v1") || 0x00 || UTF8(purpose) || 0x00 || publicKey[32] || n
 | --- | --- | --- |
 | `POST /v1/aux/challenge` | `{"publicKey":"…","purpose":"register"}` | `{"nonce":"…","expiresAt":1800000030}`；`expiresAt` 是 Unix 秒 |
 | `POST /v1/devices/register` | `{"publicKey":"…","nonce":"…","signature":"…"}` | `{"deviceId":"…"}`；ID 为公钥 SHA-256 小写十六进制 |
-| `POST /v1/turn/credentials` | 同上，挑战用途为 `turn` | `{"expiresAt":"2027-01-15T08:05:00Z","iceServers":[{"urls":["turn:…"],"username":"…","credential":"…"}]}` |
+| `POST /v1/turn/credentials` | 同上，挑战用途为 `turn`；新客户端另传 `"requestId":"…"`（16 字节随机值的带填充 Base64URL） | `{"expiresAt":"2027-01-15T08:05:00Z","iceServers":[{"urls":["turn:…"],"username":"…","credential":"…"}]}` |
 
 登记是持有证明与服务访问资格，不建立设备间信任。服务按部署资源策略限制挑战、登记和活跃凭据；无激活码、邀请码或订阅前置。TURN 用户名/密码只用于 ICE relay，不能作为配对秘密或 grant。凭据续取不改变原 grant 类型、时长、截止时刻或方向，且不能让已停止的媒体或控制恢复。
 
 同一设备从新的网络地址重新登记时，必须在新地址取得并签署一次性登记挑战；服务原子更新地址配额归属，目标地址已满则拒绝，原记录不变。同地址重试仍返回相同 `deviceId`；撤销后的同一公钥不能通过重登记恢复资格。地址和登记状态只是服务防滥用材料，不作为对端身份、可达性或授权凭证。
 
 TURN 凭据请求也须来自该设备当前登记的连接地址；新地址即使完成 TURN 持有证明，仍先返回 `not_eligible`，完成该地址的重新登记后才可签发。失败的 TURN 挑战照常一次性消耗；此地址检查只约束服务资源，不延长或授予端到端 grant。客户端每轮获取凭据前重新登记，因此网络地址变化不依赖旧登记自动迁移。
+
+同一次凭据获取或短期重试复用 `requestId`，响应丢失后重新取得一次性挑战再请求时，服务在凭据未过期且设备仍合格的情况下返回原用户名、密码与到期时间，不重复占用活跃配额。正常续取、手动刷新、配置切换使用新的随机 ID。过期凭据不复活；服务可接受缺少 `requestId` 的旧请求，但旧请求无此幂等保证。ID 不是认证材料，也不替代每次新的设备持有证明。
 
 错误体为 `{"error":"code"}`：`invalid_request` 为 400，`invalid_proof`、`not_eligible` 为 403，`capacity_limited` 为 429。TLS 失败或网络不可达由传输层报告，不伪装为普通挑战失败；本地直连不等待此请求。服务当前没有公开目录查询或跨网首次陌生设备短码会合端点；登记响应不能被推断为可见设备、对端在线或远端能力已交付。
 

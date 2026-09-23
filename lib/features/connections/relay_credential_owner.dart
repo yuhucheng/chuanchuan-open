@@ -38,6 +38,7 @@ final class RelayCredentialOwner extends ChangeNotifier {
   Future<void>? _pending;
   bool _needed = false, _stopped = false;
   int _failedBursts = 0;
+  String? _requestId;
   String? lastFailure;
 
   AuxiliaryTurnCredential? get current {
@@ -74,6 +75,7 @@ final class RelayCredentialOwner extends ChangeNotifier {
     if (_stopped || !_needed) return;
     _needed = false;
     _failedBursts = 0;
+    _requestId = null;
     _cancellation?.cancel();
     _renewal?.cancel();
     _expiry?.cancel();
@@ -95,6 +97,7 @@ final class RelayCredentialOwner extends ChangeNotifier {
     if (!_needed || _stopped) return Future.value();
     _renewal?.cancel();
     _failedBursts = 0;
+    _requestId = null;
     lastFailure = null;
     notifyListeners();
     final previous = _pending;
@@ -114,9 +117,10 @@ final class RelayCredentialOwner extends ChangeNotifier {
     final existing = _pending;
     if (existing != null) return existing;
     final cancellation = AuxiliaryCancellation();
+    final requestId = _requestId ??= AuxiliaryServiceClient.newTurnRequestId();
     _cancellation = cancellation;
     late final Future<void> pending;
-    pending = _fetch(cancellation, retryIndex).whenComplete(() {
+    pending = _fetch(cancellation, retryIndex, requestId).whenComplete(() {
       if (identical(_pending, pending)) _pending = null;
       if (identical(_cancellation, cancellation)) _cancellation = null;
     });
@@ -127,6 +131,7 @@ final class RelayCredentialOwner extends ChangeNotifier {
   Future<void> _fetch(
     AuxiliaryCancellation cancellation,
     int retryIndex,
+    String requestId,
   ) async {
     try {
       final identity = await _identity();
@@ -135,6 +140,7 @@ final class RelayCredentialOwner extends ChangeNotifier {
       final lease = await _service.issueTurn(
         identity,
         cancellation: cancellation,
+        requestId: requestId,
       );
       cancellation.throwIfCancelled();
       if (_stopped || !_needed) return;
@@ -143,6 +149,7 @@ final class RelayCredentialOwner extends ChangeNotifier {
         throw const AuxiliaryFailure('expired_credential');
       }
       _lease = lease;
+      if (_requestId == requestId) _requestId = null;
       _failedBursts = 0;
       lastFailure = null;
       _renewal?.cancel();
@@ -198,6 +205,7 @@ final class RelayCredentialOwner extends ChangeNotifier {
     if (_stopped) return;
     _stopped = true;
     _needed = false;
+    _requestId = null;
     _cancellation?.cancel();
     _renewal?.cancel();
     _expiry?.cancel();
