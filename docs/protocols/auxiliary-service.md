@@ -20,6 +20,8 @@ UTF8("chuanchuan-aux-v1") || 0x00 || UTF8(purpose) || 0x00 || publicKey[32] || n
 
 同一设备从新的网络地址重新登记时，必须在新地址取得并签署一次性登记挑战；服务原子更新地址配额归属，目标地址已满则拒绝，原记录不变。同地址重试仍返回相同 `deviceId`；撤销后的同一公钥不能通过重登记恢复资格。地址和登记状态只是服务防滥用材料，不作为对端身份、可达性或授权凭证。
 
+TURN 凭据请求也须来自该设备当前登记的连接地址；新地址即使完成 TURN 持有证明，仍先返回 `not_eligible`，完成该地址的重新登记后才可签发。失败的 TURN 挑战照常一次性消耗；此地址检查只约束服务资源，不延长或授予端到端 grant。客户端每轮获取凭据前重新登记，因此网络地址变化不依赖旧登记自动迁移。
+
 错误体为 `{"error":"code"}`：`invalid_request` 为 400，`invalid_proof`、`not_eligible` 为 403，`capacity_limited` 为 429。TLS 失败或网络不可达由传输层报告，不伪装为普通挑战失败；本地直连不等待此请求。服务当前没有公开目录查询或跨网信令端点，客户端不能将登记响应推断为可见设备、对端在线或远端能力已交付。
 
 公开连接包现提供 `AuxiliaryServiceClient`、`HttpsAuxiliaryTransport` 和 `AuxiliaryCancellation`：用现有 `DeviceIdentity` 签发上述持有证明，校验登记 ID 和凭据形状；取消会立即结束 HTTPS 建连、等待响应与读响应的调用方等待，并关闭迟到建立的请求，旧结果不得作用于新代次。HTTPS 传输使用平台信任库，不支持 HTTP 服务地址。`AuxiliaryTurnCredential` 的字符串表示会隐藏密码，调用方仍须限制其他日志和持久化。该接口没有读取或续期端到端 grant。
