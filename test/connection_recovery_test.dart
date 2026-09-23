@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:share_hub_connection/share_hub_connection.dart';
 import 'package:share_hub_media_api/share_hub_media_api.dart';
 import 'package:share_hub_open/features/connections/connection_controller.dart';
+import 'package:share_hub_open/features/connections/connection_recovery.dart';
 
 class RecoveryPlatform implements ConnectionPlatform {
   RecoveryPlatform(this.key);
@@ -386,4 +387,67 @@ void main() {
       expect(oldA.grant!.generation, 2);
     },
   );
+
+  test('authenticated recovery rejected by admission revokes the old grant', () async {
+    final receiver = await DeviceIdentity.fromSeed(List.filled(32, 103));
+    final initiator = await DeviceIdentity.fromSeed(List.filled(32, 104));
+    final accepted = <TrustedConnection>[];
+    final host = PairingHost(
+      identity: receiver,
+      clock: () async => pa.time,
+      protocolVersion: 2,
+      enableRecovery: true,
+      onConnection: accepted.add,
+    );
+    final route = RecoveryProxy();
+    TrustedConnection? original, candidate;
+    try {
+      await host.open(address: InternetAddress.loopbackIPv4);
+      await route.start(host.port!);
+      original =
+          await PairingAttempt(
+            identity: initiator,
+            clock: () async => pa.time,
+            protocolVersion: 2,
+            enableRecovery: true,
+          ).connect(
+            '127.0.0.1',
+            route.server.port,
+            host.offer!.code,
+            expectedPeerKey: receiver.encodedKey,
+          );
+      route.cut();
+      expect(await original.whenClosed, 'transport_suspended');
+      expect(await accepted.single.whenClosed, 'transport_suspended');
+      var failures = 0;
+      final recovery = ConnectionRecovery(
+        previous: original,
+        route: (host: '127.0.0.1', port: route.server.port),
+        clock: () async => pa.time,
+        verifyIdentity: () async {},
+        onRecovered: (connection) {
+          candidate = connection;
+          return false; // Real proof succeeded, but process admission refused.
+        },
+        onFailed: () => failures++,
+        window: const Duration(seconds: 2),
+        backoff: const [Duration.zero],
+        attemptTimeout: const Duration(seconds: 1),
+      );
+      await recovery.run().timeout(const Duration(seconds: 4));
+      expect(candidate, isNotNull);
+      expect(candidate!.isClosed, isTrue);
+      expect(original.grant!.phase, GrantPhase.revoked);
+      expect(failures, 1);
+      expect(recovery.cancelled, isTrue);
+    } finally {
+      candidate?.close();
+      original?.close();
+      for (final connection in accepted) {
+        connection.close();
+      }
+      await route.close();
+      await host.close();
+    }
+  });
 }

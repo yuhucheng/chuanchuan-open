@@ -112,8 +112,18 @@ class ConnectionRecovery {
           await verifyIdentity();
           await _checkTime();
           _attempt = null;
-          if (!onRecovered(recovered)) {
+          bool accepted;
+          try {
+            accepted = onRecovered(recovered);
+          } catch (_) {
+            accepted = false;
+          }
+          if (!accepted) {
             recovered.close('admission_rejected');
+            // Authentication alone is not admission. A rejected candidate
+            // must not leave the original grant suspended with no retry owner.
+            _failed();
+            return;
           }
           cancel(revoke: false);
           return;
