@@ -634,4 +634,18 @@ final class GrantRegistry {
       throw const SessionFailure('unknown_local_grant');
     }
   }
+
+  /// Hands the exact authenticated endpoint to a trusted native provider
+  /// adapter. The callback is synchronous: callers must not return a Future or
+  /// await between the final permit check and importing native authority.
+  /// Display metadata or a separately constructed binding cannot substitute
+  /// for [message] or this registry membership check.
+  Future<void> withVerifiedEndpoint(
+    SessionAuthorization message,
+    void Function(GrantEndpoint endpoint) use,
+  ) async {
+    await verify(message);
+    message.requireCurrent();
+    use(message._owner);
+  }
 }

@@ -120,6 +120,66 @@ void main() {
     },
   );
   test(
+    'native adapter receives only the exact registered live endpoint',
+    () async {
+      await resume();
+      final registry = GrantRegistry()..register(a);
+      final request = await a.authorizeLocal(
+        SessionOperation.watch,
+        'native-adapter',
+        '',
+      );
+      GrantEndpoint? seen;
+      await registry.withVerifiedEndpoint(request, (endpoint) {
+        request.requireCurrent();
+        seen = endpoint;
+      });
+      expect(seen, same(a));
+      expect(seen?.binding, same(binding));
+
+    // Identical public binding bytes are insufficient: membership is by the
+    // authenticated endpoint instance that minted this sealed request.
+    final foreign = GrantRegistry()
+      ..register(endpoint(GrantRole.initiator));
+      await expectLater(
+        foreign.withVerifiedEndpoint(request, (_) => fail('foreign import')),
+        throwsA(isA<SessionFailure>()),
+      );
+      registry.revoke(a);
+      await expectLater(
+        registry.withVerifiedEndpoint(request, (_) => fail('revoked import')),
+        throwsA(isA<SessionFailure>()),
+      );
+    },
+  );
+  test(
+    'native endpoint handoff rejects revocation during clock verification',
+    () async {
+      Completer<int>? pending;
+      a = endpoint(
+        GrantRole.initiator,
+        clock: () => pending?.future ?? Future.value(now),
+      );
+      await resume();
+      final request = await a.authorizeLocal(
+        SessionOperation.watch,
+        'late-native-adapter',
+        '',
+      );
+      final registry = GrantRegistry()..register(a);
+      pending = Completer<int>();
+      var imported = false;
+      final handoff = registry.withVerifiedEndpoint(request, (_) {
+        imported = true;
+      });
+      final rejected = expectLater(handoff, throwsA(isA<SessionFailure>()));
+      a.suspend();
+      pending.complete(now);
+      await rejected;
+      expect(imported, false);
+    },
+  );
+  test(
     'signal cannot be used as a start request or in another operation',
     () async {
       await resume();
