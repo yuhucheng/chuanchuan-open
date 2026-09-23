@@ -4,8 +4,10 @@ import 'dart:ui' show AppExitResponse;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:share_hub_media_api/share_hub_media_api.dart';
+import 'package:share_hub_media_sdk/share_hub_media_sdk.dart' as sdk;
 
 import '../features/connections/connection_controller.dart';
+import '../features/connections/auxiliary_route_controller.dart';
 import 'field/appearance.dart';
 import 'field/field_shell.dart';
 import '../features/desktop/desktop_lifecycle.dart';
@@ -32,6 +34,10 @@ class ShareHubApp extends StatefulWidget {
     this.receiveAccess,
     this.sourceAccess,
     this.remoteMedia,
+    this.currentRelayLease,
+    this.auxiliaryRoutes,
+    this.setAuxiliaryNeeded,
+    this.stopAuxiliary,
     this.controlClipboardPreference,
     this.targetPlatform,
     this.appTitle = 'Share Hub',
@@ -45,6 +51,10 @@ class ShareHubApp extends StatefulWidget {
   /// Remote send/watch implementation. Defaults to the media SDK adapter; tests
   /// inject a fake so no capture device or peer is needed.
   final RemotePictureFactory? remoteMedia;
+  final sdk.RelayIceLease? Function()? currentRelayLease;
+  final AuxiliaryRouteController? auxiliaryRoutes;
+  final void Function(bool)? setAuxiliaryNeeded;
+  final void Function()? stopAuxiliary;
   final ControlClipboardPreference? controlClipboardPreference;
   final TargetPlatform? targetPlatform;
   final String appTitle;
@@ -65,6 +75,7 @@ class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
   late final _devices = DeviceController(_platform);
   late final _connections = ConnectionController(
     MethodChannelConnectionPlatform(),
+    auxiliaryRoutes: widget.auxiliaryRoutes,
   );
   // Both sides consult the other so the single picture budget is respected in
   // either direction. The closures are lazy, so a late field is only read after
@@ -77,7 +88,13 @@ class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
   late final RemoteSessionController _remote = RemoteSessionController(
     connections: _connections,
     platform: _platform,
-    factory: widget.remoteMedia ?? RtcRemotePictureFactory(),
+    factory:
+        widget.remoteMedia ??
+        (widget.currentRelayLease == null
+            ? RtcRemotePictureFactory()
+            : RtcRemotePictureFactory.withRelayLease(
+                widget.currentRelayLease!,
+              )),
     listSources: _engine.sources,
     localCaptureActive: () => _preview.occupiesPicture,
   );
@@ -94,6 +111,7 @@ class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
     preview: _preview,
     transfers: _transfers,
     closeNetworkTransfers: _networkTransfers.close,
+    stopAuxiliary: widget.stopAuxiliary,
     controlActive: () =>
         _remote.occupied && _remote.operation == SessionOperation.control,
     controlChanges: _remote,
@@ -111,10 +129,19 @@ class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _connections.addListener(_connectionChanged);
+    _connectionChanged();
     unawaited(_appearance.load());
     unawaited(_clipboardPreference.load());
     unawaited(_devices.initialize());
     unawaited(_desktop.initialize());
+  }
+
+  void _connectionChanged() {
+    widget.setAuxiliaryNeeded?.call(
+      _connections.busy ||
+          _connections.sessions.any((session) => !session.isClosed),
+    );
   }
 
   @override
@@ -133,6 +160,8 @@ class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _connections.removeListener(_connectionChanged);
+    widget.setAuxiliaryNeeded?.call(false);
     _appearance.dispose();
     if (widget.controlClipboardPreference == null) {
       _clipboardPreference.dispose();
@@ -143,6 +172,7 @@ class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
     _preview.dispose();
     _remote.dispose();
     _networkTransfers.dispose();
+    widget.stopAuxiliary?.call();
     _transfers.dispose();
     super.dispose();
   }
@@ -191,6 +221,7 @@ class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
           desktop: _desktop,
           appearance: _appearance,
           clipboardPreference: _clipboardPreference,
+          auxiliaryRoutes: widget.auxiliaryRoutes,
           targetPlatform: widget.targetPlatform ?? defaultTargetPlatform,
         ),
       ),

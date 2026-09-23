@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:share_hub_session_api/share_hub_session_api.dart';
 
+import 'auxiliary_service.dart';
 import 'channel.dart';
 import 'identity.dart';
 import 'recovery_protocol.dart';
@@ -129,12 +130,12 @@ final class ConnectionRecoveryService {
   /// sealed wire. Opening the wire does not grant authority or replace owner.
   Future<void> reconnectVia(
     TrustedConnection owner,
-    Future<ConnectionWire> Function() open,
+    Future<ConnectionWire> Function(AuxiliaryCancellation) open,
   ) => _reconnect(owner, open);
 
   Future<void> _reconnect(
     TrustedConnection owner,
-    Future<ConnectionWire> Function()? open,
+    Future<ConnectionWire> Function(AuxiliaryCancellation)? open,
   ) {
     final record = _records[owner.grant?.binding.encodedId];
     if (record == null ||
@@ -161,7 +162,7 @@ final class ConnectionRecoveryService {
   /// identifier must still select this exact registered owner.
   Future<void> acceptVia(
     TrustedConnection owner,
-    Future<ConnectionWire> Function() open,
+    Future<ConnectionWire> Function(AuxiliaryCancellation) open,
   ) async {
     final record = _records[owner.grant?.binding.encodedId];
     if (record == null ||
@@ -173,7 +174,7 @@ final class ConnectionRecoveryService {
     final candidate = _admit()..record = record;
     try {
       candidate.wire = await candidate.step(() async {
-        final wire = await open();
+        final wire = await open(candidate.openingCancellation);
         if (!candidate.current) {
           wire.close();
           throw const ConnectionFailure('recovery_unavailable');
@@ -194,14 +195,14 @@ final class ConnectionRecoveryService {
 
   Future<void> _dial(
     _Candidate candidate, {
-    Future<ConnectionWire> Function()? open,
+    Future<ConnectionWire> Function(AuxiliaryCancellation)? open,
   }) async {
     try {
       final record = candidate.record!;
       await _audit(candidate);
       candidate.wire = await candidate.step(() async {
         if (open != null) {
-          final wire = await open();
+          final wire = await open(candidate.openingCancellation);
           if (!candidate.current) {
             wire.close();
             throw const ConnectionFailure('recovery_unavailable');
@@ -433,6 +434,7 @@ final class _Candidate {
   final ConnectionRecoveryService service;
   late final Timer _timeout;
   final _stopped = Completer<void>();
+  final openingCancellation = AuxiliaryCancellation();
   bool _alive = true;
   _Record? record;
   ConnectionWire? wire;
@@ -468,6 +470,7 @@ final class _Candidate {
   void cancel() {
     if (!_alive) return;
     finish();
+    openingCancellation.cancel();
     offer?.cancel();
     challenge?.cancel();
     material?.cancel();

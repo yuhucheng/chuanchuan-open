@@ -18,6 +18,7 @@ class DesktopLifecycle extends ChangeNotifier {
     required this.preview,
     required this.transfers,
     this.closeNetworkTransfers,
+    this.stopAuxiliary,
     this.controlActive,
     this.controlChanges,
     this.stopControl,
@@ -30,6 +31,7 @@ class DesktopLifecycle extends ChangeNotifier {
   final PreviewController preview;
   final TransferQueue transfers;
   final Future<void> Function()? closeNetworkTransfers;
+  final void Function()? stopAuxiliary;
   final bool Function()? controlActive;
   final Listenable? controlChanges;
   final Future<void> Function()? stopControl;
@@ -139,6 +141,7 @@ class DesktopLifecycle extends ChangeNotifier {
     try {
       // Revoke authorization synchronously before any native cleanup await.
       final disconnect = connections.disconnectAll();
+      stopAuxiliary?.call();
       final remoteStop = stopRemotePicture?.call();
       await _exitStep(
         'stop-capture+disconnect+remote',

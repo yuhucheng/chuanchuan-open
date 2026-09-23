@@ -85,6 +85,9 @@ abstract interface class RemotePictureFactory {
 class RtcRemotePictureFactory implements RemotePictureFactory {
   RtcRemotePictureFactory([sdk.RtcRemoteMediaFactory? media])
     : _media = media ?? sdk.RtcRemoteMediaFactory();
+  RtcRemotePictureFactory.withRelayLease(
+    sdk.RelayIceLease? Function() currentRelayLease,
+  ) : _media = sdk.RtcRemoteMediaFactory(currentRelayLease: currentRelayLease);
 
   final sdk.RtcRemoteMediaFactory _media;
 

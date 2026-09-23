@@ -6,6 +6,7 @@ import 'package:share_hub_media_api/share_hub_media_api.dart';
 
 import '../../features/connections/connection_controller.dart';
 import '../../features/connections/connection_panel.dart';
+import '../../features/connections/auxiliary_route_controller.dart';
 import '../../features/desktop/desktop_lifecycle.dart';
 import '../../features/devices/device_controller.dart';
 import '../../features/devices/device_directory.dart';
@@ -21,6 +22,7 @@ import '../../features/transfers/native_file_drop.dart';
 import '../../platform/client_platform.dart';
 import '../remote/remote_panel.dart';
 import 'appearance.dart';
+import 'auxiliary_route_settings.dart';
 import 'brand_mark.dart';
 import 'device_field.dart';
 import 'issue_banner.dart';
@@ -36,6 +38,7 @@ class FieldShell extends StatefulWidget {
     this.networkTransfers,
     required this.desktop,
     required this.appearance,
+    this.auxiliaryRoutes,
     this.clipboardPreference,
     required this.targetPlatform,
   });
@@ -47,6 +50,7 @@ class FieldShell extends StatefulWidget {
   final NetworkTransfers? networkTransfers;
   final DesktopLifecycle desktop;
   final Appearance appearance;
+  final AuxiliaryRouteController? auxiliaryRoutes;
   final ControlClipboardPreference? clipboardPreference;
   final TargetPlatform targetPlatform;
   @override
@@ -818,6 +822,10 @@ class _FieldShellState extends State<FieldShell> {
             child: Text(widget.appearance.retryLabel),
           ),
         ),
+      ],
+      if (widget.auxiliaryRoutes case final routes?) ...[
+        const SizedBox(height: 24),
+        AuxiliaryRouteSettings(routes: routes),
       ],
       SwitchListTile(
         title: const Text('被控提示'),

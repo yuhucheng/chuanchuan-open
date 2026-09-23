@@ -81,8 +81,8 @@ void main() {
       await server.close();
       pair.wires.addAll([outgoing, incoming]);
       await Future.wait([
-        pair.left.reconnectVia(pair.a, () async => outgoing),
-        pair.right.acceptVia(pair.b, () async => incoming),
+        pair.left.reconnectVia(pair.a, (_) async => outgoing),
+        pair.right.acceptVia(pair.b, (_) async => incoming),
       ]).timeout(const Duration(seconds: 2));
       expect(pair.a.grant, same(original));
       expect(pair.a.grant!.generation, 2);
@@ -124,8 +124,8 @@ void main() {
         generation: 2,
       );
       await Future.wait([
-        pair.left.reconnectVia(pair.a, () => pair.a.openRelayWire(ca)),
-        pair.right.acceptVia(pair.b, () => pair.b.openRelayWire(cb)),
+        pair.left.reconnectVia(pair.a, (_) => pair.a.openRelayWire(ca)),
+        pair.right.acceptVia(pair.b, (_) => pair.b.openRelayWire(cb)),
       ]).timeout(const Duration(seconds: 5));
       expect(pair.a.grant, same(grant));
       expect(pair.a.phase, ConnectionPhase.active);
@@ -175,8 +175,13 @@ void main() {
     pair = await _Pair.create(timeout: const Duration(milliseconds: 150));
     await pair.lose();
     final gate = Completer<ConnectionWire>();
-    final attempted = pair.left.reconnectVia(pair.a, () => gate.future);
+    AuxiliaryCancellation? opening;
+    final attempted = pair.left.reconnectVia(pair.a, (cancellation) {
+      opening = cancellation;
+      return gate.future;
+    });
     await expectLater(attempted, throwsA(isA<ConnectionFailure>()));
+    expect(opening!.isCancelled, isTrue);
     final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
     final accepted = server.first;
     final late = WireChannel(await Socket.connect('127.0.0.1', server.port));
@@ -189,6 +194,26 @@ void main() {
     expect(pair.a.phase, ConnectionPhase.suspended);
     expect(pair.a.grant!.phase, GrantPhase.suspended);
   });
+
+  test(
+    'receiver waiting for relay room is cancelled at candidate deadline',
+    () async {
+      await pair.close();
+      pair = await _Pair.create(timeout: const Duration(milliseconds: 150));
+      await pair.lose();
+      final gate = Completer<ConnectionWire>();
+      AuxiliaryCancellation? opening;
+      final attempted = pair.right.acceptVia(pair.b, (cancellation) {
+        opening = cancellation;
+        return gate.future;
+      });
+      await expectLater(attempted, throwsA(isA<ConnectionFailure>()));
+      expect(opening!.isCancelled, isTrue);
+      expect(pair.b.phase, ConnectionPhase.suspended);
+      expect(pair.b.grant!.phase, GrantPhase.suspended);
+      expect(pair.right.pendingCount, 0);
+    },
+  );
 
   test(
     'forged and stalled proofs cannot suspend an active original grant',

@@ -6,6 +6,8 @@ import 'package:flutter/services.dart';
 import 'package:share_hub_connection/share_hub_connection.dart';
 import 'package:share_hub_media_api/share_hub_media_api.dart';
 
+import 'auxiliary_route_controller.dart';
+
 /// Identity, a continuous clock and the discovery advertisement come from the
 /// platform channel. macOS and Windows implement the same channel, so this is
 /// not a per-platform implementation in the product sense.
@@ -51,8 +53,11 @@ class ConnectionNotice {
 }
 
 class ConnectionController extends ChangeNotifier {
-  ConnectionController(this.platform);
+  ConnectionController(this.platform, {this.auxiliaryRoutes}) {
+    auxiliaryRoutes?.addListener(_auxiliaryChanged);
+  }
   final ConnectionPlatform platform;
+  final AuxiliaryRouteController? auxiliaryRoutes;
 
   /// Process-local authority shared with SDK resource owners. Only completed
   /// authenticated connections may register grants; never restore from storage.
@@ -371,7 +376,9 @@ class ConnectionController extends ChangeNotifier {
       !_disposed &&
       !_disconnecting &&
       !connection.isClosed &&
-      connection.grant?.role == GrantRole.initiator &&
+      (connection.grant?.role == GrantRole.initiator ||
+          (connection.grant?.role == GrantRole.receiver &&
+              (auxiliaryRoutes?.signalingAvailable ?? false))) &&
       _recovery != null &&
       identical(_recoveries[connection], retry);
 
@@ -394,7 +401,26 @@ class ConnectionController extends ChangeNotifier {
         if (!_canRecover(connection, retry) || connection.isConnected) return;
         retry.running = true;
         try {
-          await _recovery!.reconnect(connection);
+          if (connection.grant?.role == GrantRole.receiver) {
+            await _recovery!.acceptVia(
+              connection,
+              (cancellation) => _openSignalWire(connection, cancellation),
+            );
+          } else {
+            try {
+              await _recovery!.reconnect(connection);
+            } catch (_) {
+              if (_canRecover(connection, retry) &&
+                  !connection.isConnected &&
+                  retry.attempts >= 3 &&
+                  (auxiliaryRoutes?.signalingAvailable ?? false)) {
+                await _recovery!.reconnectVia(
+                  connection,
+                  (cancellation) => _openSignalWire(connection, cancellation),
+                );
+              }
+            }
+          }
         } catch (_) {
           /* Original owner enforces terminal clock/revocation policy. */
         } finally {
@@ -405,9 +431,35 @@ class ConnectionController extends ChangeNotifier {
     );
   }
 
+  void _auxiliaryChanged() {
+    if (_disposed || _disconnecting) return;
+    for (final entry in _recoveries.entries) {
+      if (entry.key.phase == ConnectionPhase.suspended) {
+        _scheduleRecovery(entry.key, entry.value);
+      }
+    }
+  }
+
+  Future<ConnectionWire> _openSignalWire(
+    TrustedConnection connection,
+    AuxiliaryCancellation cancellation,
+  ) async {
+    final routes = auxiliaryRoutes;
+    if (routes == null) throw const ConnectionFailure('recovery_unavailable');
+    try {
+      final identity = await _loadIdentity();
+      cancellation.throwIfCancelled();
+      return await routes.openSignalWire(connection, identity, cancellation);
+    } catch (_) {
+      cancellation.cancel();
+      rethrow;
+    }
+  }
+
   @override
   void dispose() {
     _disposed = true;
+    auxiliaryRoutes?.removeListener(_auxiliaryChanged);
     unawaited(_recovery?.close() ?? Future.value());
     _recovery = null;
     for (final retry in _recoveries.values) {

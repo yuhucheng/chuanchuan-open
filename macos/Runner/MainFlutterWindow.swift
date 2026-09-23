@@ -121,6 +121,18 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler, NSDraggingDestination {
         }
         UserDefaults.standard.set(enabled, forKey: "controlClipboardSyncEnabled")
         result(nil)
+      case "auxiliary.read":
+        result(UserDefaults.standard.dictionary(forKey: "auxiliaryRoute") ??
+          ["mode": "official", "origin": ""])
+      case "auxiliary.write":
+        guard let route = call.arguments as? [String: String],
+              let mode = route["mode"], ["official", "custom"].contains(mode),
+              let origin = route["origin"], origin.utf8.count <= 2048,
+              !origin.contains("\n"), !origin.contains("\0") else {
+          result(FlutterError(code: "invalid_route", message: "辅助服务配置无效", details: nil)); return
+        }
+        UserDefaults.standard.set(["mode": mode, "origin": origin], forKey: "auxiliaryRoute")
+        result(nil)
       case "exit":
         // Dart has already awaited the complete cleanup transaction. Do not
         // request it again from AppKit's nested termination loop.

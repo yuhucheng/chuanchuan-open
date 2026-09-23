@@ -36,6 +36,16 @@ std::string Utf8(const std::wstring& text) {
       result.data(), size, nullptr, nullptr);
   return result;
 }
+std::wstring Wide(const std::string& text) {
+  if (text.empty()) return {};
+  const int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+      text.data(), static_cast<int>(text.size()), nullptr, 0);
+  if (size <= 0) return {};
+  std::wstring result(static_cast<size_t>(size), L'\0');
+  if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(),
+          static_cast<int>(text.size()), result.data(), size) <= 0) return {};
+  return result;
+}
 }
 
 #include "flutter/generated_plugin_registrant.h"
@@ -157,6 +167,52 @@ bool FlutterWindow::OnCreate() {
       RegCloseKey(key);
       if (saved != ERROR_SUCCESS) {
         result->Error("preferences_failed", "Cannot save clipboard preference"); return;
+      }
+      result->Success();
+    } else if (call.method_name() == "auxiliary.read") {
+      wchar_t stored[4096]{};
+      DWORD bytes = sizeof(stored);
+      const auto read = RegGetValueW(HKEY_CURRENT_USER,
+          L"Software\\ShareHub\\Client", L"AuxiliaryRoute", RRF_RT_REG_SZ,
+          nullptr, stored, &bytes);
+      if (read == ERROR_FILE_NOT_FOUND) {
+        result->Success(Value(Map{{Value("mode"), Value("official")},
+                                   {Value("origin"), Value("")}}));
+        return;
+      }
+      if (read != ERROR_SUCCESS) {
+        result->Error("preferences_failed", "Cannot read auxiliary route"); return;
+      }
+      const std::wstring value(stored);
+      const auto separator = value.find(L'\n');
+      if (separator == std::wstring::npos) {
+        result->Error("preferences_failed", "Invalid auxiliary route"); return;
+      }
+      result->Success(Value(Map{{Value("mode"), Value(Utf8(value.substr(0, separator)))},
+                                 {Value("origin"), Value(Utf8(value.substr(separator + 1)))}}));
+    } else if (call.method_name() == "auxiliary.write") {
+      const auto* mode = StringField(call.arguments(), "mode");
+      const auto* origin = StringField(call.arguments(), "origin");
+      if (!mode || (*mode != "official" && *mode != "custom") ||
+          !origin || origin->size() > 2048 || origin->find('\n') != std::string::npos ||
+          origin->find('\0') != std::string::npos) {
+        result->Error("invalid_route", "Invalid auxiliary route"); return;
+      }
+      const auto value = Wide(*mode + "\n" + *origin);
+      if (value.empty()) {
+        result->Error("invalid_route", "Invalid auxiliary route encoding"); return;
+      }
+      HKEY key = nullptr;
+      if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\ShareHub\\Client", 0,
+              nullptr, 0, KEY_SET_VALUE, nullptr, &key, nullptr) != ERROR_SUCCESS) {
+        result->Error("preferences_failed", "Cannot save auxiliary route"); return;
+      }
+      const auto saved = RegSetValueExW(key, L"AuxiliaryRoute", 0, REG_SZ,
+          reinterpret_cast<const BYTE*>(value.c_str()),
+          static_cast<DWORD>((value.size() + 1) * sizeof(wchar_t)));
+      RegCloseKey(key);
+      if (saved != ERROR_SUCCESS) {
+        result->Error("preferences_failed", "Cannot save auxiliary route"); return;
       }
       result->Success();
     } else if (call.method_name() == "exit") {
