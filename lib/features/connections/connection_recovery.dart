@@ -15,6 +15,7 @@ class ConnectionRecovery {
   ConnectionRecovery({
     required this.previous,
     required this.route,
+    this.alternateRoute,
     required this.clock,
     required this.verifyIdentity,
     required this.onRecovered,
@@ -27,6 +28,7 @@ class ConnectionRecovery {
   });
   final TrustedConnection previous;
   final RecoveryRoute? route;
+  final RecoveryRoute? alternateRoute;
   final Future<int> Function() clock;
   final Future<void> Function() verifyIdentity;
   final bool Function(TrustedConnection) onRecovered;
@@ -170,7 +172,9 @@ class ConnectionRecovery {
         if (!_cancelled) _failed();
         return;
       }
-      for (final delay in backoff) {
+      for (var index = 0; index < backoff.length; index++) {
+        final delay = backoff[index];
+        final candidate = index == 1 ? (alternateRoute ?? route!) : route!;
         await _wait(delay);
         _current();
         await _checkTime();
@@ -182,7 +186,7 @@ class ConnectionRecovery {
         );
         TrustedConnection? recovered;
         try {
-          recovered = await attempt.connect(route!.host, route!.port);
+          recovered = await attempt.connect(candidate.host, candidate.port);
           await verifyIdentity();
           await _checkTime();
           _attempt = null;

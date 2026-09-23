@@ -195,8 +195,9 @@ final class AuxiliaryRouteController extends ChangeNotifier {
   Future<ConnectionWire> openSignalWire(
     TrustedConnection previous,
     DeviceIdentity device,
-    AuxiliaryCancellation cancellation,
-  ) async {
+    AuxiliaryCancellation cancellation, {
+    void Function(String address)? onPeerAddress,
+  }) async {
     final uri = _selectedUri;
     if (_stopped || !_loaded || uri == null) {
       throw const AuxiliaryFailure('route_unavailable');
@@ -221,6 +222,16 @@ final class AuxiliaryRouteController extends ChangeNotifier {
             generation: grant.generation + 1,
             cancellation: cancellation,
           );
+      await channel.awaitReady();
+      try {
+        final address = await channel.peerAddress();
+        if (!_stopped && revision == _revision && !owner.closed) {
+          onPeerAddress?.call(address);
+        }
+      } on AuxiliaryFailure {
+        // Older custom services may relay without the room-scoped address
+        // hint. The authenticated relay remains a valid recovery path.
+      }
       final wire = owner.wire = await previous.openRelayWire(channel);
       if (_stopped || revision != _revision || owner.closed) {
         throw const AuxiliaryFailure('cancelled');

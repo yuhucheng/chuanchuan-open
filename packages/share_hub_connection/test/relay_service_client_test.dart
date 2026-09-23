@@ -93,6 +93,11 @@ final class _RelayTransport implements AuxiliaryTransport {
         'wire': pending.isEmpty ? '' : pending.removeAt(0),
       };
     }
+    if (path == '/v1/signal/peer') {
+      final sender = joined[body['token']];
+      final peer = identities.singleWhere((item) => item.encodedKey != sender);
+      return {'publicKey': peer.encodedKey, 'address': '198.51.100.2'};
+    }
     if (path == '/v1/signal/leave') {
       joined.clear();
       queue.clear();
@@ -138,6 +143,8 @@ void main() {
         bob,
         cancellation: AuxiliaryCancellation(),
       );
+      await ca.awaitReady();
+      expect(await ca.peerAddress(), '198.51.100.2');
       final local = await a.authorizeLocal(
         SessionOperation.watch,
         'watch-1',

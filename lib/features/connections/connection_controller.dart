@@ -70,6 +70,7 @@ class ConnectionController extends ChangeNotifier {
   final AuxiliaryRouteController? auxiliaryRoutes;
   final _recoveries = <GrantEndpoint, ConnectionRecovery>{};
   final _routes = <GrantEndpoint, RecoveryRoute>{};
+  final _alternateRoutes = <GrantEndpoint, RecoveryRoute>{};
   final _pendingRecoveries = <Future<void>>{};
   final _transportClosures = <Future<void>>{};
   int get recoveringCount => _recoveries.length;
@@ -456,6 +457,7 @@ class ConnectionController extends ChangeNotifier {
         }
         grants.revoke(grant);
         _routes.remove(grant);
+        _alternateRoutes.remove(grant);
         if (!_disposed) {
           _notice = reason == 'revoked' || reason == 'cancelled'
               ? const ConnectionNotice.status('连接已断开；再次连接需输入有效短接码。')
@@ -517,10 +519,14 @@ class ConnectionController extends ChangeNotifier {
 
   void _beginRecovery(TrustedConnection previous) {
     final grant = previous.grant!;
+    String? relayPeerAddress;
     late ConnectionRecovery recovery;
     recovery = ConnectionRecovery(
       previous: previous,
       route: grant.role == GrantRole.initiator ? _routes[grant] : null,
+      alternateRoute: grant.role == GrantRole.initiator
+          ? _alternateRoutes[grant]
+          : null,
       clock: platform.now,
       verifyIdentity: _verifyRecoveryIdentity,
       window: recoveryWindow,
@@ -537,6 +543,7 @@ class ConnectionController extends ChangeNotifier {
                 previous,
                 device,
                 cancellation,
+                onPeerAddress: (address) => relayPeerAddress = address,
               );
             },
       requireAdmission: () {
@@ -551,6 +558,12 @@ class ConnectionController extends ChangeNotifier {
         if (grant.role == GrantRole.receiver && !accepting) return false;
         final accepted = _track(connection);
         if (accepted) {
+          final route = _routes[grant];
+          if (relayPeerAddress case final address? when route != null) {
+            // Preserve the local route first; the observed address may be a
+            // NAT address that does not accept a direct connection.
+            _alternateRoutes[grant] = (host: address, port: route.port);
+          }
           _notice = const ConnectionNotice.status('连接已认证恢复，原授权截止时间不变。');
           _emit();
         }
@@ -560,6 +573,7 @@ class ConnectionController extends ChangeNotifier {
         if (!identical(_recoveries[grant], recovery)) return;
         _recoveries.remove(grant);
         _routes.remove(grant);
+        _alternateRoutes.remove(grant);
         grants.revoke(grant);
         if (!_disposed && !_disconnecting && !_shutdownRequested) {
           _notice = const ConnectionNotice.problem('连接恢复未完成，请重新输入短接码连接。');
@@ -585,6 +599,7 @@ class ConnectionController extends ChangeNotifier {
     final recovery = _recoveries.remove(grant);
     recovery?.cancel();
     _routes.remove(grant);
+    _alternateRoutes.remove(grant);
     grants.revoke(grant);
     for (final connection
         in _sessions.where((s) => identical(s.grant, grant)).toList()) {
@@ -599,6 +614,7 @@ class ConnectionController extends ChangeNotifier {
     _recoveries.clear();
     for (final recovery in pending) {
       _routes.remove(recovery.previous.grant);
+      _alternateRoutes.remove(recovery.previous.grant);
       recovery.cancel();
       grants.revoke(recovery.previous.grant!);
     }

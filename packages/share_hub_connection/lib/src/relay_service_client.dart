@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:share_hub_session_api/share_hub_session_api.dart';
 
@@ -154,6 +155,34 @@ final class RelaySignalChannel {
       final first = await receive();
       if (first != null) _buffered.add(first);
     }
+  }
+
+  /// A room-scoped hint for an already proved peer. It is neither a listener
+  /// port nor fresh end-to-end authorization; any direct connection must still
+  /// complete the original grant's authenticated recovery handshake.
+  Future<String> peerAddress() async {
+    if (closed || !_ready) throw const AuxiliaryFailure('room_closed');
+    await _grant.checkValidity();
+    _cancellation.throwIfCancelled();
+    final response = await _transport.post('/v1/signal/peer', {
+      'room': room,
+      'token': _token,
+    }, _cancellation);
+    _cancellation.throwIfCancelled();
+    await _grant.checkValidity();
+    final peer = _identity.encodedKey == encodeBytes(claim.initiator)
+        ? encodeBytes(claim.receiver)
+        : encodeBytes(claim.initiator);
+    final address = response['address'];
+    if (response.length != 2 ||
+        response['publicKey'] != peer ||
+        address is! String ||
+        InternetAddress.tryParse(address) == null ||
+        address == '0.0.0.0' ||
+        address == '::') {
+      throw const AuxiliaryFailure('invalid_response');
+    }
+    return address;
   }
 
   Future<void> sendSealed(List<int> sealed) =>
