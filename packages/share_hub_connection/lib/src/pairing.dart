@@ -117,7 +117,7 @@ class PairingHost {
   final DeviceIdentity identity;
   final ContinuousClock clock;
   final void Function(TrustedConnection) onConnection;
-  final _pending = <WireChannel>{};
+  final _pending = <ConnectionWire>{};
   final _sessions = <TrustedConnection>{};
   final _recovery = <String, TrustedConnection>{};
   final _revocations = <String, StreamSubscription<void>>{};
@@ -157,17 +157,22 @@ class PairingHost {
     _offer = PairingOffer(now);
     _server = server;
     server.listen((socket) {
-      if (_pending.length >= 4 || generation != _generation) {
-        socket.destroy();
-        return;
-      }
-      final wire = WireChannel(socket);
-      _pending.add(wire);
-      unawaited(_accept(wire, generation));
+      acceptWire(WireChannel(socket));
     });
   }
 
-  Future<void> _accept(WireChannel wire, int generation) async {
+  /// Admit an already established first-pairing transport. Local TCP and a
+  /// future rendezvous transport share the same offer and attempt budget.
+  void acceptWire(ConnectionWire wire) {
+    if (_server == null || _offer == null || _pending.length >= 4) {
+      wire.close();
+      return;
+    }
+    _pending.add(wire);
+    unawaited(_accept(wire, _generation));
+  }
+
+  Future<void> _accept(ConnectionWire wire, int generation) async {
     final timeout = Timer(handshakeTimeout, wire.close);
     TrustedConnection? connection;
     final offer = _offer;
@@ -419,7 +424,7 @@ class PairingAttempt {
   final ContinuousClock clock;
   bool _cancelled = false;
   bool _started = false;
-  WireChannel? _wire;
+  ConnectionWire? _wire;
   TrustedConnection? _connection;
   void cancel() {
     _cancelled = true;
@@ -437,27 +442,51 @@ class PairingAttempt {
     String code, {
     String? expectedPeerKey,
   }) async {
+    if (port < 1 || port > 65535) {
+      throw const ConnectionFailure('invalid_input');
+    }
+    return connectWithWire(
+      () async {
+        try {
+          return WireChannel(
+            await Socket.connect(
+              address,
+              port,
+              timeout: const Duration(seconds: 5),
+            ),
+          );
+        } on SocketException {
+          throw const ConnectionFailure('signal_unreachable');
+        } on TimeoutException {
+          throw const ConnectionFailure('signal_unreachable');
+        }
+      },
+      code,
+      expectedPeerKey: expectedPeerKey,
+    );
+  }
+
+  /// Run the existing PAKE and grant activation over a bounded transport.
+  /// The caller owns rendezvous lookup and must close its wire on cancellation.
+  Future<TrustedConnection> connectWithWire(
+    Future<ConnectionWire> Function() openWire,
+    String code, {
+    String? expectedPeerKey,
+  }) async {
     if (_started) throw StateError('An attempt cannot be reused.');
     _started = true;
-    if (!RegExp(r'^[0-9]{6}$').hasMatch(code) || port < 1 || port > 65535) {
+    if (!RegExp(r'^[0-9]{6}$').hasMatch(code)) {
       throw const ConnectionFailure('invalid_input');
     }
     final timeout = Timer(handshakeTimeout, cancel);
     try {
       _check();
-      final Socket socket;
-      try {
-        socket = await Socket.connect(
-          address,
-          port,
-          timeout: const Duration(seconds: 5),
-        );
-      } on SocketException {
-        throw const ConnectionFailure('signal_unreachable');
-      } on TimeoutException {
-        throw const ConnectionFailure('signal_unreachable');
+      final opened = await openWire();
+      if (_cancelled) {
+        opened.close();
+        throw const ConnectionFailure('cancelled');
       }
-      final wire = _wire = WireChannel(socket);
+      final wire = _wire = opened;
       _check();
       final nonce = encodeBytes(randomBytes(32));
       wire.send({

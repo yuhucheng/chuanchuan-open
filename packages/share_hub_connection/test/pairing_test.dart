@@ -10,6 +10,62 @@ import 'package:test/test.dart';
 
 void main() {
   test(
+    'first pairing reuses the same grant handshake on an injected wire',
+    () async {
+      final hostIdentity = await DeviceIdentity.fromSeed(List.filled(32, 41));
+      final clientIdentity = await DeviceIdentity.fromSeed(List.filled(32, 42));
+      final accepted = <TrustedConnection>[];
+      final host = PairingHost(
+        identity: hostIdentity,
+        clock: () async => 1000000,
+        onConnection: accepted.add,
+        protocolVersion: 2,
+      );
+      addTearDown(host.close);
+      await host.open(address: InternetAddress.loopbackIPv4);
+      final bridge = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(bridge.close);
+      bridge.listen((socket) => host.acceptWire(WireChannel(socket)));
+      final client =
+          await PairingAttempt(
+            identity: clientIdentity,
+            clock: () async => 1000000,
+            protocolVersion: 2,
+          ).connectWithWire(
+            () async =>
+                WireChannel(await Socket.connect('127.0.0.1', bridge.port)),
+            host.offer!.code,
+          );
+      addTearDown(client.close);
+      expect(accepted, hasLength(1));
+      expect(client.peerKey, hostIdentity.encodedKey);
+      expect(accepted.single.peerKey, clientIdentity.encodedKey);
+      expect(client.grant!.binding.policy, GrantPolicy.shortCode);
+    },
+  );
+
+  test('late injected wire is closed after cancellation', () async {
+    final identity = await DeviceIdentity.fromSeed(List.filled(32, 43));
+    final pending = Completer<ConnectionWire>();
+    final attempt = PairingAttempt(
+      identity: identity,
+      clock: () async => 1000000,
+    );
+    final result = attempt.connectWithWire(() => pending.future, '123456');
+    attempt.cancel();
+    final listener = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(listener.close);
+    final received = listener.first;
+    final socket = await Socket.connect('127.0.0.1', listener.port);
+    final peer = await received;
+    addTearDown(peer.destroy);
+    final wire = WireChannel(socket);
+    pending.complete(wire);
+    await expectLater(result, throwsA(isA<ConnectionFailure>()));
+    expect(wire.isClosed, isTrue);
+  });
+
+  test(
     'unreachable TCP signaling is distinct from a failed code proof',
     () async {
       final listener = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
