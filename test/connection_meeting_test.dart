@@ -45,6 +45,8 @@ final class _MeetingService implements AuxiliaryTransport {
   int publishFailures = 0;
   int publishAttempts = 0;
   int pendingFailures = 0;
+  int forgottenListings = 0;
+  bool publishCollision = false;
   Completer<void>? joinGate;
   final joinStarted = Completer<void>();
   Completer<void>? hostLeaveGate;
@@ -64,6 +66,9 @@ final class _MeetingService implements AuxiliaryTransport {
         return {'deviceId': host.id};
       case '/v1/meet/publish':
         publishAttempts++;
+        if (publishCollision) {
+          throw const AuxiliaryFailure('entry_unavailable');
+        }
         if (publishFailures > 0) {
           publishFailures--;
           throw const AuxiliaryFailure('unreachable');
@@ -79,6 +84,11 @@ final class _MeetingService implements AuxiliaryTransport {
         }
         return {'attempt': attempt, 'token': joinToken};
       case '/v1/meet/pending':
+        if (forgottenListings > 0) {
+          forgottenListings--;
+          code = null;
+          throw const AuxiliaryFailure('entry_unavailable');
+        }
         if (pendingFailures > 0) {
           pendingFailures--;
           throw const AuxiliaryFailure('unreachable');
@@ -442,6 +452,70 @@ void main() {
     expect(host.code, originalCode);
     expect(host.message, contains('会合入口已恢复'));
   });
+
+  test(
+    'lost listing after service restart republishes the same code',
+    () async {
+      final identity = await DeviceIdentity.fromSeed(List.filled(32, 76));
+      final service = _MeetingService(identity)..forgottenListings = 1;
+      final routes = AuxiliaryRouteController(
+        identity: () async => identity,
+        officialOrigin: 'https://official.example',
+        store: _Store(),
+        transportFactory: (_) => (transport: service, close: () {}),
+      );
+      final host = ConnectionController(
+        _Platform(identity),
+        auxiliaryRoutes: routes,
+        meetingRetryBackoff: const [Duration(milliseconds: 20)],
+      );
+      addTearDown(() async {
+        await host.disconnectAll();
+        await routes.stop();
+        host.dispose();
+      });
+      await host.open();
+      final originalCode = host.code;
+      for (var i = 0; i < 100 && service.publishAttempts < 2; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(service.publishAttempts, 2);
+      expect(service.code, originalCode);
+      expect(host.code, originalCode);
+      expect(host.message, contains('会合入口已恢复'));
+    },
+  );
+
+  test(
+    'initial code collision does not retry the same unavailable code',
+    () async {
+      final identity = await DeviceIdentity.fromSeed(List.filled(32, 75));
+      final service = _MeetingService(identity)..publishCollision = true;
+      final routes = AuxiliaryRouteController(
+        identity: () async => identity,
+        officialOrigin: 'https://official.example',
+        store: _Store(),
+        transportFactory: (_) => (transport: service, close: () {}),
+      );
+      final host = ConnectionController(
+        _Platform(identity),
+        auxiliaryRoutes: routes,
+        meetingRetryBackoff: const [Duration(milliseconds: 20)],
+      );
+      addTearDown(() async {
+        await host.disconnectAll();
+        await routes.stop();
+        host.dispose();
+      });
+      await host.open();
+      for (var i = 0; i < 100 && service.publishAttempts == 0; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      expect(service.publishAttempts, 1);
+      expect(host.message, contains('会合失败'));
+    },
+  );
 
   test('switching the selected origin cancels the old meeting retry', () async {
     final identity = await DeviceIdentity.fromSeed(List.filled(32, 77));

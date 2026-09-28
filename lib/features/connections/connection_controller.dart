@@ -319,6 +319,13 @@ class ConnectionController extends ChangeNotifier {
           }
           return;
         } catch (error) {
+          // A listing that was already published can disappear when the
+          // selected service restarts. Re-publish the same still-valid offer;
+          // an initial code collision must remain a visible failure.
+          final lostPublishedListing =
+              route != null &&
+              error is AuxiliaryFailure &&
+              error.code == 'entry_unavailable';
           if (route != null && !route.activated) {
             if (identical(_meetingRoute, route)) _meetingRoute = null;
             try {
@@ -333,12 +340,13 @@ class ConnectionController extends ChangeNotifier {
             return;
           }
           final retryable =
-              error is AuxiliaryFailure &&
-              const {
-                'unreachable',
-                'timeout',
-                'server_error',
-              }.contains(error.code) &&
+              (lostPublishedListing ||
+                  (error is AuxiliaryFailure &&
+                      const {
+                        'unreachable',
+                        'timeout',
+                        'server_error',
+                      }.contains(error.code))) &&
               meetingRetryBackoff.isNotEmpty;
           _notice = ConnectionNotice.problem(
             retryable
