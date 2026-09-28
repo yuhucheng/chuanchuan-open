@@ -177,6 +177,11 @@ void main() {
       expect(previewButton.bottom, lessThanOrEqualTo(640));
       expect(filesButton.top, greaterThanOrEqualTo(0));
       expect(filesButton.bottom, lessThanOrEqualTo(640));
+      tester.view.physicalSize = const Size(480, 360);
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(tester.getRect(find.text('屏幕预览')).bottom, lessThanOrEqualTo(360));
+      expect(tester.getRect(find.text('文件准备')).bottom, lessThanOrEqualTo(360));
       expect(
         find.descendant(
           of: find.byType(AlertDialog),
