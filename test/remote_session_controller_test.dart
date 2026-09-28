@@ -440,6 +440,28 @@ void main() {
     expect(factoryA.links.single.starts, isEmpty);
   });
 
+  test(
+    'preview-only capabilities reject a remote start without creating media',
+    () async {
+      factoryA = _FakeFactory(
+        declared: MediaCapabilities(
+          protocolVersion: sessionProtocolVersion,
+          operations: const {},
+          maxVideoSessions: 1,
+        ),
+      );
+      build();
+      expect(remoteA.offeredOperations, isEmpty);
+      await remoteA.start(
+        SessionOperation.watch,
+        peerKey: a.sessions.single.peerKey,
+      );
+      expect(factoryA.links.single.starts, isEmpty);
+      expect(remoteA.occupied, isFalse);
+      expect(remoteA.error, contains('未协商出该远端操作'));
+    },
+  );
+
   test('concurrent stop callers await the same native cleanup', () async {
     build();
     await remoteA.start(

@@ -84,8 +84,9 @@ class _NoopLink implements RemotePictureLink {
 }
 
 class _NoopMedia implements RemotePictureFactory {
-  _NoopMedia({this.offerControl = false});
+  _NoopMedia({this.offerControl = false, this.previewOnly = false});
   final bool offerControl;
+  final bool previewOnly;
   @override
   Set<ControlCapability> get controlCapabilities => offerControl
       ? const {
@@ -99,11 +100,13 @@ class _NoopMedia implements RemotePictureFactory {
   @override
   MediaCapabilities get capabilities => MediaCapabilities(
     protocolVersion: sessionProtocolVersion,
-    operations: {
-      SessionOperation.watch,
-      SessionOperation.cast,
-      if (offerControl) SessionOperation.control,
-    },
+    operations: previewOnly
+        ? const {}
+        : {
+            SessionOperation.watch,
+            SessionOperation.cast,
+            if (offerControl) SessionOperation.control,
+          },
     maxVideoSessions: 1,
   );
   @override
@@ -121,10 +124,14 @@ class _RecordingRemote extends RemoteSessionController {
     ConnectionController connections,
     FakePlatform platform, {
     bool offerControl = false,
+    bool previewOnly = false,
   }) : super(
          connections: connections,
          platform: platform,
-         factory: _NoopMedia(offerControl: offerControl),
+         factory: _NoopMedia(
+           offerControl: offerControl,
+           previewOnly: previewOnly,
+         ),
          listSources: () async => [],
        );
   final starts = <(SessionOperation, String)>[];
@@ -203,6 +210,7 @@ void main() {
     bool endpoint = true,
     bool initialOutgoing = false,
     bool offerControl = false,
+    bool previewOnly = false,
     TargetPlatform targetPlatform = TargetPlatform.macOS,
   }) async {
     tester.view.physicalSize = const Size(1100, 950);
@@ -235,6 +243,7 @@ void main() {
       connections,
       platform,
       offerControl: offerControl,
+      previewOnly: previewOnly,
     );
     final appearance = Appearance();
     final desktop = DesktopLifecycle(
@@ -295,6 +304,35 @@ void main() {
     expect(find.text('连接并控制'), findsNothing);
     expect(find.text('观看该设备屏幕'), findsNothing);
     expect(remote.starts, isEmpty);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('preview-only SDK keeps preview but offers no remote actions', (
+    tester,
+  ) async {
+    final (connections, remote, _) = await mount(
+      tester,
+      initialOutgoing: true,
+      previewOnly: true,
+    );
+    await tester.tap(find.byKey(const ValueKey('local-device')));
+    await tester.pumpAndSettle();
+    expect(find.text('屏幕预览'), findsOneWidget);
+    await tester.tap(find.text('屏幕预览'));
+    await tester.pumpAndSettle();
+    expect(find.text('本机屏幕预览'), findsWidgets);
+    await tester.tap(find.text('关闭'));
+    await tester.pumpAndSettle();
+    await openDevice(tester);
+    expect(find.text('本构建未提供远端画面操作能力。'), findsOneWidget);
+    expect(find.text('观看该设备屏幕'), findsNothing);
+    expect(find.text('投屏到该设备'), findsNothing);
+    expect(find.text('控制该设备'), findsNothing);
+    expect(find.text('连接并观看'), findsNothing);
+    expect(find.text('连接并投屏'), findsNothing);
+    expect(find.text('连接并控制'), findsNothing);
+    expect(remote.starts, isEmpty);
+    expect(connections.sessions, [incoming, outgoing]);
     await tester.pumpWidget(const SizedBox());
   });
 
