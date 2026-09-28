@@ -251,12 +251,14 @@ void main() {
       await service.leaveStarted.future.timeout(const Duration(seconds: 2));
       expect(wire.isClosed, isTrue);
       expect(service.transportClosed, isFalse);
+      var finished = false;
+      final stopping = routes.stop().then((_) => finished = true);
+      await Future<void>.delayed(Duration.zero);
+      expect(finished, isFalse);
       service.releaseLeave.complete();
-      for (var i = 0; i < 100 && !service.transportClosed; i++) {
-        await Future<void>.delayed(const Duration(milliseconds: 1));
-      }
+      await stopping;
       expect(service.transportClosed, isTrue);
-      await routes.stop();
+      expect(finished, isTrue);
     },
   );
 

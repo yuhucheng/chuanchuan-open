@@ -55,10 +55,25 @@ final class _SignalOwner {
   RelaySignalChannel? channel;
   ConnectionWire? wire;
   bool closed = false;
+  Future<void>? _closing;
 
-  Future<void> close({bool immediate = false}) async {
-    if (closed) return;
+  Future<void> close({bool immediate = false}) {
+    final pending = _closing;
+    if (pending != null) return pending;
+    final completion = Completer<void>();
+    _closing = completion.future;
     closed = true;
+    unawaited(
+      _close(immediate).then(
+        (_) => completion.complete(),
+        onError: (Object error, StackTrace stack) =>
+            completion.completeError(error, stack),
+      ),
+    );
+    return completion.future;
+  }
+
+  Future<void> _close(bool immediate) async {
     final closingWire = wire;
     closingWire?.close();
     cancellation.cancel();
