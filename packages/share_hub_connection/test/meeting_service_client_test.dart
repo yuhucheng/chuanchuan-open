@@ -312,11 +312,13 @@ void main() {
     addTearDown(host.close);
     await host.open(address: InternetAddress.loopbackIPv4);
     final transport = _MeetingTransport(host.offer!.code);
+    MeetingConnectionWire? activeWire;
     final listing = MeetingListing(
       transport,
       host,
       _MeetingTransport.hostToken,
       AuxiliaryCancellation(),
+      onActivated: (wire) => activeWire = wire,
     );
     addTearDown(listing.close);
     final serving = listing.serve();
@@ -337,6 +339,13 @@ void main() {
     expect(accepted, hasLength(1));
     expect(client.grant!.binding.policy.type, 'short-code');
     expect(client.peerKey, hostIdentity.encodedKey);
+    // Closing code admission preserves an established connection; closing the
+    // route then revokes it synchronously, before any network cleanup waits.
+    await listing.closeAdmission();
+    expect(activeWire!.isClosed, isFalse);
+    final closing = listing.close();
+    expect(activeWire!.isClosed, isTrue);
+    await closing;
     accepted.single.close();
     await client.whenClosed.timeout(const Duration(seconds: 2));
     expect(client.isClosed, isTrue);

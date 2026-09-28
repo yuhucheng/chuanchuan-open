@@ -258,8 +258,11 @@ final class MeetingListing {
   Future<void> close() => _closing ??= _close();
 
   Future<void> _close() async {
+    // Revoking the selected route or stopping the app must invalidate the
+    // established wire now. Draining a pending admission can take longer.
+    final leavingActive = closeActiveWire();
     await closeAdmission();
-    await closeActiveWire();
+    await leavingActive;
     _wires.clear();
   }
 
