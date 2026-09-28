@@ -102,11 +102,26 @@ class ConnectionController extends ChangeNotifier {
     if (!_disposed) notifyListeners();
   }
 
-  Future<DeviceIdentity> _loadIdentity() async =>
-      _identity ??= await platform.identity();
+  Future<DeviceIdentity> _loadIdentity() async {
+    final current = await platform.identity();
+    final previous = _identity;
+    if (previous != null && previous.encodedKey != current.encodedKey) {
+      await disconnectAll(reason: 'identity_changed');
+      _identity = current;
+      throw const ConnectionFailure('identity_changed');
+    }
+    return _identity ??= current;
+  }
 
   Future<ConnectionRecoveryService> _loadRecovery() async {
-    final service = _recovery ??= ConnectionRecoveryService();
+    final service = _recovery ??= ConnectionRecoveryService(
+      identityIsCurrent: () async {
+        final original = _identity;
+        if (original == null) return false;
+        final current = await platform.identity();
+        return current.encodedKey == original.encodedKey;
+      },
+    );
     await service.open();
     if (_disposed || _disconnecting || !identical(_recovery, service)) {
       await service.close();
@@ -176,11 +191,13 @@ class ConnectionController extends ChangeNotifier {
         const Duration(seconds: 1),
         (_) => unawaited(_tick()),
       );
-    } catch (_) {
+    } catch (error) {
       await opening?.stopAccepting();
       if (generation == _generation) await _clearAdvertisement();
       if (!_disposed && generation == _generation) {
-        _notice = const ConnectionNotice.problem('接入启动失败，请检查钥匙串及本地网络权限。');
+        _notice = error is ConnectionFailure && error.code == 'identity_changed'
+            ? const ConnectionNotice.problem('设备身份已更换，旧连接已断开，请重新开启接入。')
+            : const ConnectionNotice.problem('接入启动失败，请检查钥匙串及本地网络权限。');
       }
     } finally {
       if (generation == _generation) busy = false;
@@ -233,9 +250,9 @@ class ConnectionController extends ChangeNotifier {
   }
 
   /// Admission and in-flight handshakes are invalidated before awaiting I/O.
-  Future<void> disconnectAll() async {
+  Future<void> disconnectAll({String reason = 'revoked'}) async {
     _disconnecting = true;
-    final recoveryClosing = _recovery?.close();
+    final recoveryClosing = _recovery?.close(reason: reason);
     _recovery = null;
     for (final retry in _recoveries.values) {
       retry.timer?.cancel();
@@ -244,7 +261,7 @@ class ConnectionController extends ChangeNotifier {
     _timer?.cancel();
     _timer = null;
     for (final session in _sessions.toList()) {
-      session.close('revoked');
+      session.close(reason);
     }
     try {
       await stopAccepting();
@@ -300,6 +317,8 @@ class ConnectionController extends ChangeNotifier {
         _notice = ConnectionNotice.problem(switch (error) {
           ConnectionFailure(code: 'identity_mismatch') =>
             '对端身份与所选设备不一致，请重新发现设备。',
+          ConnectionFailure(code: 'identity_changed') =>
+            '本机设备身份已更换，旧连接已断开，请重新发起连接。',
           ConnectionFailure(code: 'invalid_input') => '请输入完整的 6 位纯数字短接码及有效端口。',
           ConnectionFailure(code: 'cancelled') => '连接已取消或握手超时。',
           _ => '连接未建立，请检查短接码、对端接入状态及局域网连通性。',
@@ -362,6 +381,8 @@ class ConnectionController extends ChangeNotifier {
               : ConnectionNotice.problem(
                   reason == 'expired'
                       ? '八小时授权已到期，请使用新短接码连接。'
+                      : reason == 'identity_changed'
+                      ? '本机设备身份已更换，旧连接已断开。'
                       : '连接已断开；再次连接需输入有效短接码。',
                 );
           _emit();

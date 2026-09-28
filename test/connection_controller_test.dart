@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:share_hub_connection/share_hub_connection.dart';
@@ -24,19 +25,194 @@ final class _UnavailableAuxiliary implements AuxiliaryTransport {
 
 class FakeConnectionPlatform implements ConnectionPlatform {
   final seed = Completer<DeviceIdentity>();
+  DeviceIdentity? currentIdentity;
   final advertisements = <int?>[];
+  final advertisedKeys = <String?>[];
   @override
-  Future<DeviceIdentity> identity() => seed.future;
+  Future<DeviceIdentity> identity() =>
+      currentIdentity == null ? seed.future : Future.value(currentIdentity!);
   @override
   Future<int> now() async => 1000;
   @override
   Future<String?> advertise(int? port, String? key) async {
     advertisements.add(port);
+    advertisedKeys.add(key);
     return 'test.local';
   }
 }
 
+final class _TcpBridge {
+  _TcpBridge._(this.server);
+  final ServerSocket server;
+  final sockets = <Socket>[];
+  int get port => server.port;
+
+  static Future<_TcpBridge> open(int targetPort) async {
+    final bridge = _TcpBridge._(
+      await ServerSocket.bind(InternetAddress.loopbackIPv4, 0),
+    );
+    bridge.server.listen((incoming) async {
+      bridge.sockets.add(incoming);
+      final outgoing = await Socket.connect('127.0.0.1', targetPort);
+      bridge.sockets.add(outgoing);
+      incoming.listen(outgoing.add, onDone: outgoing.destroy);
+      outgoing.listen(incoming.add, onDone: incoming.destroy);
+    });
+    return bridge;
+  }
+
+  void drop() {
+    for (final socket in sockets) {
+      socket.destroy();
+    }
+  }
+
+  Future<void> close() async {
+    drop();
+    await server.close();
+  }
+}
+
 void main() {
+  test('controller restores the original grant after a TCP break', () async {
+    final aPlatform = FakeConnectionPlatform();
+    final bPlatform = FakeConnectionPlatform();
+    final aIdentity = await DeviceIdentity.fromSeed(List.filled(32, 61));
+    final bIdentity = await DeviceIdentity.fromSeed(List.filled(32, 62));
+    aPlatform.seed.complete(aIdentity);
+    bPlatform.seed.complete(bIdentity);
+    final a = ConnectionController(aPlatform);
+    final b = ConnectionController(bPlatform);
+    _TcpBridge? proxy;
+    addTearDown(() async {
+      await proxy?.close();
+      await a.disconnectAll();
+      await b.disconnectAll();
+      a.dispose();
+      b.dispose();
+    });
+    await b.open();
+    final hostPort = bPlatform.advertisements.whereType<int>().last;
+    proxy = await _TcpBridge.open(hostPort);
+    final connection = await a.connect(
+      '127.0.0.1',
+      proxy.port,
+      b.code!,
+      expectedPeerKey: bIdentity.encodedKey,
+    );
+    expect(connection, isNotNull);
+    final receiver = b.sessions.single;
+    final grant = connection!.grant!;
+    final lease = connection.lease;
+    final expiry = grant.expiresMicros;
+    final session = connection.sessionId;
+    final aSuspended = connection.phaseChanges.firstWhere(
+      (phase) => phase == ConnectionPhase.suspended,
+    );
+    final bSuspended = receiver.phaseChanges.firstWhere(
+      (phase) => phase == ConnectionPhase.suspended,
+    );
+    final aActive = connection.phaseChanges.firstWhere(
+      (phase) => phase == ConnectionPhase.active,
+    );
+    final bActive = receiver.phaseChanges.firstWhere(
+      (phase) => phase == ConnectionPhase.active,
+    );
+    proxy.drop();
+    await aSuspended.timeout(const Duration(seconds: 5));
+    await bSuspended.timeout(const Duration(seconds: 5));
+    await aActive.timeout(const Duration(seconds: 10));
+    await bActive.timeout(const Duration(seconds: 10));
+    expect(a.sessions.single, same(connection));
+    expect(connection.grant, same(grant));
+    expect(connection.lease, same(lease));
+    expect(grant.expiresMicros, expiry);
+    expect(grant.generation, 2);
+    expect(connection.sessionId, isNot(session));
+    expect(await connection.check(), isTrue);
+  });
+
+  test('identity replacement rejects suspended grant recovery', () async {
+    final aPlatform = FakeConnectionPlatform();
+    final bPlatform = FakeConnectionPlatform();
+    final aIdentity = await DeviceIdentity.fromSeed(List.filled(32, 71));
+    final bIdentity = await DeviceIdentity.fromSeed(List.filled(32, 72));
+    aPlatform.seed.complete(aIdentity);
+    bPlatform.seed.complete(bIdentity);
+    final a = ConnectionController(aPlatform);
+    final b = ConnectionController(bPlatform);
+    _TcpBridge? proxy;
+    addTearDown(() async {
+      await proxy?.close();
+      await a.disconnectAll();
+      await b.disconnectAll();
+      a.dispose();
+      b.dispose();
+    });
+    await b.open();
+    proxy = await _TcpBridge.open(
+      bPlatform.advertisements.whereType<int>().last,
+    );
+    final connection = await a.connect(
+      '127.0.0.1',
+      proxy.port,
+      b.code!,
+      expectedPeerKey: bIdentity.encodedKey,
+    );
+    expect(connection, isNotNull);
+    final suspended = connection!.phaseChanges.firstWhere(
+      (phase) => phase == ConnectionPhase.suspended,
+    );
+    aPlatform.currentIdentity = await DeviceIdentity.fromSeed(
+      List.filled(32, 73),
+    );
+    proxy.drop();
+    await suspended.timeout(const Duration(seconds: 5));
+    expect(
+      await connection.whenClosed.timeout(const Duration(seconds: 5)),
+      'identity_changed',
+    );
+    expect(connection.grant!.phase, GrantPhase.revoked);
+    expect(a.sessions, isEmpty);
+  });
+
+  test('new admission after identity replacement retires old grants', () async {
+    final aPlatform = FakeConnectionPlatform();
+    final bPlatform = FakeConnectionPlatform();
+    final original = await DeviceIdentity.fromSeed(List.filled(32, 81));
+    final replacement = await DeviceIdentity.fromSeed(List.filled(32, 82));
+    final peer = await DeviceIdentity.fromSeed(List.filled(32, 83));
+    aPlatform.seed.complete(original);
+    bPlatform.seed.complete(peer);
+    final a = ConnectionController(aPlatform);
+    final b = ConnectionController(bPlatform);
+    addTearDown(() async {
+      await a.disconnectAll();
+      await b.disconnectAll();
+      a.dispose();
+      b.dispose();
+    });
+    await b.open();
+    final connection = await a.connect(
+      '127.0.0.1',
+      bPlatform.advertisements.whereType<int>().last,
+      b.code!,
+      expectedPeerKey: peer.encodedKey,
+    );
+    expect(connection, isNotNull);
+    aPlatform.currentIdentity = replacement;
+    await a.open();
+    expect(await connection!.whenClosed, 'identity_changed');
+    expect(connection.grant!.phase, GrantPhase.revoked);
+    expect(a.sessions, isEmpty);
+    await a.open();
+    expect(a.accepting, isTrue);
+    expect(
+      aPlatform.advertisedKeys.whereType<String>().last,
+      replacement.encodedKey,
+    );
+  });
+
   test('official auxiliary failure does not block local pairing', () async {
     final aPlatform = FakeConnectionPlatform();
     final bPlatform = FakeConnectionPlatform();

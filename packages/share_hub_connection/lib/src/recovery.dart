@@ -15,6 +15,7 @@ import 'session.dart';
 final class ConnectionRecoveryService {
   ConnectionRecoveryService({
     this.handshakeTimeout = const Duration(seconds: 30),
+    this.identityIsCurrent,
   }) {
     if (handshakeTimeout <= Duration.zero ||
         handshakeTimeout > const Duration(seconds: 30)) {
@@ -22,6 +23,10 @@ final class ConnectionRecoveryService {
     }
   }
   final Duration handshakeTimeout;
+
+  /// Optional platform identity audit before the original grant is restored.
+  /// A missing or replaced local identity invalidates this recovery owner.
+  final Future<bool> Function()? identityIsCurrent;
   final _records = <String, _Record>{};
   final _pending = <_Candidate>{};
   ServerSocket? _server;
@@ -189,6 +194,20 @@ final class ConnectionRecoveryService {
 
   Future<void> _audit(_Candidate candidate) async {
     candidate.check();
+    if (identityIsCurrent case final check?) {
+      final current = await candidate.step(() async {
+        try {
+          return await check();
+        } catch (_) {
+          return false;
+        }
+      });
+      candidate.check();
+      if (!current) {
+        candidate.record!.owner.close('identity_changed');
+        throw const ConnectionFailure('identity_changed');
+      }
+    }
     await candidate.step(candidate.record!.handle.check);
     candidate.check();
   }
@@ -388,13 +407,13 @@ final class ConnectionRecoveryService {
   }
 
   /// Revocation is synchronous; awaiting close only waits for listener cleanup.
-  Future<void> close() {
+  Future<void> close({String reason = 'revoked'}) {
     _closed = true;
     for (final candidate in _pending.toList()) {
       candidate.cancel();
     }
     for (final record in _records.values.toList()) {
-      record.owner.close();
+      record.owner.close(reason);
       _remove(record);
     }
     final server = _server;

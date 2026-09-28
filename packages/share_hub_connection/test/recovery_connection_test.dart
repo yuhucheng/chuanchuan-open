@@ -29,6 +29,35 @@ void main() {
     expect(service.pendingCount, 0);
   });
 
+  test('initiator identity replacement revokes the original owner', () async {
+    await pair.close();
+    pair = await _Pair.create(identityCurrentLeft: () async => false);
+    await pair.lose();
+    await expectLater(
+      pair.left.reconnect(pair.a),
+      throwsA(isA<ConnectionFailure>()),
+    );
+    expect(await pair.a.whenClosed, 'identity_changed');
+    expect(pair.a.grant!.phase, GrantPhase.revoked);
+    expect(pair.left.registeredCount, 0);
+  });
+
+  test(
+    'receiver identity replacement rejects authenticated recovery',
+    () async {
+      await pair.close();
+      pair = await _Pair.create(identityCurrentRight: () async => false);
+      await pair.lose();
+      await expectLater(
+        pair.left.reconnect(pair.a),
+        throwsA(isA<ConnectionFailure>()),
+      );
+      expect(await pair.b.whenClosed, 'identity_changed');
+      expect(pair.b.grant!.phase, GrantPhase.revoked);
+      expect(pair.right.registeredCount, 0);
+    },
+  );
+
   test(
     'authenticated recovery retains original authority and stable ports',
     () async {
@@ -606,10 +635,18 @@ class _Pair {
     bool registerLeft = true,
     List<int>? initiatorKey,
     List<int>? receiverKey,
+    Future<bool> Function()? identityCurrentLeft,
+    Future<bool> Function()? identityCurrentRight,
   }) async {
     final p = _Pair();
-    p.left = ConnectionRecoveryService(handshakeTimeout: timeout);
-    p.right = ConnectionRecoveryService(handshakeTimeout: timeout);
+    p.left = ConnectionRecoveryService(
+      handshakeTimeout: timeout,
+      identityIsCurrent: identityCurrentLeft,
+    );
+    p.right = ConnectionRecoveryService(
+      handshakeTimeout: timeout,
+      identityIsCurrent: identityCurrentRight,
+    );
     await p.right.open(address: InternetAddress.loopbackIPv4);
     final binding = GrantBinding(
       id: List.filled(32, id),
