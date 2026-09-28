@@ -23,6 +23,40 @@ final class ReceiveStoreTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: fixture.root.appendingPathComponent(receipt.name)), Data())
     }
 
+    func testIncompleteTransferCannotResumeAfterStoreRestart() throws {
+        let fixture = try Fixture()
+        defer { fixture.close() }
+        let bytes = Data("abcdef".utf8)
+        let item = try fixture.begin(name: "partial.txt", bytes: bytes)
+        XCTAssertEqual(try fixture.store.append(token: item.token, scope: item.scope, offset: 0,
+                                                bytes: Data("abc".utf8)), 3)
+        let checkpoint = try fixture.store.checkpoint(token: item.token)
+        XCTAssertEqual(checkpoint.offset, 3)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent("partial.txt").path))
+        let temporary = try fixture.onlyTemporary()
+
+        fixture.store.shutdown()
+        let cleanupDeadline = Date().addingTimeInterval(2)
+        while FileManager.default.fileExists(atPath: temporary.path), Date() < cleanupDeadline {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: fixture.root.path), [])
+
+        let restarted = ReceiveStore(clock: { 100 })
+        defer { restarted.shutdown() }
+        let directory = try restarted.directoryFromPicker(fixture.root)
+        let scope = try restarted.scopeOpen(key: "key", deadlineMicros: 1_000)
+        expect(.invalidToken) { try restarted.resume(token: item.token, scope: scope, checkpoint: checkpoint) }
+        expect(.invalidToken) { try restarted.commit(token: item.token, scope: item.scope) }
+        let token = try restarted.begin(directory: directory.token, scope: scope, name: "partial.txt",
+                                        size: 0, sha256: emptyHash)
+        let receipt = try restarted.commit(token: token, scope: scope)
+        XCTAssertEqual(receipt.name, "partial.txt")
+        XCTAssertEqual(try Data(contentsOf: fixture.root.appendingPathComponent(receipt.name)), Data())
+        restarted.shutdown()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent(receipt.name).path))
+    }
+
     func testCorruptDirectoryPreferenceFailsUntilExplicitSelection() throws {
         let fixture = try Fixture()
         defer { fixture.close() }

@@ -601,6 +601,42 @@ void ConfiguredDirectorySurvivesRestart() {
   Check(Read(f.Path(L"saved.txt")).empty() && receipt.name == "saved.txt", "new file uses restored directory");
   restarted.Release(file); restarted.ScopeClose(scope);
 }
+void IncompleteTransferDoesNotSurviveStoreRestart() {
+  Fixture f;
+  ReceiveStoreOptions options;
+  options.clock = [](uint64_t* now) { *now = 100; return true; };
+  std::string old_file, old_scope;
+  ReceiveCheckpoint old_checkpoint;
+  {
+    ReceiveStore first(options);
+    const auto directory = first.DirectoryFromPicker(f.root.native());
+    old_scope = first.ScopeOpen("grant|peer|file", 10000);
+    old_file = first.Begin(directory.token, old_scope, "partial.txt", 6, Digest("abcdef"));
+    Check(first.Append(old_file, old_scope, 0, Bytes("abc")) == 3,
+          "first store has a partial native file");
+    old_checkpoint = first.Checkpoint(old_file);
+    Check(old_checkpoint.offset == 3 && !fs::exists(f.root / L"partial.txt"),
+          "partial transfer has no published destination");
+  }
+  Check(fs::is_empty(f.root), "normal shutdown removes the incomplete native staging file");
+
+  ReceiveStore restarted(options);
+  const auto directory = restarted.DirectoryFromPicker(f.root.native());
+  const auto scope = restarted.ScopeOpen("grant|peer|file", 10000);
+  Reject([&] { restarted.Resume(old_file, scope, old_checkpoint); }, "invalid_token");
+  Reject([&] { restarted.Commit(old_file, old_scope); }, "invalid_token");
+  Check(!fs::exists(f.root / L"partial.txt"), "old operation never publishes after restart");
+
+  const auto fresh = restarted.Begin(directory.token, scope, "partial.txt", 0, Digest(""));
+  const auto receipt = restarted.Commit(fresh, scope);
+  const auto final_path = f.Path(L"partial.txt");
+  Check(receipt.name == "partial.txt" && Read(final_path).empty(),
+        "new operation may publish only its own complete content");
+  restarted.Release(fresh);
+  restarted.ScopeClose(scope);
+  restarted.Shutdown();
+  Check(fs::exists(final_path), "completed file remains after owner shutdown");
+}
 void ConfiguredReplacementFailsClosed() {
   Fixture f; DirectorySettingsFixture settings;
   auto chosen = f.Path(L"chosen"), moved = f.Path(L"moved");
@@ -680,6 +716,7 @@ int main() {
   int failures = 0;
   const std::vector<std::pair<const char*, std::function<void()>>> tests = {
     {"configured destination survives store restart with fresh capabilities", ConfiguredDirectorySurvivesRestart},
+    {"incomplete transfer cannot resume after store restart", IncompleteTransferDoesNotSurviveStoreRestart},
     {"configured replacement fails closed until reselected", ConfiguredReplacementFailsClosed},
     {"corrupt settings fail closed and picker repairs them", CorruptDirectorySettingsFailClosed},
     {"failed preference save preserves existing selection", FailedDirectorySaveKeepsOldPreference},
