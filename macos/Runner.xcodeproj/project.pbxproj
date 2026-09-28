@@ -30,6 +30,7 @@
 		AC0000000000000000000002 /* FileAccessBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD0000000000000000000002 /* FileAccessBridge.swift */; };
 		AC0000000000000000000001 /* SelectedFileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD0000000000000000000001 /* SelectedFileStore.swift */; };
 		AB0000000000000000000001 /* PlatformServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000002 /* PlatformServices.swift */; };
+		AE0000000000000000000001 /* ControlClipboardReadStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE0000000000000000000002 /* ControlClipboardReadStore.swift */; };
 		331C80D8294CF71000263BE5 /* RunnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C80D7294CF71000263BE5 /* RunnerTests.swift */; };
 		335BBD1B22A9A15E00E9071D /* GeneratedPluginRegistrant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 335BBD1A22A9A15E00E9071D /* GeneratedPluginRegistrant.swift */; };
 		33CC10F12044A3C60003C045 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33CC10F02044A3C60003C045 /* AppDelegate.swift */; };
@@ -79,6 +80,7 @@
 		AD0000000000000000000002 /* FileAccessBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileAccessBridge.swift; sourceTree = "<group>"; };
 		AD0000000000000000000001 /* SelectedFileStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../Platform/Sources/ShareHubPlatform/SelectedFileStore.swift; sourceTree = "<group>"; };
 		AB0000000000000000000002 /* PlatformServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../Platform/Sources/ShareHubPlatform/PlatformServices.swift; sourceTree = "<group>"; };
+		AE0000000000000000000002 /* ControlClipboardReadStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../Platform/Sources/ShareHubPlatform/ControlClipboardReadStore.swift; sourceTree = "<group>"; };
 		331C80D5294CF71000263BE5 /* RunnerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RunnerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		331C80D7294CF71000263BE5 /* RunnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunnerTests.swift; sourceTree = "<group>"; };
 		333000ED22D3DE5D00554162 /* Warnings.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Warnings.xcconfig; sourceTree = "<group>"; };
@@ -195,6 +197,7 @@
 				AD0000000000000000000005 /* ReceiveWorkDispatcher.swift */,
 				AD0000000000000000000001 /* SelectedFileStore.swift */,
 				AB0000000000000000000002 /* PlatformServices.swift */,
+				AE0000000000000000000002 /* ControlClipboardReadStore.swift */,
 				33E51913231747F40026EE4D /* DebugProfile.entitlements */,
 				33E51914231749380026EE4D /* Release.entitlements */,
 				33CC11242044D66E0003C045 /* Resources */,
@@ -391,6 +394,7 @@
 				AC0000000000000000000005 /* ReceiveWorkDispatcher.swift in Sources */,
 				AC0000000000000000000001 /* SelectedFileStore.swift in Sources */,
 				AB0000000000000000000001 /* PlatformServices.swift in Sources */,
+				AE0000000000000000000001 /* ControlClipboardReadStore.swift in Sources */,
 				33CC10F12044A3C60003C045 /* AppDelegate.swift in Sources */,
 				335BBD1B22A9A15E00E9071D /* GeneratedPluginRegistrant.swift in Sources */,
 			);

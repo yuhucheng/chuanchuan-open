@@ -6,7 +6,10 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler, NSDraggingDestination {
   private let preferences = DevicePreferences()
   private let discovery = LocalDiscovery()
   private let files = FileAccessBridge()
+  private let clipboardRead = ControlClipboardReadStore()
   private var methods: FlutterMethodChannel?
+  private var clipboardNotifications: FlutterMethodChannel?
+  private var clipboardTimer: Timer?
   private var events: FlutterEventChannel?
   private var desktop: FlutterMethodChannel?
   private var statusItem: NSStatusItem?
@@ -30,12 +33,18 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler, NSDraggingDestination {
     files.configureFileDrop(messenger: controller.engine.binaryMessenger)
     registerForDraggedTypes([.fileURL])
     methods = FlutterMethodChannel(name: "dev.sharehub.client/platform", binaryMessenger: controller.engine.binaryMessenger)
+    clipboardNotifications = FlutterMethodChannel(name: "dev.sharehub.client/control-clipboard",
+                                                   binaryMessenger: controller.engine.binaryMessenger)
     events = FlutterEventChannel(name: "dev.sharehub.client/discovery", binaryMessenger: controller.engine.binaryMessenger)
     events?.setStreamHandler(self)
     methods?.setMethodCallHandler { [weak self] call, result in
       guard let self else { result(FlutterError(code: "closed", message: "客户端已关闭。", details: nil)); return }
       if call.method.hasPrefix("files.") {
         self.files.handle(call, window: self, result: result)
+        return
+      }
+      if call.method.hasPrefix("control.clipboard.") {
+        self.handleClipboardRead(call, result: result)
         return
       }
       switch call.method {
@@ -190,6 +199,81 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler, NSDraggingDestination {
     return nil
   }
 
+  private func clipboardInteger(_ value: Any?) -> Int64? {
+    guard let number = value as? NSNumber,
+          CFGetTypeID(number as CFTypeRef) != CFBooleanGetTypeID() else { return nil }
+    return number.int64Value
+  }
+
+  private func clipboardFailure(_ error: Error) -> FlutterError {
+    let code: String
+    switch error {
+    case ControlClipboardReadError.busy: code = "busy"
+    case ControlClipboardReadError.invalidScope: code = "invalid_scope"
+    case ControlClipboardReadError.staleScope: code = "stale_scope"
+    case ControlClipboardReadError.expired: code = "expired"
+    default: code = "clipboard_unavailable"
+    }
+    return FlutterError(code: code, message: "剪贴板作用域不可用。", details: nil)
+  }
+
+  private func stopClipboardNotifications() {
+    clipboardTimer?.invalidate()
+    clipboardTimer = nil
+  }
+
+  private func handleClipboardRead(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    guard let args = call.arguments as? [String: Any] else {
+      result(FlutterError(code: "invalid_arguments", message: "需要剪贴板作用域。", details: nil))
+      return
+    }
+    do {
+      switch call.method {
+      case "control.clipboard.open":
+        guard args.count == 4,
+              let deadline = clipboardInteger(args["deadlineMicros"]),
+              let epoch = clipboardInteger(args["epoch"]),
+              let controller = clipboardInteger(args["controllerRevision"]),
+              let target = clipboardInteger(args["targetRevision"]) else {
+          result(FlutterError(code: "invalid_arguments", message: "作用域字段无效。", details: nil)); return
+        }
+        let lease = try clipboardRead.open(deadlineMicros: deadline, epoch: epoch,
+                                           controllerRevision: controller, targetRevision: target)
+        let timer = Timer(timeInterval: 0.15, repeats: true) { [weak self] _ in
+          guard let self else { return }
+          if self.clipboardRead.pollChanged() {
+            self.clipboardNotifications?.invokeMethod("changed", arguments: nil)
+          }
+          if !self.clipboardRead.isActive { self.stopClipboardNotifications() }
+        }
+        clipboardTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+        result(lease)
+      case "control.clipboard.read":
+        guard args.count == 4,
+              let lease = clipboardInteger(args["lease"]),
+              let epoch = clipboardInteger(args["epoch"]),
+              let controller = clipboardInteger(args["controllerRevision"]),
+              let target = clipboardInteger(args["targetRevision"]) else {
+          result(FlutterError(code: "invalid_arguments", message: "作用域字段无效。", details: nil)); return
+        }
+        let snapshot = try clipboardRead.read(lease: lease, epoch: epoch,
+                                               controllerRevision: controller, targetRevision: target)
+        result(["sequence": snapshot.sequence, "text": snapshot.text as Any? ?? NSNull()])
+      case "control.clipboard.close":
+        guard args.count == 1, let lease = clipboardInteger(args["lease"]) else {
+          result(FlutterError(code: "invalid_arguments", message: "租约无效。", details: nil)); return
+        }
+        try clipboardRead.close(lease: lease)
+        stopClipboardNotifications()
+        result(nil)
+      default: result(FlutterMethodNotImplemented)
+      }
+    } catch {
+      result(clipboardFailure(error))
+    }
+  }
+
   /// Observable background/tray state, used by the acceptance entry to record
   /// the macOS background matrix without accessibility-driven UI automation.
   private func windowState() -> [String: Any] {
@@ -308,6 +392,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler, NSDraggingDestination {
 
   private func completeTermination() {
     terminationApproved = true
+    stopClipboardNotifications(); clipboardRead.shutdown()
     unregisterDraggedTypes()
     discovery.stop(); files.close()
     if let status = statusItem { NSStatusBar.system.removeStatusItem(status) }
