@@ -20,6 +20,8 @@ final class _MeetingTransport implements AuxiliaryTransport {
   bool cancelOnJoin = false;
   bool rejectHostPoll = false;
   bool loseFirstSendReply = false;
+  bool loseFirstActivateReply = false;
+  final activationRequests = <Map<String, String>>[];
   final seenSends = <String>{};
   Completer<void>? leaveRelease;
   final leaveEntered = Completer<void>();
@@ -79,8 +81,13 @@ final class _MeetingTransport implements AuxiliaryTransport {
         cancellation.throwIfCancelled();
         return {'pending': true};
       case '/v1/meet/activate':
+        activationRequests.add(Map.of(body));
         activatedLifetimeSeconds = int.parse(body['lifetimeSeconds']!);
         active = true;
+        if (loseFirstActivateReply) {
+          loseFirstActivateReply = false;
+          throw const AuxiliaryFailure('timeout');
+        }
         return {'active': true};
       case '/v1/meet/leave':
         if (!leaveEntered.isCompleted) leaveEntered.complete();
@@ -380,7 +387,8 @@ void main() {
     );
     addTearDown(host.close);
     await host.open(address: InternetAddress.loopbackIPv4);
-    final transport = _MeetingTransport(host.offer!.code);
+    final transport = _MeetingTransport(host.offer!.code)
+      ..loseFirstActivateReply = true;
     MeetingConnectionWire? activeWire;
     final listing = MeetingListing(
       transport,
@@ -404,6 +412,8 @@ void main() {
     addTearDown(client.close);
     await serving;
     expect(transport.active, isTrue);
+    expect(transport.activationRequests, hasLength(2));
+    expect(transport.activationRequests[0], transport.activationRequests[1]);
     expect(transport.activatedLifetimeSeconds, grantLifetime.inSeconds);
     expect(accepted, hasLength(1));
     expect(client.grant!.binding.policy.type, 'short-code');

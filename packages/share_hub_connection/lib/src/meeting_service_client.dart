@@ -6,6 +6,25 @@ import 'channel.dart';
 import 'identity.dart';
 import 'pairing.dart';
 
+/// Retry only an uncertain delivery, using the exact same request body. Both
+/// meeting operations using this helper are idempotent for that body.
+Future<Map<String, Object?>> _postWithUncertainRetry(
+  AuxiliaryTransport transport,
+  String path,
+  Map<String, String> body,
+  AuxiliaryCancellation cancellation,
+) async {
+  try {
+    return await transport.post(path, body, cancellation);
+  } on AuxiliaryFailure catch (error) {
+    if (cancellation.isCancelled ||
+        (error.code != 'timeout' && error.code != 'unreachable')) {
+      rethrow;
+    }
+    return transport.post(path, body, cancellation);
+  }
+}
+
 /// The selected auxiliary origin routes first-pairing bytes. It is not a grant.
 final class MeetingServiceClient {
   const MeetingServiceClient(this.transport);
@@ -201,11 +220,16 @@ final class MeetingListing {
         if (remainingSeconds < 1) {
           throw const ConnectionFailure('expired');
         }
-        final result = await _transport.post('/v1/meet/activate', {
-          'token': _token,
-          'attempt': attempt,
-          'lifetimeSeconds': remainingSeconds.toString(),
-        }, _pollCancellation);
+        final result = await _postWithUncertainRetry(
+          _transport,
+          '/v1/meet/activate',
+          {
+            'token': _token,
+            'attempt': attempt,
+            'lifetimeSeconds': remainingSeconds.toString(),
+          },
+          _pollCancellation,
+        );
         if (result.length != 1 ||
             result['active'] != true ||
             _closed ||
@@ -312,28 +336,14 @@ final class MeetingConnectionWire
             'sequence': sequence.toString(),
             'frame': frame,
           };
-          Map<String, Object?> result;
-          try {
-            result = await _transport.post(
-              '/v1/meet/send',
-              body,
-              _cancellation,
-            );
-          } on AuxiliaryFailure catch (error) {
-            // The service may already have queued this sequence when its HTTP
-            // reply is lost. Replay the identical frame once; it is accepted
-            // idempotently, never delivered twice. Cancellation never retries.
-            if (_closed ||
-                _cancellation.isCancelled ||
-                (error.code != 'timeout' && error.code != 'unreachable')) {
-              rethrow;
-            }
-            result = await _transport.post(
-              '/v1/meet/send',
-              body,
-              _cancellation,
-            );
-          }
+          // A lost acknowledgement replays this exact sequence once. The
+          // service confirms it without delivering the frame a second time.
+          final result = await _postWithUncertainRetry(
+            _transport,
+            '/v1/meet/send',
+            body,
+            _cancellation,
+          );
           if (result.length != 1 || result['accepted'] != true) {
             throw const AuxiliaryFailure('invalid_response');
           }
