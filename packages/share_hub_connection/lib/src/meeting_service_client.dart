@@ -100,8 +100,12 @@ final class MeetingServiceClient {
     } on ConnectionFailure {
       throw const AuxiliaryFailure('invalid_response');
     }
-    cancellation.throwIfCancelled();
-    return MeetingConnectionWire(transport, token, attempt);
+    final wire = MeetingConnectionWire(transport, token, attempt);
+    if (cancellation.isCancelled) {
+      await wire.closeAndLeave();
+      throw const AuxiliaryFailure('cancelled');
+    }
+    return wire;
   }
 }
 

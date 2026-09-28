@@ -15,6 +15,7 @@ final class _MeetingTransport implements AuxiliaryTransport {
   final toJoiner = <Map<String, Object?>>[];
   bool active = false;
   bool closed = false;
+  bool cancelOnJoin = false;
 
   static String base64Token(int count, int value) =>
       base64Url.encode(List<int>.filled(count, value));
@@ -31,6 +32,7 @@ final class _MeetingTransport implements AuxiliaryTransport {
         if (body['code'] != code) {
           throw const AuxiliaryFailure('entry_unavailable');
         }
+        if (cancelOnJoin) cancellation.cancel();
         return {'attempt': attempt, 'token': joinToken};
       case '/v1/meet/pending':
         return {
@@ -122,6 +124,19 @@ final class _DelayedLeaveTransport implements AuxiliaryTransport {
 }
 
 void main() {
+  test('cancel after accepted meeting join releases the attempt', () async {
+    final transport = _MeetingTransport('123456')..cancelOnJoin = true;
+    await expectLater(
+      MeetingServiceClient(transport).join(
+        '123456',
+        cancellation: AuxiliaryCancellation(),
+      ),
+      throwsA(isA<AuxiliaryFailure>()
+          .having((error) => error.code, 'code', 'cancelled')),
+    );
+    expect(transport.closed, isTrue);
+  });
+
   test(
     'meeting wire waits briefly for service leave after local close',
     () async {
