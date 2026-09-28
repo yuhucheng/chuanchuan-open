@@ -34,6 +34,8 @@ class DesktopLifecycle extends ChangeNotifier {
   final bool connectionSupported;
   final MethodChannel channel;
   Future<bool>? _exit;
+  Future<void>? _publishingState;
+  bool? _pendingAdmissionState;
   final _pendingExitSteps = <String, Future<void>>{};
   bool exiting = false, exited = false, _disposed = false, _ready = false;
   String? error;
@@ -83,16 +85,31 @@ class DesktopLifecycle extends ChangeNotifier {
   }
 
   Future<void> _publish() async {
-    if (!_ready || _disposed) return;
+    if (!_ready || _disposed || exiting || exited) return;
+    // Keep only the latest preference while a native write is in flight.
+    // Completing calls out of order could restore an old tray/launch state.
+    _pendingAdmissionState = connections.accepting;
+    return _publishingState ??= _drainState();
+  }
+
+  Future<void> _drainState() async {
     try {
-      await channel.invokeMethod<void>('state', {
-        'allowConnections': connections.accepting,
-      });
-    } catch (_) {
-      if (!_disposed) {
-        error = '无法更新后台入口状态，请在主窗口操作。';
-        _notify();
+      while (!_disposed && _pendingAdmissionState != null) {
+        final value = _pendingAdmissionState!;
+        _pendingAdmissionState = null;
+        try {
+          await channel.invokeMethod<void>('state', {
+            'allowConnections': value,
+          });
+        } catch (_) {
+          if (!_disposed) {
+            error = '无法更新后台入口状态，请在主窗口操作。';
+            _notify();
+          }
+        }
       }
+    } finally {
+      _publishingState = null;
     }
   }
 
@@ -133,6 +150,12 @@ class DesktopLifecycle extends ChangeNotifier {
         ]).then<void>((_) {});
       });
       if (preview.cleanupFailed) throw StateError('capture cleanup');
+      // Shutdown notifications do not publish a temporary "off" preference.
+      // Finish the user's last pre-exit choice before native teardown.
+      await _exitStep(
+        'publish-state',
+        () => _publishingState ?? Future<void>.value(),
+      );
       // Cancel a native picker before waiting for its queued result/releases.
       if (_ready) {
         await _exitStep(

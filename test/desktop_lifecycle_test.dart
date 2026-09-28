@@ -375,6 +375,59 @@ void main() {
       expect(published.last, isTrue);
     },
   );
+
+  test('tray preference writes finish in order before native exit', () async {
+    const orderedChannel = MethodChannel('test/desktop-ordered-state');
+    final firstEnabledWrite = Completer<void>();
+    final events = <String>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(orderedChannel, (call) async {
+          if (call.method == 'initialize') return {'allowConnections': false};
+          if (call.method == 'state') {
+            final enabled = (call.arguments as Map)['allowConnections'] as bool;
+            if (enabled) await firstEnabledWrite.future;
+            events.add('state:$enabled');
+          } else {
+            events.add(call.method);
+          }
+          return null;
+        });
+    final connectionPlatform = FakeConnectionPlatform();
+    connectionPlatform.seed.complete(
+      await DeviceIdentity.fromSeed(List.filled(32, 47)),
+    );
+    final ownedConnections = ConnectionController(connectionPlatform);
+    final owned = DesktopLifecycle(
+      devices: devices,
+      connections: ownedConnections,
+      preview: preview,
+      stopRemote: () async {},
+      transfers: transfers,
+      connectionSupported: true,
+      channel: orderedChannel,
+    );
+    addTearDown(() {
+      owned.dispose();
+      ownedConnections.dispose();
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(orderedChannel, null);
+    });
+
+    await owned.initialize();
+    await ownedConnections.open();
+    await ownedConnections.disconnectAll();
+    final exiting = owned.requestExit();
+    await Future<void>.delayed(Duration.zero);
+    expect(events, isNot(contains('prepareExit')));
+
+    firstEnabledWrite.complete();
+    expect(await exiting, isTrue);
+    final enabledAt = events.indexOf('state:true');
+    final disabledAt = events.lastIndexOf('state:false');
+    expect(enabledAt, greaterThanOrEqualTo(0));
+    expect(disabledAt, greaterThan(enabledAt));
+    expect(events.indexOf('prepareExit'), greaterThan(disabledAt));
+  });
 }
 
 class _OrderedConnectionController extends ConnectionController {
