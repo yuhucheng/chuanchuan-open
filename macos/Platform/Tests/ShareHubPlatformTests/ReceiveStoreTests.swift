@@ -275,7 +275,8 @@ final class ReceiveStoreTests: XCTestCase {
         let finished = expectation(description: "hash stopped")
         DispatchQueue.global().async {
             defer { finished.fulfill() }
-            XCTAssertThrowsError(try fixture.store.commit(token: item.token, scope: item.scope))
+            let result = Result { try fixture.store.commit(token: item.token, scope: item.scope) }
+            if case .success = result { XCTFail("cancelled commit unexpectedly succeeded") }
         }
         XCTAssertEqual(entered.wait(timeout: .now() + 5), .success)
         XCTAssertEqual(try fixture.store.scopeStop(scope: item.scope, mode: .cancel), .cancelled)
@@ -297,7 +298,8 @@ final class ReceiveStoreTests: XCTestCase {
         let finished = expectation(description: "committed")
         DispatchQueue.global().async {
             defer { finished.fulfill() }
-            XCTAssertNoThrow(try fixture.store.commit(token: item.token, scope: item.scope))
+            let result = Result { try fixture.store.commit(token: item.token, scope: item.scope) }
+            if case .failure(let error) = result { XCTFail("commit failed: \(error)") }
         }
         XCTAssertEqual(entered.wait(timeout: .now() + 5), .success)
         XCTAssertEqual(try fixture.store.scopeStop(scope: item.scope, mode: .cancel), .committing)
@@ -620,9 +622,15 @@ private final class Fixture {
     let store: ReceiveStore
     let directory: ReceiveDirectory
     init(io: ReceiveStoreFileSystem = ReceiveStoreFileSystem(), clock: TestClock = TestClock(100), maximumReservedBytes: Int64? = nil) throws {
-        // System temporary paths may contain /var -> /private/var. Resolve only
-        // this test-created fixture before handing its URL to the strict walker.
-        root = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent(UUID().uuidString)
+        // Foundation may leave the /var -> /private/var ancestor unresolved.
+        // Canonicalize only this test fixture; the production walker must still
+        // reject a symlink in a user-selected destination.
+        guard let canonical = realpath(FileManager.default.temporaryDirectory.path, nil) else {
+            throw ReceiveStoreError.ioFailure
+        }
+        defer { free(canonical) }
+        root = URL(fileURLWithPath: String(cString: canonical), isDirectory: true)
+            .appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
         store = ReceiveStore(clock: { try clock.read() }, maximumReservedBytes: maximumReservedBytes, fileSystem: io)
         directory = try store.directoryFromPicker(root)
