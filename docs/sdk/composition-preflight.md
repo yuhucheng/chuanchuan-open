@@ -23,6 +23,14 @@ and the native tree is independently verified. It checks the proposed
 `windows-x64`, `windows-arm64` and `macos-universal` directories. A native-only
 root is rejected by this Flutter-package preflight.
 
+The preflight also requires the draft bridge layout: the Flutter entrypoint,
+target platform hook and both public API snapshot `pubspec.yaml` files; native
+build metadata, a public header and a platform binary path; and referenced
+license/validation files in both roots. Snapshot identity fields must be present
+and well-formed. These are structural checks against the verified inventory,
+not proof that the files contain working code or that their self-reported
+provenance matches an independently trusted source.
+
 The checked-in examples remain non-installable. Passing synthetic tests do not
 prove a working SDK: this component does not authenticate the source, extract a
 ZIP safely, validate every manifest field, inspect binary slices or runtime

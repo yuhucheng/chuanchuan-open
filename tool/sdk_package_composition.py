@@ -25,6 +25,68 @@ class CompositionError(Exception):
 
 
 ARTIFACT_ID = re.compile(r"[a-z0-9][a-z0-9.-]{0,127}\Z")
+PUBLIC_APIS = {"share_hub_media_api", "share_hub_session_api"}
+
+
+def _require_file(entries, path):
+    if entries.get(path, {}).get("type") != "file":
+        raise CompositionError("missing_package_component")
+
+
+def _check_layout(outer, native, outer_files, native_files):
+    """Reject incomplete bridge/native roots before anyone attempts installation."""
+    shared = ("licenses/LICENSE.sdk.txt", "licenses/THIRD_PARTY_NOTICES.txt",
+              "metadata/validation.json")
+    for path in shared:
+        _require_file(outer_files, path)
+        _require_file(native_files, path)
+    _require_file(native_files, "metadata/build.json")
+    if not any(path.startswith("include/") and path.endswith(".h") and
+               entry["type"] == "file" for path, entry in native_files.items()):
+        raise CompositionError("missing_package_component")
+    os_name = native["target"]["os"]
+    binary_root = "bin/" if os_name == "windows" else "frameworks/"
+    if not any(path.startswith(binary_root) and entry["type"] == "file"
+               for path, entry in native_files.items()):
+        raise CompositionError("missing_package_component")
+    for path in ("pubspec.yaml", "lib/share_hub_media_sdk.dart"):
+        _require_file(outer_files, path)
+    if not any(path.startswith(os_name + "/") and entry["type"] == "file"
+               for path, entry in outer_files.items()):
+        raise CompositionError("missing_package_component")
+    if native.get("publicSnapshots") != []:
+        raise CompositionError("invalid_public_snapshots")
+    snapshots = outer.get("publicSnapshots")
+    if not isinstance(snapshots, list) or len(snapshots) != len(PUBLIC_APIS):
+        raise CompositionError("invalid_public_snapshots")
+    seen = set()
+    for snapshot in snapshots:
+        if not isinstance(snapshot, dict) or set(snapshot) != {
+                "package", "version", "directory", "publicRevision", "sourceDigest"}:
+            raise CompositionError("invalid_public_snapshots")
+        name = snapshot["package"]
+        if not isinstance(name, str) or name not in PUBLIC_APIS or name in seen or \
+                snapshot["directory"] != f"public_api/{name}" or \
+                not isinstance(snapshot["version"], str) or not snapshot["version"] or \
+                not isinstance(snapshot["publicRevision"], str) or \
+                not 1 <= len(snapshot["publicRevision"]) <= 128 or \
+                not isinstance(snapshot["sourceDigest"], str) or \
+                not HASH.fullmatch(snapshot["sourceDigest"]):
+            raise CompositionError("invalid_public_snapshots")
+        _require_file(outer_files, f"public_api/{name}/pubspec.yaml")
+        seen.add(name)
+
+    for manifest, entries in ((outer, outer_files), (native, native_files)):
+        licenses = manifest.get("licenseFiles")
+        if not isinstance(licenses, list) or len(licenses) < 2 or \
+                any(not isinstance(path, str) or not path.startswith("licenses/")
+                    for path in licenses) or len(licenses) != len(set(licenses)) or \
+                not set(shared[:2]) <= set(licenses):
+            raise CompositionError("invalid_package_references")
+        for path in licenses:
+            _require_file(entries, path)
+        if manifest.get("validationFile") != "metadata/validation.json":
+            raise CompositionError("invalid_package_references")
 
 
 def _read_manifest(root_fd):
@@ -113,11 +175,14 @@ def verify_composition(package_root, expected_manifest_sha256):
                 {key: value for key, value in entry.items() if key != "path"}:
             raise CompositionError("nested_inventory_mismatch")
 
+    _check_layout(outer, native, outer_files, native_files)
+
     # Verify the native tree independently, then ensure the outer tree still
     # matches the pinned identity. This is observation, not an atomic install.
     verify_inventory(root_path / directory, payload["manifestSha256"])
     verify_inventory(root_path, expected_manifest_sha256)
-    return {"compositionVerified": True, "nestedManifestSha256": payload["manifestSha256"],
+    return {"compositionVerified": True, "layoutVerified": True,
+            "nestedManifestSha256": payload["manifestSha256"],
             "installable": False,
             "notValidated": ["source trust", "safe archive extraction", "full manifest schema",
                              "API/ABI compatibility", "binary architecture/runtime",

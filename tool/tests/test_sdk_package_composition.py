@@ -21,9 +21,26 @@ class CompositionTests(unittest.TestCase):
         self.root = Path(self.temporary.name) / "SDK 中文 spaces"
         self.native_root = self.root / "native/windows-x64"
         (self.native_root / "bin").mkdir(parents=True)
-        (self.root / "lib").mkdir()
+        for directory in ("include", "licenses", "metadata", "frameworks"):
+            (self.native_root / directory).mkdir()
+        for directory in ("lib", "licenses", "metadata", "windows", "macos",
+                          "public_api/share_hub_media_api",
+                          "public_api/share_hub_session_api"):
+            (self.root / directory).mkdir(parents=True)
         (self.native_root / "bin/core.dll").write_bytes(b"synthetic, not executable")
+        (self.native_root / "frameworks/core").write_bytes(b"synthetic, not executable")
+        (self.native_root / "include/share_hub_media.h").write_text("// fixture")
+        (self.native_root / "metadata/build.json").write_text("{}")
         (self.root / "lib/share_hub_media_sdk.dart").write_text("// fixture")
+        (self.root / "pubspec.yaml").write_text("name: share_hub_media_sdk\n")
+        (self.root / "windows/CMakeLists.txt").write_text("# fixture")
+        (self.root / "macos/Package.swift").write_text("// fixture")
+        for name in ("share_hub_media_api", "share_hub_session_api"):
+            (self.root / f"public_api/{name}/pubspec.yaml").write_text(f"name: {name}\n")
+        for package in (self.root, self.native_root):
+            (package / "licenses/LICENSE.sdk.txt").write_text("fixture license")
+            (package / "licenses/THIRD_PARTY_NOTICES.txt").write_text("fixture notice")
+            (package / "metadata/validation.json").write_text("{}")
         shared = {
             "schema": SCHEMA, "exampleOnly": False, "inventoryComplete": True,
             "sdkVersion": "0.1.0-candidate.1", "productTarget": "0.1.0",
@@ -32,12 +49,21 @@ class CompositionTests(unittest.TestCase):
             "apiCompatibility": [], "nativeAbi": {"family": "sharehub-media-c",
                                                "stability": "draft", "draftRevision": 2},
             "capabilities": [],
+            "licenseFiles": ["licenses/LICENSE.sdk.txt", "licenses/THIRD_PARTY_NOTICES.txt"],
+            "validationFile": "metadata/validation.json",
         }
-        self.native = dict(copy.deepcopy(shared), kind="native", artifactId="native-win-x64")
+        self.native = dict(copy.deepcopy(shared), kind="native", artifactId="native-win-x64",
+                           publicSnapshots=[])
         self.outer = dict(copy.deepcopy(shared), kind="flutter", artifactId="flutter-win-x64",
                           nativePayload={"artifactId": "native-win-x64",
                                          "directory": "native/windows-x64",
-                                         "manifestSha256": ""})
+                                         "manifestSha256": ""},
+                          publicSnapshots=[
+                              {"package": name, "version": "0.1.0",
+                               "directory": f"public_api/{name}",
+                               "publicRevision": "fixture-revision",
+                               "sourceDigest": "0" * 64}
+                              for name in ("share_hub_media_api", "share_hub_session_api")])
 
     @staticmethod
     def inventory(root):
@@ -73,6 +99,7 @@ class CompositionTests(unittest.TestCase):
         digest = self.write()
         result = verify_composition(self.root, digest)
         self.assertTrue(result["compositionVerified"])
+        self.assertTrue(result["layoutVerified"])
         self.assertFalse(result["installable"])
         self.assertEqual(result["nestedManifestSha256"], self.outer["nativePayload"]["manifestSha256"])
         self.assertIn("source trust", result["notValidated"])
@@ -142,6 +169,53 @@ class CompositionTests(unittest.TestCase):
     def test_checked_in_examples_are_rejected(self):
         self.outer["exampleOnly"] = True
         self.rejects("non_installable_example")
+
+    def test_complete_inventory_cannot_hide_missing_bridge_or_native_components(self):
+        for path in (self.root / "pubspec.yaml",
+                     self.root / "lib/share_hub_media_sdk.dart",
+                     self.root / "windows/CMakeLists.txt",
+                     self.root / "public_api/share_hub_media_api/pubspec.yaml",
+                     self.root / "metadata/validation.json",
+                     self.native_root / "include/share_hub_media.h",
+                     self.native_root / "bin/core.dll",
+                     self.native_root / "metadata/build.json"):
+            with self.subTest(path=path):
+                original = path.read_bytes()
+                path.unlink()
+                try:
+                    self.rejects("missing_package_component")
+                finally:
+                    path.write_bytes(original)
+
+    def test_macos_layout_requires_framework_and_platform_hook(self):
+        self.native_root.rename(self.root / "native/macos-universal")
+        self.native_root = self.root / "native/macos-universal"
+        for manifest in (self.native, self.outer):
+            manifest["target"] = {"os": "macos", "architectures": ["arm64", "x86_64"]}
+        self.outer["nativePayload"]["directory"] = "native/macos-universal"
+        for path in (self.native_root / "frameworks/core",
+                     self.root / "macos/Package.swift"):
+            with self.subTest(path=path):
+                original = path.read_bytes()
+                path.unlink()
+                try:
+                    self.rejects("missing_package_component")
+                finally:
+                    path.write_bytes(original)
+
+    def test_snapshot_provenance_and_references_cannot_be_empty_claims(self):
+        self.outer["publicSnapshots"][0]["sourceDigest"] = None
+        self.rejects("invalid_public_snapshots")
+        self.outer["publicSnapshots"][0]["sourceDigest"] = "0" * 64
+        self.outer["publicSnapshots"][0]["directory"] = "public_api/other"
+        self.rejects("invalid_public_snapshots")
+        self.outer["publicSnapshots"][0]["directory"] = "public_api/share_hub_media_api"
+        self.native["licenseFiles"] = []
+        self.rejects("invalid_package_references")
+        self.native["licenseFiles"] = ["licenses/LICENSE.sdk.txt",
+                                       "licenses/THIRD_PARTY_NOTICES.txt"]
+        self.outer["validationFile"] = "metadata/other.json"
+        self.rejects("invalid_package_references")
 
     def test_cli_uses_trusted_outer_hash(self):
         digest = self.write()
