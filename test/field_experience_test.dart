@@ -2,6 +2,7 @@ import 'field_test_helpers.dart';
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -19,6 +20,61 @@ import 'package:share_hub_open/features/connections/connection_controller.dart';
 import 'package:share_hub_open/features/connections/connection_panel.dart';
 
 void main() {
+  testWidgets('normal Windows entry offers control through the short code', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    tester.view.physicalSize = const Size(1180, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final platform = FakePlatform();
+    final engine = FakePreviewEngine();
+    await tester.pumpWidget(
+      ShareHubApp(
+        targetPlatform: TargetPlatform.windows,
+        platform: platform,
+        previewEngine: engine,
+      ),
+    );
+    await tester.pumpAndSettle();
+    platform.events.add(
+      const DiscoverySnapshot(
+        state: 'running',
+        devices: [
+          NearbyDevice(
+            'other',
+            '另一台电脑',
+            'windows',
+            host: 'test.local',
+            port: 1234,
+            publicKey: 'key',
+          ),
+        ],
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('device-key')));
+    await tester.pumpAndSettle();
+    expect(find.text('连接并控制'), findsOneWidget);
+    expect(engine.sourceCalls, 0);
+    await tester.tap(find.text('连接并控制'));
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.byType(TextField),
+      ),
+      findsOneWidget,
+    );
+    expect(engine.starts, 0);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+    await platform.events.close();
+    debugDefaultTargetPlatformOverride = null;
+  });
+
   testWidgets(
     'arrival ordering, focused Enter action, aggregation and search remain in field',
     (tester) async {
@@ -109,11 +165,7 @@ void main() {
             child: DeviceField(
               entries: [
                 DirectoryDevice.fromDiscovered(
-                  const NearbyDevice(
-                    'long',
-                    '办公室里名称非常长的中文电脑设备用于布局验收',
-                    'macos',
-                  ),
+                  const NearbyDevice('long', '办公室里名称非常长的中文电脑设备用于布局验收', 'macos'),
                 ),
               ],
               localName: '本机名称也很长但依然应保持可读和可操作',

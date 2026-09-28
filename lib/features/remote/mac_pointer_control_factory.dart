@@ -8,7 +8,8 @@ import 'mac_control_geometry_resolver.dart';
 import 'remote_media.dart';
 
 /// Explicit macOS pointer/wheel composition for platform acceptance work.
-/// Product defaults remain watch/cast until native effects pass real testing.
+/// The macOS product default remains watch/cast until its full input and
+/// clipboard execution path passes platform testing.
 RtcRemotePictureFactory createMacPointerControlFactory() {
   if (defaultTargetPlatform != TargetPlatform.macOS) {
     throw UnsupportedError('macOS control factory requires macOS');

@@ -63,4 +63,22 @@ void main() {
       ControlCapability.textInput,
     });
   });
+
+  test('production Windows factory advertises the complete control set', () {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final factory = createWindowsControlFactory();
+    expect(factory.capabilities.operations, {
+      SessionOperation.watch,
+      SessionOperation.cast,
+      SessionOperation.control,
+    });
+    expect(factory.controlCapabilities, {
+      ControlCapability.pointer,
+      ControlCapability.wheel,
+      ControlCapability.physicalKey,
+      ControlCapability.textInput,
+      ControlCapability.clipboardText,
+    });
+  });
 }

@@ -17,6 +17,7 @@ import '../features/preview/preview_engine.dart';
 import '../features/remote/remote_media.dart';
 import '../features/remote/remote_session_controller.dart';
 import '../features/remote/control_clipboard_preference.dart';
+import '../features/remote/windows_pointer_control_factory.dart';
 import '../features/transfers/file_access.dart';
 import '../features/transfers/transfer_queue.dart';
 import '../features/transfers/network_transfers.dart';
@@ -88,19 +89,28 @@ class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
   late final RemoteSessionController _remote = RemoteSessionController(
     connections: _connections,
     platform: _platform,
-    factory:
-        widget.remoteMedia ??
-        (widget.currentRelayLease == null
-            ? RtcRemotePictureFactory()
-            : RtcRemotePictureFactory.withRelayLease(
-                widget.currentRelayLease!,
-              )),
+    factory: widget.remoteMedia ?? _defaultRemoteMedia(),
     listSources: _engine.sources,
     localCaptureActive: () => _preview.occupiesPicture,
     requiresAccessibilityForControl:
         (widget.targetPlatform ?? defaultTargetPlatform) ==
         TargetPlatform.macOS,
   );
+
+  RemotePictureFactory _defaultRemoteMedia() {
+    if (defaultTargetPlatform == TargetPlatform.windows &&
+        (widget.targetPlatform ?? defaultTargetPlatform) ==
+            TargetPlatform.windows) {
+      return createWindowsControlFactory(
+        clipboardSetting: _clipboardPreference,
+        currentRelayLease: widget.currentRelayLease,
+      );
+    }
+    return widget.currentRelayLease == null
+        ? RtcRemotePictureFactory()
+        : RtcRemotePictureFactory.withRelayLease(widget.currentRelayLease!);
+  }
+
   late final _transfers = TransferQueue(_fileAccess);
   late final _networkTransfers = NetworkTransfers(
     connections: _connections,

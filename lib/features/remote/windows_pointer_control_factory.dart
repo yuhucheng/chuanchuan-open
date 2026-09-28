@@ -12,14 +12,13 @@ import 'windows_control_screen_geometry.dart';
 import 'windows_control_clipboard_pair.dart';
 import 'windows_deferred_control_input.dart';
 
-/// Opt-in composition for Windows pointer/wheel control integration tests.
-/// The default product factory stays watch/cast until all v0.2 capabilities
-/// and real platform acceptance are present.
+/// Capability-limited composition for Windows pointer/wheel integration tests.
 RtcRemotePictureFactory createWindowsPointerControlFactory({
   MethodChannel channel = const MethodChannel('dev.sharehub.client/platform'),
   bool clipboardText = false,
   bool keyboardText = false,
   ValueListenable<bool>? clipboardSetting,
+  sdk.RelayIceLease? Function()? currentRelayLease,
 }) {
   if (defaultTargetPlatform != TargetPlatform.windows) {
     throw UnsupportedError('Windows control factory requires Windows');
@@ -39,6 +38,7 @@ RtcRemotePictureFactory createWindowsPointerControlFactory({
         SessionOperation.control,
       },
       controlCapabilities: capabilities,
+      currentRelayLease: currentRelayLease,
       createControlSession: (picture, context) async {
         late final sdk.RtcControlOperation operation;
         final clipboard =
@@ -168,6 +168,20 @@ RtcRemotePictureFactory createWindowsPointerControlFactory({
     ),
   );
 }
+
+/// Normal Windows client composition: one authorized control pair with native
+/// pointer, keyboard, text and the user's clipboard preference.
+RtcRemotePictureFactory createWindowsControlFactory({
+  MethodChannel channel = const MethodChannel('dev.sharehub.client/platform'),
+  ValueListenable<bool>? clipboardSetting,
+  sdk.RelayIceLease? Function()? currentRelayLease,
+}) => createWindowsPointerControlFactory(
+  channel: channel,
+  keyboardText: true,
+  clipboardText: true,
+  clipboardSetting: clipboardSetting,
+  currentRelayLease: currentRelayLease,
+);
 
 bool _sameDisplayMapping(ControlGeometry a, ControlGeometry b) =>
     a.mediaRevision == b.mediaRevision &&
