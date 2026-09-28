@@ -19,6 +19,8 @@ final class _MeetingTransport implements AuxiliaryTransport {
   bool closed = false;
   bool cancelOnJoin = false;
   bool rejectHostPoll = false;
+  Completer<void>? leaveRelease;
+  final leaveEntered = Completer<void>();
   int hostPolls = 0;
   int pendingPolls = 0;
   final repeatedPending = Completer<void>();
@@ -71,6 +73,8 @@ final class _MeetingTransport implements AuxiliaryTransport {
         active = true;
         return {'active': true};
       case '/v1/meet/leave':
+        if (!leaveEntered.isCompleted) leaveEntered.complete();
+        await leaveRelease?.future;
         closed = true;
         return {'closed': true};
       case '/v1/meet/unpublish':
@@ -296,6 +300,42 @@ void main() {
       expect(host.offer!.reservable(1000000), isTrue);
       await listing.close();
       await serving;
+    },
+  );
+
+  test(
+    'failed admission drains its service leave before route close',
+    () async {
+      final identity = await DeviceIdentity.fromSeed(List.filled(32, 59));
+      final host = PairingHost(
+        identity: identity,
+        clock: () async => 1000000,
+        onConnection: (_) {},
+        protocolVersion: 2,
+      );
+      addTearDown(host.close);
+      await host.open(address: InternetAddress.loopbackIPv4);
+      final leaveRelease = Completer<void>();
+      final transport = _MeetingTransport(host.offer!.code)
+        ..rejectHostPoll = true
+        ..leaveRelease = leaveRelease;
+      final listing = MeetingListing(
+        transport,
+        host,
+        _MeetingTransport.hostToken,
+        AuxiliaryCancellation(),
+      );
+      final serving = listing.serve();
+      await transport.leaveEntered.future.timeout(const Duration(seconds: 3));
+      await Future<void>.delayed(Duration.zero);
+      var finished = false;
+      final closing = listing.close().then((_) => finished = true);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(finished, isFalse);
+      leaveRelease.complete();
+      await closing;
+      await serving;
+      expect(transport.closed, isTrue);
     },
   );
 

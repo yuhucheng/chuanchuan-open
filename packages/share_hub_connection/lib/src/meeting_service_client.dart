@@ -175,8 +175,8 @@ final class MeetingListing {
     work = _admit(attempt, wire)
         .then<void>(
           (_) {},
-          onError: (Object _, StackTrace _) {
-            wire.close();
+          onError: (Object _, StackTrace _) async {
+            await wire.closeAndLeave();
             _wires.remove(attempt);
           },
         )
@@ -218,7 +218,7 @@ final class MeetingListing {
       },
     );
     if (connection == null || (_closed && !_activated) || _owner.isCancelled) {
-      wire.close();
+      await wire.closeAndLeave();
       _wires.remove(attempt);
       final offer = _host.offer;
       if (connection == null &&
