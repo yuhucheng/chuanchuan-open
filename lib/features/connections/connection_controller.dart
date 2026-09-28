@@ -510,9 +510,16 @@ class ConnectionController extends ChangeNotifier {
     // eligible to finish a pairing.
     final hostClosing = _host?.stopAccepting() ?? Future<void>.value();
     final meetingClosing = meeting?.closeAdmission() ?? Future<void>.value();
-    await Future.wait([hostClosing, meetingClosing]);
-    if (generation == _generation && _host != null) await _clearAdvertisement();
-    _emit();
+    try {
+      await Future.wait([hostClosing, meetingClosing]);
+    } finally {
+      // A failed remote leave must not retain a stale discovery advertisement.
+      // Both local admission paths were already invalidated synchronously.
+      if (generation == _generation && _host != null) {
+        await _clearAdvertisement();
+      }
+      _emit();
+    }
   }
 
   /// Admission and in-flight handshakes are invalidated before awaiting I/O.
@@ -534,8 +541,12 @@ class ConnectionController extends ChangeNotifier {
 
   Future<void> _finishDisconnectAll() async {
     try {
-      await stopAccepting();
-      await Future.wait(_transportClosures.toList());
+      // An admission cleanup error still has to wait for every socket already
+      // closed by disconnectAll before the shared barrier is released.
+      await Future.wait<void>([
+        stopAccepting(),
+        ..._transportClosures,
+      ]);
     } finally {
       _disconnecting = false;
       _disconnectPending = null;
