@@ -63,6 +63,8 @@ validation and installation; arbitrary concurrent modification after the functio
 returns is outside its guarantee. The verifier does not extract ZIPs, audit the
 contents of native code, follow release metadata, verify nested native-payload
 compatibility, validate every manifest field or execute SDK/package hooks.
+A separate [composition preflight](composition-preflight.md) now checks the nested
+relationship after this inventory gate, without granting installation readiness.
 
 The [package proposal](../../packages/share_hub_media_api/native/draft/PACKAGING.md)
 remains under review. Its checked-in examples are deliberately non-installable and

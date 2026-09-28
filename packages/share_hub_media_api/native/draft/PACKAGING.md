@@ -234,7 +234,12 @@ Windows host traversal and remaining package gates are not implemented by it.
 The separate [declaration compatibility preflight](../../../../docs/sdk/compatibility-preflight.md)
 compares a pinned manifest with a caller-owned consumer policy. OS/CPU/minimum-OS
 and API/ABI/capability declarations receive distinct diagnostics; runtime/binary
-inspection, full schema/layout and nested payload verification are still pending.
+inspection and full schema/layout verification are still pending.
 Draft ABI requires exact revision/candidate mode. Stable negotiation remains
 unsupported. Neither component changes the existing configurator or approves
 formal packages.
+
+The [embedded-native composition preflight](../../../../docs/sdk/composition-preflight.md)
+now checks matching outer/native identities, target directories, pinned nested
+manifest bytes and both file inventories on POSIX. It remains read-only and does
+not replace full schema, signature, real-binary or installation validation.
