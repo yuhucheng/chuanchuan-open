@@ -31,4 +31,19 @@ void main() {
     addTearDown(() => debugDefaultTargetPlatformOverride = null);
     expect(createMacPointerControlFactory, throwsUnsupportedError);
   });
+
+  test(
+    'macOS keyboard and text composition declares native input capabilities',
+    () {
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final factory = createMacPointerControlFactory(keyboardText: true);
+      expect(factory.controlCapabilities, {
+        ControlCapability.pointer,
+        ControlCapability.wheel,
+        ControlCapability.physicalKey,
+        ControlCapability.textInput,
+      });
+    },
+  );
 }

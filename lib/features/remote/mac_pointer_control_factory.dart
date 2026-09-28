@@ -7,14 +7,21 @@ import 'package:share_hub_media_sdk/share_hub_media_sdk.dart' as sdk;
 import 'mac_control_geometry_resolver.dart';
 import 'remote_media.dart';
 
-/// Explicit macOS pointer/wheel composition for platform acceptance work.
-/// The macOS product default remains watch/cast until its full input and
-/// clipboard execution path passes platform testing.
-RtcRemotePictureFactory createMacPointerControlFactory() {
+/// Explicit macOS input composition for platform acceptance work.
+/// The macOS product default remains watch/cast until its clipboard execution
+/// path and real control effects pass platform testing.
+RtcRemotePictureFactory createMacPointerControlFactory({
+  bool keyboardText = false,
+}) {
   if (defaultTargetPlatform != TargetPlatform.macOS) {
     throw UnsupportedError('macOS control factory requires macOS');
   }
-  const capabilities = {ControlCapability.pointer, ControlCapability.wheel};
+  final capabilities = {
+    ControlCapability.pointer,
+    ControlCapability.wheel,
+    if (keyboardText) ControlCapability.physicalKey,
+    if (keyboardText) ControlCapability.textInput,
+  };
   return RtcRemotePictureFactory(
     sdk.RtcRemoteMediaFactory(
       operations: const {
