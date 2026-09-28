@@ -245,7 +245,9 @@ int main(int argc, char** argv) {
   UINT f24_down_inserted = 0;
   UINT f24_up_inserted = 0;
   bool f24_async_down = false;
+  bool f24_async_ever_down = false;
   bool f24_async_after_up = false;
+  unsigned f24_keydowns_before_up = 0;
   UINT physical_ascii_inserted = 0;
   unsigned physical_ascii_chars = 0;
   LASTINPUTINFO last_input{};
@@ -259,6 +261,13 @@ int main(int argc, char** argv) {
     f24_down_inserted = SendInput(1, &diagnostic, sizeof(INPUT));
     Pump();
     f24_async_down = (GetAsyncKeyState(VK_F24) & 0x8000) != 0;
+    const auto f24_hold_deadline = GetTickCount64() + 300;
+    while (GetTickCount64() < f24_hold_deadline) {
+      Pump();
+      f24_async_ever_down |= (GetAsyncKeyState(VK_F24) & 0x8000) != 0;
+      Sleep(5);
+    }
+    f24_keydowns_before_up = f24_keydowns;
     diagnostic.ki.dwFlags = KEYEVENTF_KEYUP;
     f24_up_inserted = SendInput(1, &diagnostic, sizeof(INPUT));
     Pump();
@@ -294,6 +303,8 @@ int main(int argc, char** argv) {
               << " diagnosticInserted=" << diagnostic_inserted
               << " f24DownInserted=" << f24_down_inserted
               << " f24AsyncDown=" << f24_async_down
+              << " f24AsyncEverDown=" << f24_async_ever_down
+              << " f24KeydownsBeforeUp=" << f24_keydowns_before_up
               << " f24UpInserted=" << f24_up_inserted
               << " f24AsyncAfterUp=" << f24_async_after_up
               << " physicalAsciiInserted=" << physical_ascii_inserted
