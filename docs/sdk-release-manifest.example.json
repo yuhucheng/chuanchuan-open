@@ -1,0 +1,116 @@
+{
+  "formatVersion": 1,
+  "sampleOnly": true,
+  "sdkVersion": "0.0.0-example.0",
+  "publicMediaApi": {
+    "package": "share_hub_media_api",
+    "verifiedVersions": ["0.4.0"]
+  },
+  "nativeAbi": {
+    "major": 1,
+    "minor": 0,
+    "header": "include/share_hub_media_sdk.h",
+    "callingConvention": "cdecl"
+  },
+  "artifacts": [
+    {
+      "kind": "flutter-plugin",
+      "file": "share-hub-media-plugin-0.0.0-example.0.zip",
+      "sha256": null
+    },
+    {
+      "kind": "native",
+      "target": "windows-x64",
+      "file": "share-hub-media-native-windows-x64-0.0.0-example.0.zip",
+      "sha256": null
+    },
+    {
+      "kind": "native",
+      "target": "windows-arm64",
+      "file": "share-hub-media-native-windows-arm64-0.0.0-example.0.zip",
+      "sha256": null
+    },
+    {
+      "kind": "native",
+      "target": "macos-universal",
+      "slices": ["arm64", "x86_64"],
+      "file": "share-hub-media-native-macos-universal-0.0.0-example.0.zip",
+      "sha256": null
+    }
+  ],
+  "targets": [
+    {
+      "id": "windows-x64",
+      "minimumOs": null,
+      "runtimes": [],
+      "buildIdentity": null,
+      "capabilities": {
+        "preview": false,
+        "sourceSwitch": false,
+        "sendSession": false,
+        "receiveSession": false,
+        "background": false,
+        "singleActiveFrame": false,
+        "controlInput": false,
+        "plainText": false,
+        "maximumConcurrentSessions": 0
+      }
+    },
+    {
+      "id": "windows-arm64",
+      "minimumOs": null,
+      "runtimes": [],
+      "buildIdentity": null,
+      "capabilities": {
+        "preview": false,
+        "sourceSwitch": false,
+        "sendSession": false,
+        "receiveSession": false,
+        "background": false,
+        "singleActiveFrame": false,
+        "controlInput": false,
+        "plainText": false,
+        "maximumConcurrentSessions": 0
+      }
+    },
+    {
+      "id": "macos-universal",
+      "minimumOs": null,
+      "runtimes": [],
+      "buildIdentity": null,
+      "capabilities": {
+        "preview": false,
+        "sourceSwitch": false,
+        "sendSession": false,
+        "receiveSession": false,
+        "background": false,
+        "singleActiveFrame": false,
+        "controlInput": false,
+        "plainText": false,
+        "maximumConcurrentSessions": 0
+      }
+    }
+  ],
+  "files": [
+    {
+      "artifact": "flutter-plugin",
+      "path": "pubspec.yaml",
+      "sha256": null
+    },
+    {
+      "artifact": "native:windows-x64",
+      "path": "include/share_hub_media_sdk.h",
+      "sha256": null
+    },
+    {
+      "artifact": "native:windows-arm64",
+      "path": "include/share_hub_media_sdk.h",
+      "sha256": null
+    },
+    {
+      "artifact": "native:macos-universal",
+      "path": "include/share_hub_media_sdk.h",
+      "sha256": null
+    }
+  ]
+}
