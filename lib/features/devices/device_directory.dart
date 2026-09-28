@@ -20,11 +20,13 @@ class VerifiedPeer {
     required this.publicKey,
     this.name,
     this.connected = false,
+    this.recovering = false,
     this.capabilities = const {},
   });
   final String publicKey;
   final String? name;
   final bool connected;
+  final bool recovering;
 
   /// Operations this build can attempt under the current authorization
   /// direction. The peer's actual support is confirmed by the session handshake,
@@ -49,6 +51,7 @@ class DirectoryDevice {
     this.host,
     this.port,
     this.connected = false,
+    this.recovering = false,
     this.capabilities = const {},
   });
 
@@ -77,6 +80,7 @@ class DirectoryDevice {
   final String? host;
   final int? port;
   final bool connected;
+  final bool recovering;
   final Set<String> capabilities;
 
   bool get verified => trust == DeviceTrust.verified;
@@ -129,6 +133,7 @@ List<DirectoryDevice> buildDeviceDirectory({
         host: match?.host,
         port: match?.port,
         connected: peer.connected,
+        recovering: peer.recovering,
         capabilities: peer.connected ? peer.capabilities : const {},
       ),
     );

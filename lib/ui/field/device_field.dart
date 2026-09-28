@@ -82,6 +82,7 @@ class _DeviceFieldState extends State<DeviceField> {
           ? '${entry.platform} · 已验证连接 · 暂无可用操作'
           : '${entry.platform} · 已验证连接';
     }
+    if (entry.recovering) return '${entry.platform} · 连接暂时中断 · 正在恢复';
     if (!entry.verified) return '${entry.platform} · 未认证发现';
     return entry.online ? '${entry.platform} · 已验证 · 未连接' : '已保存资料 · 需重新输码';
   }
@@ -107,6 +108,10 @@ class _DeviceFieldState extends State<DeviceField> {
   Widget build(BuildContext context) {
     final online = widget.entries
         .where((entry) => entry.online)
+        .map((entry) => entry.identityId)
+        .toSet();
+    final recovering = widget.entries
+        .where((entry) => entry.recovering)
         .map((entry) => entry.identityId)
         .toSet();
     final filtered = _known.values
@@ -143,7 +148,11 @@ class _DeviceFieldState extends State<DeviceField> {
               context,
               key: ValueKey('device-${entry.identityId}'),
               name: entry.name,
-              detail: _detail(entry, online.contains(entry.identityId)),
+              detail: _detail(
+                entry,
+                online.contains(entry.identityId) ||
+                    recovering.contains(entry.identityId),
+              ),
               icon: Icons.devices,
               focus: _focus[entry.identityId],
               onHover: (value) =>
@@ -155,7 +164,9 @@ class _DeviceFieldState extends State<DeviceField> {
                           _focused == entry.identityId)
                   ? widget.thumbnailBuilder?.call(context, entry)
                   : null,
-              onPressed: online.contains(entry.identityId)
+              onPressed:
+                  online.contains(entry.identityId) ||
+                      recovering.contains(entry.identityId)
                   ? () async {
                       await widget.onDevice(entry);
                       if (mounted) _focus[entry.identityId]?.requestFocus();

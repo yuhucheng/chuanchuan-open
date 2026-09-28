@@ -11,6 +11,56 @@ import 'field_test_helpers.dart';
 
 void main() {
   testWidgets(
+    'offline recovery keeps its device entry actionable until cancelled',
+    (tester) async {
+      var recovering = true;
+      var opened = 0;
+      late StateSetter refresh;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setState) {
+                refresh = setState;
+                return DeviceField(
+                  entries: [
+                    DirectoryDevice(
+                      identityId: 'recovery-peer',
+                      name: '正在恢复的设备',
+                      platform: 'macos',
+                      trust: DeviceTrust.verified,
+                      reachability: DeviceReachability.offline,
+                      publicKey: 'recovery-peer',
+                      recovering: recovering,
+                    ),
+                  ],
+                  localName: '本机',
+                  allowConnections: false,
+                  onLocal: () {},
+                  onDevice: (_) async {
+                    opened++;
+                  },
+                );
+              },
+            ),
+          ),
+        ),
+      );
+      final node = find.byKey(const ValueKey('device-recovery-peer'));
+      expect(find.textContaining('连接暂时中断 · 正在恢复'), findsOneWidget);
+      expect(tester.widget<OutlinedButton>(node).onPressed, isNotNull);
+      await tester.tap(node);
+      await tester.pump();
+      expect(opened, 1);
+
+      refresh(() => recovering = false);
+      await tester.pump();
+      expect(find.textContaining('已保存资料 · 需重新输码'), findsOneWidget);
+      expect(tester.widget<OutlinedButton>(node).onPressed, isNull);
+    },
+  );
+
+  testWidgets(
     'disappearing peer keeps an actionable identity-bound dialog at 200 percent',
     (tester) async {
       tester.view.physicalSize = const Size(640, 600);

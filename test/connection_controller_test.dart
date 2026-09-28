@@ -41,6 +41,39 @@ class FakeConnectionPlatform implements ConnectionPlatform {
 
 void main() {
   test(
+    'per-device disconnect revokes an active grant before socket cleanup',
+    () async {
+      final aPlatform = FakeConnectionPlatform();
+      final bPlatform = FakeConnectionPlatform();
+      final a = ConnectionController(aPlatform);
+      final b = ConnectionController(bPlatform);
+      addTearDown(() async {
+        await a.shutdown();
+        await b.shutdown();
+        a.dispose();
+        b.dispose();
+      });
+      final aIdentity = await DeviceIdentity.fromSeed(List.filled(32, 91));
+      final bIdentity = await DeviceIdentity.fromSeed(List.filled(32, 92));
+      aPlatform.seed.complete(aIdentity);
+      bPlatform.seed.complete(bIdentity);
+      await b.open();
+      final connection = (await a.connect(
+        '127.0.0.1',
+        bPlatform.advertisements.whereType<int>().last,
+        b.code!,
+        expectedPeerKey: bIdentity.encodedKey,
+      ))!;
+      final grant = connection.grant!;
+      expect(grant.phase, GrantPhase.active);
+      a.disconnectPeer(bIdentity.encodedKey);
+      expect(grant.phase, GrantPhase.revoked);
+      await connection.whenClosed.timeout(const Duration(seconds: 5));
+      expect(a.sessions.where((session) => !session.isClosed), isEmpty);
+    },
+  );
+
+  test(
     'auxiliary demand distinguishes outbound pairing from opening admission',
     () async {
       final platform = FakeConnectionPlatform();

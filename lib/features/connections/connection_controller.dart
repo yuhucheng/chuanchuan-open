@@ -532,6 +532,24 @@ class ConnectionController extends ChangeNotifier {
     }
   }
 
+  /// Revokes every live and recovering grant for one verified identity.
+  /// A suspended connection is no longer in [sessions], so closing only the
+  /// visible sockets would leave its authenticated recovery able to resume.
+  void disconnectPeer(String peerKey) {
+    for (final previous
+        in recoveringConnections
+            .where((connection) => connection.peerKey == peerKey)
+            .toList()) {
+      cancelRecovery(previous);
+    }
+    for (final connection
+        in sessions.where((session) => session.peerKey == peerKey).toList()) {
+      final grant = connection.grant;
+      if (grant != null) grants.revoke(grant);
+      _close(connection, 'revoked');
+    }
+  }
+
   /// Permanently closes admission for this process before awaiting cleanup.
   /// Unlike the reversible allow-connections switch, an exit retry must never
   /// create new grants while its original media release is still pending.

@@ -73,19 +73,28 @@ class _FieldShellState extends State<FieldShell> {
     for (final session in widget.connections.sessions) {
       if (!session.isClosed) connected[session.peerKey] = session;
     }
+    final recovering = <String>{
+      for (final session in widget.connections.recoveringConnections)
+        session.peerKey,
+    };
     final advertised = <String, String>{};
     for (final device in widget.devices.discovery.devices) {
       if (device.publicKey != null) advertised[device.publicKey!] = device.name;
     }
-    for (final key in connected.keys) {
+    for (final key in {...connected.keys, ...recovering}) {
       _verifiedNames[key] = advertised[key] ?? _verifiedNames[key] ?? '已保存设备';
     }
     final peers = <VerifiedPeer>[
-      for (final key in {...connected.keys, ..._verifiedNames.keys})
+      for (final key in {
+        ...connected.keys,
+        ...recovering,
+        ..._verifiedNames.keys,
+      })
         VerifiedPeer(
           publicKey: key,
           name: _verifiedNames[key],
           connected: connected.containsKey(key),
+          recovering: recovering.contains(key),
           capabilities: connected.containsKey(key)
               ? widget.remote.operationsFor(key)
               : const {},
@@ -381,7 +390,7 @@ class _FieldShellState extends State<FieldShell> {
     final selected = _directory()
         .where((item) => item.identityId == entry.identityId)
         .firstOrNull;
-    if (selected == null || !selected.online) return;
+    if (selected == null || (!selected.online && !selected.recovering)) return;
     final action = await showDialog<String>(
       context: context,
       builder: (context) => AnimatedBuilder(
@@ -409,15 +418,30 @@ class _FieldShellState extends State<FieldShell> {
                     const SizedBox(height: 16),
                     Semantics(
                       liveRegion: true,
-                      child: const Text('该设备当前不可达，请刷新发现后重试。'),
+                      child: Text(
+                        live?.recovering == true
+                            ? '该设备连接暂时中断，正在恢复原授权。'
+                            : '该设备当前不可达，请刷新发现后重试。',
+                      ),
                     ),
                     const SizedBox(height: 12),
-                    TextButton(
-                      onPressed: widget.devices.busy
-                          ? null
-                          : widget.devices.retryDiscovery,
-                      child: const Text('刷新设备'),
-                    ),
+                    if (live?.recovering == true)
+                      for (final connection
+                          in widget.connections.recoveringConnections.where(
+                            (session) => session.peerKey == live!.publicKey,
+                          ))
+                        ConnectionRecoveryStatus(
+                          controller: widget.connections,
+                          connection: connection,
+                          peerName: live!.name,
+                        )
+                    else
+                      TextButton(
+                        onPressed: widget.devices.busy
+                            ? null
+                            : widget.devices.retryDiscovery,
+                        child: const Text('刷新设备'),
+                      ),
                   ],
                 ),
               ),
@@ -498,6 +522,8 @@ class _FieldShellState extends State<FieldShell> {
                     const Text('本构建未提供观看或投屏能力。'),
                   if (live.connected && !canInitiate)
                     const Text('当前连接由对方发起。若要观看或投屏，请让对方开启「允许连接」，再输入对方的短接码。'),
+                  if (live.recovering && !canInitiate)
+                    const Text('正在恢复原连接；取消恢复后可用新短接码重新连接。'),
                   if (canInitiate) ...[
                     const Text('对端是否支持由会话本身确认；被拒绝会明确显示失败原因。'),
                     const Text('观看：我看它的屏幕 · 投屏：它看我的屏幕'),
@@ -526,6 +552,7 @@ class _FieldShellState extends State<FieldShell> {
                   ],
                   const SizedBox(height: 16),
                   if (!canInitiate &&
+                      !live.recovering &&
                       live.hasPairingEndpoint &&
                       _connectionSupported &&
                       widget.remote.offeredOperations.isNotEmpty) ...[
@@ -560,6 +587,7 @@ class _FieldShellState extends State<FieldShell> {
                         child: const Text('连接并投屏'),
                       ),
                   ] else if (!canInitiate &&
+                      !live.recovering &&
                       live.hasPairingEndpoint &&
                       _connectionSupported)
                     FilledButton(
@@ -570,7 +598,7 @@ class _FieldShellState extends State<FieldShell> {
                     )
                   else if (!_connectionSupported)
                     const Text('本平台尚未支持连接。')
-                  else if (!canInitiate) ...[
+                  else if (!canInitiate && !live.recovering) ...[
                     const Text('对端当前未开放连接入口。'),
                     const Text(
                       '连接入口只在对方开启「允许连接」后的有效期内广播，过时即撤下；'
@@ -592,18 +620,8 @@ class _FieldShellState extends State<FieldShell> {
                       style: OutlinedButton.styleFrom(
                         foregroundColor: Theme.of(context).colorScheme.error,
                       ),
-                      onPressed: () {
-                        for (final session
-                            in widget.connections.sessions
-                                .where(
-                                  (s) =>
-                                      !s.isClosed &&
-                                      s.peerKey == live.publicKey,
-                                )
-                                .toList()) {
-                          session.close();
-                        }
-                      },
+                      onPressed: () =>
+                          widget.connections.disconnectPeer(live.publicKey!),
                       child: const Text('断开该设备并撤销全部授权'),
                     ),
                   ],

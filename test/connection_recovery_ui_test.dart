@@ -83,4 +83,12 @@ void main() {
       },
     );
   }
+
+  test('disconnecting one device revokes its suspended authorization', () {
+    final pending = a.recoveringConnections.single;
+    a.disconnectPeer(pending.peerKey);
+    expect(a.recoveringCount, 0);
+    expect(pending.grant!.phase, GrantPhase.revoked);
+    expect(a.sessions.where((session) => !session.isClosed), isEmpty);
+  });
 }
