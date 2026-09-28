@@ -64,11 +64,20 @@ class ConnectionController extends ChangeNotifier {
     ],
     this.recoveryAttemptTimeout = const Duration(seconds: 5),
     this.auxiliaryRoutes,
+    this.meetingRetryBackoff = const [
+      Duration(seconds: 1),
+      Duration(seconds: 2),
+      Duration(seconds: 4),
+      Duration(seconds: 8),
+      Duration(seconds: 16),
+      Duration(seconds: 30),
+    ],
   });
   final ConnectionPlatform platform;
   final Duration recoveryWindow, recoveryAttemptTimeout;
   final List<Duration> recoveryBackoff;
   final AuxiliaryRouteController? auxiliaryRoutes;
+  final List<Duration> meetingRetryBackoff;
   final _recoveries = <GrantEndpoint, ConnectionRecovery>{};
   final _routes = <GrantEndpoint, RecoveryRoute>{};
   final _alternateRoutes = <GrantEndpoint, RecoveryRoute>{};
@@ -161,6 +170,7 @@ class ConnectionController extends ChangeNotifier {
     // Refresh must invalidate the old displayed code before identity,
     // advertisement or meeting cleanup can await a slow platform/service call.
     _host?.revokeOffer();
+    _meetingCancellation?.cancel();
     busy = true;
     _notice = null;
     code = null;
@@ -265,37 +275,128 @@ class ConnectionController extends ChangeNotifier {
   }
 
   Future<void> _publishMeeting(PairingHost host, PairingOffer offer) async {
+    final routes = auxiliaryRoutes!;
     final cancellation = _meetingCancellation = AuxiliaryCancellation();
-    MeetingRoute? route;
+    var selectionRevision = -1;
+    void cancelOnOriginChange() {
+      if (routes.selectionRevision != selectionRevision) cancellation.cancel();
+    }
+
     try {
-      route = await auxiliaryRoutes!.openMeetingHost(host, cancellation);
-      if (_disposed ||
-          _shutdownRequested ||
-          !identical(_host, host) ||
-          !identical(host.offer, offer) ||
-          code == null ||
-          !offer.reservable(await platform.now())) {
-        await route.closeAdmission();
-        return;
-      }
-      _meetingRoute = route;
-      await route.serve();
-    } catch (_) {
-      if (route != null && !route.activated) await route.closeAdmission();
-      if (!_disposed &&
-          identical(_host, host) &&
-          identical(host.offer, offer) &&
-          code != null &&
-          !cancellation.isCancelled) {
-        _notice = const ConnectionNotice.problem(
-          '本地接入已开启，但所选辅助服务暂不可用；跨网首次连接需检查辅助服务。',
-        );
-        _emit();
+      await routes.ensureLoaded();
+      selectionRevision = routes.selectionRevision;
+      routes.addListener(cancelOnOriginChange);
+      var retry = 0;
+      var hadFailure = false;
+      while (routes.selectionRevision == selectionRevision &&
+          await _meetingOfferValid(host, offer, cancellation)) {
+        MeetingRoute? route;
+        final attemptCancellation = AuxiliaryCancellation();
+        void cancelAttempt() => attemptCancellation.cancel();
+        cancellation.onCancel(cancelAttempt);
+        try {
+          route = await routes.openMeetingHost(host, attemptCancellation);
+          if (routes.selectionRevision != selectionRevision ||
+              !await _meetingOfferValid(host, offer, cancellation)) {
+            await route.closeAdmission();
+            return;
+          }
+          _meetingRoute = route;
+          if (hadFailure) {
+            _notice = const ConnectionNotice.status(
+              '所选辅助服务会合入口已恢复，当前短接码可用于跨网连接。',
+            );
+            _emit();
+          }
+          await route.serve();
+          if (!route.activated && identical(_meetingRoute, route)) {
+            _meetingRoute = null;
+          }
+          return;
+        } catch (error) {
+          if (route != null && !route.activated) {
+            if (identical(_meetingRoute, route)) _meetingRoute = null;
+            try {
+              await route.closeAdmission();
+            } catch (_) {
+              // A lost unpublish is bounded by service expiry. Re-publishing
+              // this exact offer is idempotent at the selected service.
+            }
+          }
+          if (!await _meetingOfferValid(host, offer, cancellation) ||
+              routes.selectionRevision != selectionRevision) {
+            return;
+          }
+          final retryable =
+              error is AuxiliaryFailure &&
+              const {
+                'unreachable',
+                'timeout',
+                'server_error',
+              }.contains(error.code) &&
+              meetingRetryBackoff.isNotEmpty;
+          _notice = ConnectionNotice.problem(
+            retryable
+                ? '本地接入已开启，但所选辅助服务暂不可用；当前短接码仍有效，正在重试跨网会合。'
+                : '本地接入已开启，但所选辅助服务会合失败；请检查服务或重新生成短接码。',
+          );
+          _emit();
+          if (!retryable) return;
+          hadFailure = true;
+          final delay =
+              meetingRetryBackoff[retry < meetingRetryBackoff.length
+                  ? retry
+                  : meetingRetryBackoff.length - 1];
+          retry++;
+          await _waitMeetingRetry(cancellation, delay);
+        } finally {
+          cancellation.removeOnCancel(cancelAttempt);
+        }
       }
     } finally {
+      routes.removeListener(cancelOnOriginChange);
       if (identical(_meetingCancellation, cancellation)) {
         _meetingCancellation = null;
       }
+    }
+  }
+
+  Future<bool> _meetingOfferValid(
+    PairingHost host,
+    PairingOffer offer,
+    AuxiliaryCancellation cancellation,
+  ) async {
+    if (_disposed ||
+        _shutdownRequested ||
+        cancellation.isCancelled ||
+        !identical(_host, host) ||
+        !identical(host.offer, offer) ||
+        code != offer.code) {
+      return false;
+    }
+    try {
+      return offer.reservable(await platform.now());
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _waitMeetingRetry(
+    AuxiliaryCancellation cancellation,
+    Duration delay,
+  ) async {
+    final ready = Completer<void>();
+    void complete() {
+      if (!ready.isCompleted) ready.complete();
+    }
+
+    cancellation.onCancel(complete);
+    final timer = Timer(delay, complete);
+    try {
+      await ready.future;
+    } finally {
+      timer.cancel();
+      cancellation.removeOnCancel(complete);
     }
   }
 

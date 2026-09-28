@@ -39,7 +39,7 @@ TURN 凭据请求也须来自该设备当前登记的连接地址；新地址即
 
 ## 首次短码会合原型
 
-首次短码会合使用独立的可选 `/v1/meet/*` 路由。被接入端先登记身份，再以 `meet` 持有证明调用 `publish`，提交 `code`、本次随机 `offerId`、`publicKey`、`nonce`、`signature`，得到短期 `token` 和 `expiresInSeconds`；发起端仅凭 `code` 调用 `join`，取得随机 `attempt` 和自己的 `token`。被接入端用 `pending` 查询尝试标识，双方用各自 token、attempt 和从 0 递增的十进制 `sequence` 调用 `send` 转发 JSON `frame`，用 `poll` 读取对端帧；`leave` 终止尝试，`unpublish` 用 token 撤下入口。若发布响应丢失或取消导致 token 不可得，被接入端可重新使用 `meet` 持有证明和原 `offerId` 调用 `unpublish-owned`；服务仅撤下同一设备、来源地址和 offerId 对应的入口，不影响新码。握手完成后，被接入端可用 token、attempt 和 `lifetimeSeconds` 调用 `activate`，将唯一成功尝试转为有限时长的大帧会话并撤下短码入口；重复激活不延长期限。所有路由均以 `POST /v1/meet/<动作>` 调用。
+首次短码会合使用独立的可选 `/v1/meet/*` 路由。被接入端先登记身份，再以 `meet` 持有证明调用 `publish`，提交 `code`、本次随机 `offerId`、`publicKey`、`nonce`、`signature`，得到短期 `token` 和 `expiresInSeconds`；发起端仅凭 `code` 调用 `join`，取得随机 `attempt` 和自己的 `token`。被接入端用 `pending` 查询尝试标识，双方用各自 token、attempt 和从 0 递增的十进制 `sequence` 调用 `send` 转发 JSON `frame`，用 `poll` 读取对端帧；`leave` 终止尝试，`unpublish` 用 token 撤下入口。发布响应丢失或所选服务短暂不可达时，被接入端可对仍有效的同一短码和 `offerId` 使用新的 `meet` 持有证明重试 `publish`；同一设备和来源地址的重复发布返回原 token 及剩余期限，不延长入口寿命或重置猜码预算。取消导致 token 不可得时，仍可重新证明并调用 `unpublish-owned`；服务仅撤下同一设备、来源地址和 offerId 对应的入口，不影响新码。握手完成后，被接入端可用 token、attempt 和 `lifetimeSeconds` 调用 `activate`，将唯一成功尝试转为有限时长的大帧会话并撤下短码入口；重复激活不延长期限。所有路由均以 `POST /v1/meet/<动作>` 调用。
 
 服务仅提供路由和限额，不验证 SRP、端点签名或 grant；端点仍执行完整短码握手与授权核验。初始入口至多 5 分钟，尝试至多 30 秒，服务重启清空内存状态。部署限额可配置，不把八小时硬编码为唯一 grant 类型。
 

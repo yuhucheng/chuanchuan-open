@@ -172,6 +172,9 @@ final class AuxiliaryRouteController extends ChangeNotifier {
   final Future<DeviceIdentity> Function() identity;
   final String officialOrigin;
   final AuxiliaryRouteStore store;
+
+  /// Changes whenever the selected origin or its ownership is replaced.
+  int get selectionRevision => _revision;
   final AuxiliaryTransportFactory _transportFactory;
   RelayCredentialOwner? _owner;
   Uri? _selectedUri;
