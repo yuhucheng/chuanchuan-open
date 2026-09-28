@@ -16,8 +16,8 @@
   "apiCompatibility": [
     {
       "package": "share_hub_media_api",
-      "minInclusive": "0.7.0",
-      "maxExclusive": "0.8.0",
+      "minInclusive": "0.8.0",
+      "maxExclusive": "0.9.0",
       "testedVersions": []
     },
     {
@@ -54,7 +54,7 @@
   "publicSnapshots": [
     {
       "package": "share_hub_media_api",
-      "version": "0.7.0",
+      "version": "0.8.0",
       "directory": "public_api/share_hub_media_api",
       "publicRevision": null,
       "sourceDigest": null

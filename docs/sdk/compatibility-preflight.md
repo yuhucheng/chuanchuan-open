@@ -24,7 +24,7 @@ policy shape; its values are not proof that a matching native bridge exists:
   "productTarget": "0.1.0",
   "target": {"os": "macos", "architecture": "arm64", "osVersion": "13.0"},
   "apiVersions": {
-    "share_hub_media_api": "0.7.0",
+    "share_hub_media_api": "0.8.0",
     "share_hub_session_api": "0.1.0"
   },
   "nativeAbi": {

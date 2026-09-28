@@ -4,6 +4,8 @@ These JSON files illustrate [the package proposal](../PACKAGING.md). They contai
 no usable binary, actual file hashes, release URL, license grant or signature proof.
 `exampleOnly: true` is mandatory and causes installation rejection. Null values
 mean evidence is absent, never "skip validation". They are not partial installers.
+The media API fields describe the current `0.8.0` planning target; empty
+`testedVersions` means no binary artifact has passed that compatibility check.
 
 - `native-windows-x64.json`: native-only example root.
 - `flutter-windows-x64.json`: thin plugin with the matching nested native example.

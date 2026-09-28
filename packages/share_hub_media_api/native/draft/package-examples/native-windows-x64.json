@@ -16,8 +16,8 @@
   "apiCompatibility": [
     {
       "package": "share_hub_media_api",
-      "minInclusive": "0.7.0",
-      "maxExclusive": "0.8.0",
+      "minInclusive": "0.8.0",
+      "maxExclusive": "0.9.0",
       "testedVersions": []
     },
     {
