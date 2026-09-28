@@ -7,10 +7,12 @@ mean evidence is absent, never "skip validation". They are not partial installer
 The media API fields describe the current `0.8.0` planning target; empty
 `testedVersions` means no binary artifact has passed that compatibility check.
 
-- `native-windows-x64.json`: native-only example root.
-- `flutter-windows-x64.json`: thin plugin with the matching nested native example.
-- `release-index.json`: partial example matrix; formal release still requires
-  Windows x64/ARM64 and macOS universal in native + Flutter form.
+- `native-windows-x64.json` and `flutter-windows-x64.json`: matching Windows x64 roots.
+- `native-windows-arm64.json` and `flutter-windows-arm64.json`: matching Windows ARM64 roots.
+- `native-macos-universal.json` and `flutter-macos-universal.json`: matching macOS arm64/x86_64 roots.
+- `release-index.json`: all six required attachment identities, with no actual
+  artifact hashes or completed matrix. A real release index must pin the exact
+  signed and packaged bytes of every attachment.
 
 The example file inventories show representative required paths. A real package
 must enumerate every actual file/link, including all headers/framework internals,

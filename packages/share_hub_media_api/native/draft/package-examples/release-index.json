@@ -41,6 +41,38 @@
       "sizeBytes": null,
       "sha256": null,
       "manifestSha256": null
+    },
+    {
+      "artifactId": "native-windows-arm64-example",
+      "kind": "native",
+      "archiveName": "sharehub-media-native-0.1.0-layout-example.1-windows-arm64.zip",
+      "sizeBytes": null,
+      "sha256": null,
+      "manifestSha256": null
+    },
+    {
+      "artifactId": "flutter-windows-arm64-example",
+      "kind": "flutter",
+      "archiveName": "sharehub-media-flutter-0.1.0-layout-example.1-windows-arm64.zip",
+      "sizeBytes": null,
+      "sha256": null,
+      "manifestSha256": null
+    },
+    {
+      "artifactId": "native-macos-universal-example",
+      "kind": "native",
+      "archiveName": "sharehub-media-native-0.1.0-layout-example.1-macos-universal.zip",
+      "sizeBytes": null,
+      "sha256": null,
+      "manifestSha256": null
+    },
+    {
+      "artifactId": "flutter-macos-universal-example",
+      "kind": "flutter",
+      "archiveName": "sharehub-media-flutter-0.1.0-layout-example.1-macos-universal.zip",
+      "sizeBytes": null,
+      "sha256": null,
+      "manifestSha256": null
     }
   ]
 }

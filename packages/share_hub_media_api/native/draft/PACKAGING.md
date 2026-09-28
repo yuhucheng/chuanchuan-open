@@ -1,8 +1,9 @@
 # Binary SDK package layout and compatibility — review draft 1
 
 This is a proposed distribution contract, not an available SDK. The
-[example manifests](package-examples/README.md) are explicitly non-installable and
-contain null sizes/hashes because no matching binary exists. Do not invent a
+[example manifests](package-examples/README.md) cover the six native/Flutter
+target combinations. They are explicitly non-installable and contain null
+sizes/hashes because no matching binary exists. Do not invent a
 checksum, download URL, signature or tested platform to fill those fields.
 Existing source-link configuration remains unchanged until real packages exist.
 
