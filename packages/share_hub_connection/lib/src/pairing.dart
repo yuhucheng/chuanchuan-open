@@ -128,14 +128,20 @@ class PairingHost {
   PairingOffer? get offer => _offer;
   int? get port => _server?.port;
 
+  /// Revoke the displayed code synchronously, before any network cleanup can
+  /// await. Existing authenticated sessions and recovery material are kept.
+  void revokeOffer() {
+    _offer?.revoke();
+    _offer = null;
+  }
+
   /// Rotate only admission material; keep the authenticated recovery route and
   /// established grants. Old pairing attempts fail their offer identity check.
   Future<void> refreshOffer() async {
     final generation = _generation;
     final server = _server;
     if (server == null) throw const ConnectionFailure('admission_closed');
-    _offer?.revoke();
-    _offer = null;
+    revokeOffer();
     final now = await clock();
     if (generation != _generation || !identical(server, _server)) {
       throw const ConnectionFailure('cancelled');

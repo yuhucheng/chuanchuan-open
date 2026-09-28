@@ -153,12 +153,15 @@ class ConnectionController extends ChangeNotifier {
       return;
     }
     final generation = ++_generation;
+    PairingHost? opening = _host;
+    // Refresh must invalidate the old displayed code before identity,
+    // advertisement or meeting cleanup can await a slow platform/service call.
+    _host?.revokeOffer();
     busy = true;
     _notice = null;
     code = null;
     address = null;
     _emit();
-    PairingHost? opening;
     try {
       final identity = await _loadIdentity();
       if (_disposed || _shutdownRequested || generation != _generation) return;
@@ -328,10 +331,14 @@ class ConnectionController extends ChangeNotifier {
     _meetingJoinCancellation = null;
     final meeting = _meetingRoute;
     _meetingRoute = null;
-    await meeting?.closeAdmission();
     code = null;
     address = null;
-    await _host?.stopAccepting();
+    // stopAccepting revokes the local offer and closes pending sockets before
+    // its Future yields. Do not wait for HTTPS unpublish while old TCP remains
+    // eligible to finish a pairing.
+    final hostClosing = _host?.stopAccepting() ?? Future<void>.value();
+    final meetingClosing = meeting?.closeAdmission() ?? Future<void>.value();
+    await Future.wait([hostClosing, meetingClosing]);
     if (generation == _generation && _host != null) await _clearAdvertisement();
     _emit();
   }

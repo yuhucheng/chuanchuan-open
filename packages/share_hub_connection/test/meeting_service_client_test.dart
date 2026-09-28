@@ -165,6 +165,47 @@ void main() {
     },
   );
 
+  test('meeting close drains an in-flight host admission', () async {
+    final identity = await DeviceIdentity.fromSeed(List.filled(32, 57));
+    final clockEntered = Completer<void>();
+    final releaseClock = Completer<int>();
+    var holdClock = false;
+    final host = PairingHost(
+      identity: identity,
+      clock: () {
+        if (!holdClock) return Future.value(1000000);
+        if (!clockEntered.isCompleted) clockEntered.complete();
+        return releaseClock.future;
+      },
+      onConnection: (_) {},
+      protocolVersion: 2,
+    );
+    addTearDown(host.close);
+    await host.open(address: InternetAddress.loopbackIPv4);
+    final transport = _MeetingTransport(host.offer!.code);
+    final listing = MeetingListing(
+      transport,
+      host,
+      _MeetingTransport.hostToken,
+      AuxiliaryCancellation(),
+    );
+    final serving = listing.serve();
+    for (var tries = 0; !listing.admissionPending; tries++) {
+      if (tries == 100) fail('meeting attempt was not admitted');
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+    holdClock = true;
+    var closed = false;
+    final closing = listing.close().then((_) => closed = true);
+    await clockEntered.future.timeout(const Duration(seconds: 2));
+    expect(closed, isFalse);
+    releaseClock.complete(1000000);
+    await closing;
+    await serving;
+    expect(closed, isTrue);
+    expect(transport.closed, isTrue);
+  });
+
   test('meeting wire carries the real v2 PAKE and grant activation', () async {
     final hostIdentity = await DeviceIdentity.fromSeed(List.filled(32, 51));
     final clientIdentity = await DeviceIdentity.fromSeed(List.filled(32, 52));

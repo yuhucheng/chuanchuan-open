@@ -10,6 +10,8 @@ class FakeConnectionPlatform implements ConnectionPlatform {
   final advertisements = <int?>[];
   Completer<void>? advertisingStarted;
   Completer<String?>? advertisementResult;
+  Completer<void>? withdrawalStarted;
+  Completer<void>? withdrawalResult;
   int identityRequests = 0;
   @override
   Future<DeviceIdentity> identity() {
@@ -22,12 +24,17 @@ class FakeConnectionPlatform implements ConnectionPlatform {
   @override
   Future<String?> advertise(int? port, String? key) async {
     advertisements.add(port);
-    if (port != null) {
-      if (advertisingStarted case final started? when !started.isCompleted) {
+    if (port == null) {
+      if (withdrawalStarted case final started? when !started.isCompleted) {
         started.complete();
       }
-      if (advertisementResult case final result?) return result.future;
+      await withdrawalResult?.future;
+      return null;
     }
+    if (advertisingStarted case final started? when !started.isCompleted) {
+      started.complete();
+    }
+    if (advertisementResult case final result?) return result.future;
     return 'test.local';
   }
 }
@@ -120,6 +127,47 @@ void main() {
     expect(receiver.phase, GrantPhase.revoked);
     expect(b.code, matches(RegExp(r'^\d{6}$')));
   });
+
+  test(
+    'refresh invalidates the old code before advertisement withdrawal',
+    () async {
+      final aPlatform = FakeConnectionPlatform();
+      final bPlatform = FakeConnectionPlatform();
+      final a = ConnectionController(aPlatform);
+      final b = ConnectionController(bPlatform);
+      addTearDown(() async {
+        if (bPlatform.withdrawalResult case final pending?
+            when !pending.isCompleted) {
+          pending.complete();
+        }
+        await a.disconnectAll();
+        await b.disconnectAll();
+        a.dispose();
+        b.dispose();
+      });
+      aPlatform.seed.complete(
+        await DeviceIdentity.fromSeed(List.filled(32, 82)),
+      );
+      bPlatform.seed.complete(
+        await DeviceIdentity.fromSeed(List.filled(32, 83)),
+      );
+      await b.open();
+      final oldCode = b.code!;
+      final port = bPlatform.advertisements.whereType<int>().last;
+      bPlatform.withdrawalStarted = Completer<void>();
+      bPlatform.withdrawalResult = Completer<void>();
+      final refreshing = b.open();
+      await bPlatform.withdrawalStarted!.future.timeout(
+        const Duration(seconds: 2),
+      );
+      expect(b.code, isNull);
+      expect(await a.connect('127.0.0.1', port, oldCode), isNull);
+      expect(b.sessions, isEmpty);
+      bPlatform.withdrawalResult!.complete();
+      await refreshing;
+      expect(b.code, matches(RegExp(r'^\d{6}$')));
+    },
+  );
 
   test(
     'shutdown permanently rejects new authentication and advertisement',

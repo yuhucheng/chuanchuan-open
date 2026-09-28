@@ -108,6 +108,9 @@ final class MeetingListing {
   final void Function(MeetingConnectionWire)? onActivated;
   final _pollCancellation = AuxiliaryCancellation();
   final _wires = <String, MeetingConnectionWire>{};
+  final _admissions = <Future<void>>{};
+  Future<void>? _closingAdmission;
+  Future<void>? _closing;
   bool _closed = false;
   bool _activated = false;
   String? _activeAttempt;
@@ -140,10 +143,24 @@ final class MeetingListing {
         }
         final wire = MeetingConnectionWire(_transport, _token, value);
         _wires[value] = wire;
-        unawaited(_admit(value, wire));
+        _startAdmission(value, wire);
       }
       await Future<void>.delayed(const Duration(milliseconds: 500));
     }
+  }
+
+  void _startAdmission(String attempt, MeetingConnectionWire wire) {
+    late final Future<void> work;
+    work = _admit(attempt, wire)
+        .then<void>(
+          (_) {},
+          onError: (Object _, StackTrace _) {
+            wire.close();
+            _wires.remove(attempt);
+          },
+        )
+        .whenComplete(() => _admissions.remove(work));
+    _admissions.add(work);
   }
 
   Future<void> _admit(String attempt, MeetingConnectionWire wire) async {
@@ -174,7 +191,9 @@ final class MeetingListing {
       if (connection == null &&
           offer != null &&
           !offer.reservable(await _host.clock())) {
-        await closeAdmission();
+        // This admission is part of the close barrier. Starting that barrier
+        // without awaiting it avoids waiting for this admission itself.
+        unawaited(closeAdmission().catchError((Object _) {}));
       }
       return;
     }
@@ -183,8 +202,9 @@ final class MeetingListing {
     }
   }
 
-  Future<void> closeAdmission() async {
-    if (_closed) return;
+  Future<void> closeAdmission() => _closingAdmission ??= _closeAdmission();
+
+  Future<void> _closeAdmission() async {
     _closed = true;
     _pollCancellation.cancel();
     final leaving = [
@@ -199,9 +219,12 @@ final class MeetingListing {
       } catch (_) {}
     }
     await Future.wait(leaving);
+    await Future.wait(_admissions.toList());
   }
 
-  Future<void> close() async {
+  Future<void> close() => _closing ??= _close();
+
+  Future<void> _close() async {
     await closeAdmission();
     await closeActiveWire();
     _wires.clear();
