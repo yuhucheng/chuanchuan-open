@@ -51,7 +51,8 @@ class _FakePicture
   VideoEndReason? endedBy;
   bool failStop = false;
   final stopReasons = <VideoEndReason>[];
-  int stops = 0, resumes = 0;
+  int stops = 0, pauses = 0, resumes = 0;
+  bool emitPausedOnPause = false;
   bool stoppedFlag = false;
 
   @override
@@ -126,6 +127,8 @@ class _FakePicture
   Future<void> pause() async {
     if (playbackGate != null) await playbackGate!.future;
     if (failPlayback) throw StateError('playback failed');
+    pauses++;
+    if (emitPausedOnPause) emit(MediaEventKind.paused);
   }
 
   @override
@@ -427,6 +430,7 @@ void main() {
     bool Function()? localCaptureOccupied,
     bool Function()? relayCredentialAvailable,
     Listenable? relayCredentialChanges,
+    DateTime? Function()? relayCredentialExpiresAt,
     Duration relayCredentialGrace = const Duration(seconds: 20),
     Duration statisticsLifetime = const Duration(seconds: 6),
   }) {
@@ -441,6 +445,7 @@ void main() {
       localCaptureActive: localCaptureOccupied ?? () => previewActive,
       relayCredentialAvailable: relayCredentialAvailable,
       relayCredentialChanges: relayCredentialChanges,
+      relayCredentialExpiresAt: relayCredentialExpiresAt,
       relayCredentialGrace: relayCredentialGrace,
       firstFrameDeadline: const Duration(milliseconds: 150),
       permissionPoll: const Duration(milliseconds: 20),
@@ -466,6 +471,86 @@ void main() {
     expect(factoryA.links, hasLength(1));
     expect(factoryA.links.single.starts, isEmpty);
   });
+
+  test('a renewed TURN lease replaces only an active relay peer', () async {
+    final notices = ValueNotifier<int>(0);
+    var expiry = DateTime.utc(2026, 9, 29, 10, 0);
+    build(
+      relayCredentialAvailable: () => true,
+      relayCredentialChanges: notices,
+      relayCredentialExpiresAt: () => expiry,
+    );
+    await remoteA.start(
+      SessionOperation.watch,
+      peerKey: a.sessions.single.peerKey,
+    );
+    final picture = factoryA.current..emitPausedOnPause = true;
+    picture.emit(MediaEventKind.transportReady);
+    picture.emit(MediaEventKind.firstFrame);
+    picture.emit(
+      MediaEventKind.statistics,
+      transportPath: MediaTransportPath.relay,
+    );
+
+    notices.value++;
+    await Future<void>.delayed(Duration.zero);
+    expect(picture.pauses, 0, reason: 'the same lease cannot restart media');
+
+    expiry = expiry.add(const Duration(minutes: 5));
+    notices.value++;
+    await waitFor(() => picture.resumes == 1);
+    expect(picture.pauses, 1);
+    expect(picture.mediaRevision, 1);
+    notices.value++;
+    await Future<void>.delayed(Duration.zero);
+    expect(picture.pauses, 1, reason: 'repeated notices use one revision');
+
+    picture.emit(MediaEventKind.firstFrame);
+    picture.emit(
+      MediaEventKind.statistics,
+      transportPath: MediaTransportPath.direct,
+    );
+    expiry = expiry.add(const Duration(minutes: 5));
+    notices.value++;
+    await Future<void>.delayed(Duration.zero);
+    expect(picture.pauses, 1, reason: 'a direct peer needs no relay refresh');
+    notices.dispose();
+  });
+
+  test(
+    'stopping during relay refresh cannot resume an old operation',
+    () async {
+      final notices = ValueNotifier<int>(0);
+      var expiry = DateTime.utc(2026, 9, 29, 10, 0);
+      build(
+        relayCredentialAvailable: () => true,
+        relayCredentialChanges: notices,
+        relayCredentialExpiresAt: () => expiry,
+      );
+      await remoteA.start(
+        SessionOperation.watch,
+        peerKey: a.sessions.single.peerKey,
+      );
+      final picture = factoryA.current..emitPausedOnPause = true;
+      picture.emit(MediaEventKind.transportReady);
+      picture.emit(MediaEventKind.firstFrame);
+      picture.emit(
+        MediaEventKind.statistics,
+        transportPath: MediaTransportPath.relay,
+      );
+      picture.playbackGate = Completer<void>();
+      expiry = expiry.add(const Duration(minutes: 5));
+      notices.value++;
+      await Future<void>.delayed(Duration.zero);
+      final stopping = remoteA.stop();
+      picture.playbackGate!.complete();
+      await stopping;
+      await Future<void>.delayed(Duration.zero);
+      expect(picture.resumes, 0);
+      expect(remoteA.occupied, isFalse);
+      notices.dispose();
+    },
+  );
 
   test('late relay lease retries a pre-transport timeout once with a new operation', () async {
     var relayReady = false;

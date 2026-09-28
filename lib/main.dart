@@ -41,6 +41,7 @@ void main() {
       setAuxiliaryNeeded: routes.setNeeded,
       relayCredentialAvailable: () => routes.current != null,
       relayCredentialChanges: routes,
+      relayCredentialExpiresAt: () => routes.current?.expiresAt,
     ),
   );
 }

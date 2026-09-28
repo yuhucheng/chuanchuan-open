@@ -37,6 +37,7 @@ class RemoteSessionController extends ChangeNotifier {
     this.localCaptureActive,
     this.relayCredentialAvailable,
     this.relayCredentialChanges,
+    this.relayCredentialExpiresAt,
     this.relayCredentialGrace = const Duration(seconds: 20),
     this.firstFrameDeadline = const Duration(seconds: 15),
     this.permissionPoll = const Duration(seconds: 2),
@@ -48,7 +49,7 @@ class RemoteSessionController extends ChangeNotifier {
          grants: connections.grants,
        ) {
     connections.addListener(_reconcile);
-    relayCredentialChanges?.addListener(_tryRelayRetry);
+    relayCredentialChanges?.addListener(_onRelayCredentialChanged);
     _reconcile();
   }
 
@@ -66,8 +67,14 @@ class RemoteSessionController extends ChangeNotifier {
   /// A snapshot only. Media never waits for the auxiliary service on admission.
   final bool Function()? relayCredentialAvailable;
 
-  /// Notifies when a valid lease arrives after direct ICE has failed.
+  /// Notifies when a valid lease arrives or a relay credential is renewed.
   final Listenable? relayCredentialChanges;
+
+  /// The expiry of the credential used for newly created ICE peers. A newer
+  /// lease can replace an active relay peer through the existing authenticated
+  /// pause/resume revision handshake, without extending the connection grant.
+  final DateTime? Function()? relayCredentialExpiresAt;
+  Future<void>? _relayRefresh;
   final Duration relayCredentialGrace;
   final Duration firstFrameDeadline;
   final Duration permissionPoll;
@@ -244,7 +251,7 @@ class RemoteSessionController extends ChangeNotifier {
     unawaited(shutdown().catchError((Object _) {}));
     _disposed = true;
     connections.removeListener(_reconcile);
-    relayCredentialChanges?.removeListener(_tryRelayRetry);
+    relayCredentialChanges?.removeListener(_onRelayCredentialChanged);
     super.dispose();
   }
 
@@ -447,7 +454,8 @@ class RemoteSessionController extends ChangeNotifier {
     final attempt = _Attempt(token, connection, operation, label: label)
       ..sessionId = 'remote-${++_sessionCounter}'
       ..relayRetried = relayRetry || recovery != null
-      ..relayAvailableAtStart = _relayReady();
+      ..relayAvailableAtStart = _relayReady()
+      ..relayLeaseExpiresAt = _relayExpiry();
     _attempt = attempt;
     recovery?.replacementId = attempt.sessionId;
     _busy = true;
@@ -482,6 +490,7 @@ class RemoteSessionController extends ChangeNotifier {
         return;
       }
       attempt.picture ??= started;
+      attempt.relayLeaseExpiresAt = _relayExpiry();
       if (attempt.picture!.stopped) {
         // stopped gates callbacks; it does not prove native cleanup succeeded.
         attempt.cancelled = true;
@@ -1265,6 +1274,68 @@ class RemoteSessionController extends ChangeNotifier {
     _relayRetry = null;
   }
 
+  DateTime? _relayExpiry() {
+    try {
+      return relayCredentialExpiresAt?.call();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _onRelayCredentialChanged() {
+    _tryRelayRetry();
+    final attempt = _attempt;
+    final expiry = _relayExpiry();
+    if (attempt == null ||
+        expiry == null ||
+        attempt.relayLeaseExpiresAt == null ||
+        !expiry.isAfter(attempt.relayLeaseExpiresAt!) ||
+        _relayRefresh != null ||
+        _disposed ||
+        _shuttingDown ||
+        _stopping ||
+        _phase != RemotePhase.active ||
+        transportPath != MediaTransportPath.relay ||
+        attempt.picture == null ||
+        attempt.picture!.stopped) {
+      return;
+    }
+    // Reserve this lease before awaiting either peer. Repeated route notices
+    // must not start another revision, and a stopped/replaced operation cannot
+    // be resumed by a late credential callback.
+    attempt.relayLeaseExpiresAt = expiry;
+    final work = _refreshRelayPeer(attempt);
+    _relayRefresh = work;
+    unawaited(
+      work.whenComplete(() {
+        if (identical(_relayRefresh, work)) {
+          _relayRefresh = null;
+        }
+      }),
+    );
+  }
+
+  Future<void> _refreshRelayPeer(_Attempt attempt) async {
+    final picture = attempt.picture!;
+    try {
+      await picture.pause();
+      if (!_isCurrent(attempt) ||
+          _stopping ||
+          _phase != RemotePhase.paused ||
+          picture.stopped) {
+        return;
+      }
+      // resume allocates a new ICE peer, which reads the freshly issued lease.
+      await resume();
+    } catch (failure) {
+      if (!_isCurrent(attempt)) return;
+      _clearObservations();
+      _phase = RemotePhase.failed;
+      _error = _failureMessage(failure);
+      _notify();
+    }
+  }
+
   void _tryRelayRetry() {
     final retry = _relayRetry;
     if (retry == null || !retry.released || !_relayReady()) return;
@@ -1625,6 +1696,7 @@ class _Attempt {
   bool cancelled = false;
   bool relayAvailableAtStart = false;
   bool relayRetried = false;
+  DateTime? relayLeaseExpiresAt;
 }
 
 class _RelayRetry {

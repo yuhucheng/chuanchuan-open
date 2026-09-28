@@ -29,6 +29,7 @@ class ShareHubApp extends StatefulWidget {
     this.setAuxiliaryNeeded,
     this.relayCredentialAvailable,
     this.relayCredentialChanges,
+    this.relayCredentialExpiresAt,
     this.stopAuxiliary,
     this.targetPlatform,
     this.appTitle = 'Share Hub',
@@ -44,6 +45,7 @@ class ShareHubApp extends StatefulWidget {
   final void Function(bool)? setAuxiliaryNeeded;
   final bool Function()? relayCredentialAvailable;
   final Listenable? relayCredentialChanges;
+  final DateTime? Function()? relayCredentialExpiresAt;
   final Future<void> Function()? stopAuxiliary;
   final TargetPlatform? targetPlatform;
   final String appTitle;
@@ -79,6 +81,7 @@ class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
     localCaptureActive: () => _preview.occupiesPicture,
     relayCredentialAvailable: widget.relayCredentialAvailable,
     relayCredentialChanges: widget.relayCredentialChanges,
+    relayCredentialExpiresAt: widget.relayCredentialExpiresAt,
   );
   late final _transfers = TransferQueue(_fileAccess);
   late final _desktop = DesktopLifecycle(
