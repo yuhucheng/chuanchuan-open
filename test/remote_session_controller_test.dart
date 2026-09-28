@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
@@ -20,15 +21,49 @@ import 'fakes.dart';
 /// real while capture, peer connection and rendering are substituted.
 class _FakeConnectionPlatform implements ConnectionPlatform {
   final seed = Completer<DeviceIdentity>();
+  DeviceIdentity? currentIdentity;
   final advertisements = <int?>[];
   @override
-  Future<DeviceIdentity> identity() => seed.future;
+  Future<DeviceIdentity> identity() =>
+      currentIdentity == null ? seed.future : Future.value(currentIdentity!);
   @override
   Future<int> now() async => 1000;
   @override
   Future<String?> advertise(int? port, String? key) async {
     advertisements.add(port);
     return 'test.local';
+  }
+}
+
+final class _TcpBridge {
+  _TcpBridge._(this.server);
+  final ServerSocket server;
+  final sockets = <Socket>[];
+  int get port => server.port;
+
+  static Future<_TcpBridge> open(int targetPort) async {
+    final bridge = _TcpBridge._(
+      await ServerSocket.bind(InternetAddress.loopbackIPv4, 0),
+    );
+    bridge.server.listen((incoming) async {
+      bridge.sockets.add(incoming);
+      final outgoing = await Socket.connect('127.0.0.1', targetPort);
+      bridge.sockets.add(outgoing);
+      incoming.listen(outgoing.add, onDone: outgoing.destroy);
+      outgoing.listen(incoming.add, onDone: incoming.destroy);
+    });
+    return bridge;
+  }
+
+  void drop() {
+    for (final socket in sockets) {
+      socket.destroy();
+    }
+  }
+
+  Future<void> close() async {
+    drop();
+    await server.close();
   }
 }
 
@@ -513,6 +548,118 @@ void main() {
         SessionOperation.control,
       ]);
       await remoteA.stop();
+    },
+  );
+
+  test(
+    'transport loss ends old control before the original grant recovers',
+    () async {
+      await a.disconnectAll();
+      await b.disconnectAll();
+      a.dispose();
+      b.dispose();
+
+      final aPlatform = _FakeConnectionPlatform();
+      final bPlatform = _FakeConnectionPlatform();
+      a = ConnectionController(aPlatform);
+      b = ConnectionController(bPlatform);
+      final aIdentity = await DeviceIdentity.fromSeed(List.filled(32, 31));
+      final bIdentity = await DeviceIdentity.fromSeed(List.filled(32, 32));
+      aPlatform.seed.complete(aIdentity);
+      bPlatform.seed.complete(bIdentity);
+      await b.open();
+      final bridge = await _TcpBridge.open(
+        bPlatform.advertisements.whereType<int>().last,
+      );
+      addTearDown(bridge.close);
+      final connection = await a.connect(
+        '127.0.0.1',
+        bridge.port,
+        b.code!,
+        expectedPeerKey: bIdentity.encodedKey,
+      );
+      expect(connection, isNotNull);
+      factoryA = _FakeFactory(
+        declared: MediaCapabilities(
+          protocolVersion: sessionProtocolVersion,
+          operations: {SessionOperation.control},
+          maxVideoSessions: 1,
+        ),
+        controlCapabilities: {
+          ControlCapability.pointer,
+          ControlCapability.wheel,
+          ControlCapability.physicalKey,
+          ControlCapability.textInput,
+          ControlCapability.clipboardText,
+        },
+      );
+      build();
+      await remoteA.start(
+        SessionOperation.control,
+        peerKey: connection!.peerKey,
+      );
+      final oldControl = factoryA.current as _FakeControlPicture;
+      oldControl.emit(MediaEventKind.firstFrame);
+      oldControl.ready(
+        const RemoteControlInputScope(
+          inputEpoch: 1,
+          geometryRevision: 1,
+          mediaRevision: 0,
+          width: 640,
+          height: 360,
+        ),
+      );
+      expect(await remoteA.sendControlKey(0xe0, ControlKeyAction.down), isTrue);
+      oldControl.sendGate = Completer<void>();
+      final queued = remoteA.sendControlKey(0x05, ControlKeyAction.down);
+      final suspended = connection.phaseChanges.firstWhere(
+        (phase) => phase == ConnectionPhase.suspended,
+      );
+      final recovered = connection.phaseChanges.firstWhere(
+        (phase) => phase == ConnectionPhase.active,
+      );
+      bridge.drop();
+      await suspended.timeout(const Duration(seconds: 5));
+      expect(
+        await remoteA.sendControlKey(0x04, ControlKeyAction.down),
+        isFalse,
+      );
+      await waitFor(() => !remoteA.occupied);
+      expect(oldControl.stops, 1);
+      expect(remoteA.phase, RemotePhase.failed);
+      await recovered.timeout(const Duration(seconds: 10));
+      oldControl.sendGate!.complete();
+      expect(await queued, isFalse);
+      expect(oldControl.inputs, hasLength(1));
+      expect(remoteA.occupied, isFalse);
+      oldControl.emit(MediaEventKind.firstFrame);
+      expect(remoteA.occupied, isFalse);
+      await remoteA.start(
+        SessionOperation.control,
+        peerKey: connection.peerKey,
+      );
+      expect(remoteA.session, isNot(same(oldControl)));
+      expect(remoteA.session!.id, isNot(oldControl.id));
+      final freshControl = remoteA.session! as _FakeControlPicture;
+      freshControl.emit(MediaEventKind.firstFrame);
+      freshControl.ready(
+        const RemoteControlInputScope(
+          inputEpoch: 2,
+          geometryRevision: 1,
+          mediaRevision: 0,
+          width: 640,
+          height: 360,
+        ),
+      );
+      expect(await remoteA.sendControlKey(0xe0, ControlKeyAction.down), isTrue);
+      aPlatform.currentIdentity = await DeviceIdentity.fromSeed(
+        List.filled(32, 33),
+      );
+      await a.open();
+      await waitFor(() => !remoteA.occupied);
+      expect(freshControl.stops, 1);
+      expect(connection.isClosed, isTrue);
+      expect(remoteA.phase, RemotePhase.failed);
     },
   );
 

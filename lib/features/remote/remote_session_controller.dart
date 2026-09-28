@@ -499,7 +499,11 @@ class RemoteSessionController extends ChangeNotifier {
       _linkFor(connection);
     }
     final attempt = _attempt;
-    if (attempt != null && !live.contains(attempt.connection)) {
+    if (attempt != null &&
+        (!live.contains(attempt.connection) ||
+            (attempt.operation == SessionOperation.control &&
+                (!attempt.connection.isConnected ||
+                    attempt.connection.grant?.phase != GrantPhase.active)))) {
       unawaited(stop(reason: '连接已断开，远端画面已停止并释放。', failed: true));
     }
   }
@@ -775,7 +779,10 @@ class RemoteSessionController extends ChangeNotifier {
       !_disposed &&
       identical(_attempt, attempt) &&
       attempt.token == _generation &&
-      !attempt.cancelled;
+      !attempt.cancelled &&
+      (attempt.operation != SessionOperation.control ||
+          (attempt.connection.isConnected &&
+              attempt.connection.grant?.phase == GrantPhase.active));
 
   Future<void> changeSource(CaptureSource selected) async {
     final attempt = _attempt;
