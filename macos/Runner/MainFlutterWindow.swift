@@ -11,6 +11,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   private var statusItem: NSStatusItem?
   private var allowItem: NSMenuItem?
   private var desktopReady = false
+  private var lifecycleRegistered = false
   private var quitPending = false
   private(set) var terminationApproved = false
   private var connectionSupported = false
@@ -72,6 +73,9 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
       guard let self else { result(FlutterError(code: "closed", message: "窗口已关闭", details: nil)); return }
       switch call.method {
       case "initialize":
+        // Dart installs requestExit before invoking initialize. Even if the
+        // status item fails, a later quit must still run that cleanup owner.
+        self.lifecycleRegistered = true
         self.connectionSupported = (call.arguments as? [String: Any])?["connectionSupported"] as? Bool == true
         self.installStatusItem()
         guard self.statusItem?.button != nil else {
@@ -248,7 +252,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
 
   func requestTermination(_ completion: @escaping (Bool) -> Void) {
     guard !quitPending else { completion(false); return }
-    if !desktopReady { completion(true); return }
+    if !lifecycleRegistered { completion(true); return }
     quitPending = true
     desktop?.invokeMethod("requestExit", arguments: nil) { [weak self] value in
       guard let self else { completion(false); return }

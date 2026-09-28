@@ -97,6 +97,47 @@ void main() {
     },
   );
   test(
+    'failed tray initialization still leaves Dart exit cleanup available',
+    () async {
+      lifecycle.dispose();
+      const failedChannel = MethodChannel('test/desktop-no-tray');
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(failedChannel, (call) async {
+            if (call.method == 'initialize') {
+              throw PlatformException(code: 'tray_unavailable');
+            }
+            calls.add(call.method);
+            return null;
+          });
+      addTearDown(() {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(failedChannel, null);
+      });
+      lifecycle = DesktopLifecycle(
+        devices: devices,
+        connections: connections,
+        preview: preview,
+        stopRemote: () {
+          remoteStops++;
+          return Future<void>.value();
+        },
+        transfers: transfers,
+        connectionSupported: false,
+        channel: failedChannel,
+      );
+      await lifecycle.initialize();
+      expect(lifecycle.error, contains('后台入口初始化失败'));
+
+      expect(await lifecycle.requestExit(), isTrue);
+      expect(remoteStops, 1);
+      expect(preview.engine, isA<FakePreviewEngine>());
+      expect((preview.engine as FakePreviewEngine).stops, 1);
+      expect(cleanupOrder, contains('disconnect'));
+      expect(calls, isNot(contains('prepareExit')));
+      expect(lifecycle.exited, isTrue);
+    },
+  );
+  test(
     'quit cancels pending native picker before awaiting late token cleanup',
     () async {
       files.picker = Completer<List<SelectedFile>>();
