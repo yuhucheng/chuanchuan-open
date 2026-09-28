@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:share_hub_connection/share_hub_connection.dart';
+import 'package:share_hub_session_api/share_hub_session_api.dart';
 import 'package:test/test.dart';
 
 final class _MeetingTransport implements AuxiliaryTransport {
@@ -14,6 +15,7 @@ final class _MeetingTransport implements AuxiliaryTransport {
   final toHost = <Map<String, Object?>>[];
   final toJoiner = <Map<String, Object?>>[];
   bool active = false;
+  int? activatedLifetimeSeconds;
   bool closed = false;
   bool cancelOnJoin = false;
 
@@ -53,6 +55,7 @@ final class _MeetingTransport implements AuxiliaryTransport {
         cancellation.throwIfCancelled();
         return {'pending': true};
       case '/v1/meet/activate':
+        activatedLifetimeSeconds = int.parse(body['lifetimeSeconds']!);
         active = true;
         return {'active': true};
       case '/v1/meet/leave':
@@ -127,12 +130,15 @@ void main() {
   test('cancel after accepted meeting join releases the attempt', () async {
     final transport = _MeetingTransport('123456')..cancelOnJoin = true;
     await expectLater(
-      MeetingServiceClient(transport).join(
-        '123456',
-        cancellation: AuxiliaryCancellation(),
+      MeetingServiceClient(transport)
+          .join('123456', cancellation: AuxiliaryCancellation()),
+      throwsA(
+        isA<AuxiliaryFailure>().having(
+          (error) => error.code,
+          'code',
+          'cancelled',
+        ),
       ),
-      throwsA(isA<AuxiliaryFailure>()
-          .having((error) => error.code, 'code', 'cancelled')),
     );
     expect(transport.closed, isTrue);
   });
@@ -283,6 +289,7 @@ void main() {
     addTearDown(client.close);
     await serving;
     expect(transport.active, isTrue);
+    expect(transport.activatedLifetimeSeconds, grantLifetime.inSeconds);
     expect(accepted, hasLength(1));
     expect(client.grant!.binding.policy.type, 'short-code');
     expect(client.peerKey, hostIdentity.encodedKey);
@@ -290,6 +297,57 @@ void main() {
     await client.whenClosed.timeout(const Duration(seconds: 2));
     expect(client.isClosed, isTrue);
   });
+
+  test(
+    'meeting session is bounded by an extensible grant remaining lifetime',
+    () async {
+      const policy = GrantPolicy(
+        type: 'short-code.next',
+        lifetime: Duration(hours: 1),
+      );
+      final hostIdentity = await DeviceIdentity.fromSeed(List.filled(32, 61));
+      final clientIdentity = await DeviceIdentity.fromSeed(List.filled(32, 62));
+      var hostNow = 1000000;
+      final host = PairingHost(
+        identity: hostIdentity,
+        clock: () async => hostNow += 1000000,
+        onConnection: (_) {},
+        protocolVersion: 2,
+        grantPolicy: policy,
+      );
+      addTearDown(host.close);
+      await host.open(address: InternetAddress.loopbackIPv4);
+      final transport = _MeetingTransport(host.offer!.code);
+      final listing = MeetingListing(
+        transport,
+        host,
+        _MeetingTransport.hostToken,
+        AuxiliaryCancellation(),
+      );
+      addTearDown(listing.close);
+      final serving = listing.serve();
+      final client =
+          await PairingAttempt(
+            identity: clientIdentity,
+            clock: () async => 1000000,
+            protocolVersion: 2,
+            grantPolicy: policy,
+          ).connectWithWire(
+            () => MeetingServiceClient(transport)
+                .join(host.offer!.code, cancellation: AuxiliaryCancellation()),
+            host.offer!.code,
+          );
+      addTearDown(client.close);
+      await serving;
+      expect(transport.active, isTrue);
+      expect(transport.activatedLifetimeSeconds, greaterThan(0));
+      expect(
+        transport.activatedLifetimeSeconds,
+        lessThan(policy.lifetime.inSeconds),
+      );
+      expect(client.grant!.binding.policy.type, policy.type);
+    },
+  );
 
   test(
     'misrouted code cannot authenticate a different receiving host',

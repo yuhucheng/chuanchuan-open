@@ -184,11 +184,23 @@ final class MeetingListing {
     final connection = await _host.acceptWire(
       wire,
       beforeConnected: (candidate) async {
+        // The endpoint grant already started before this network request.
+        // Send its current remaining time, not a fresh policy lifetime. The
+        // service's receive delay can still leave a small routing overhang;
+        // endpoint expiry and wire close remain authoritative.
+        final now = await _host.clock();
+        if (!candidate.lease.check(now)) {
+          throw const ConnectionFailure('expired');
+        }
+        final remainingSeconds =
+            (candidate.lease.expiresMicros - now) ~/ 1000000;
+        if (remainingSeconds < 1) {
+          throw const ConnectionFailure('expired');
+        }
         final result = await _transport.post('/v1/meet/activate', {
           'token': _token,
           'attempt': attempt,
-          'lifetimeSeconds': candidate.lease.policy.lifetime.inSeconds
-              .toString(),
+          'lifetimeSeconds': remainingSeconds.toString(),
         }, _pollCancellation);
         if (result.length != 1 ||
             result['active'] != true ||
