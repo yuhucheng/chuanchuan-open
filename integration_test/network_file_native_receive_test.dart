@@ -433,6 +433,114 @@ void main() {
     },
     timeout: const Timeout(Duration(minutes: 2)),
   );
+
+  testWidgets(
+    'closing transfer owners after first ACK retires native partial file',
+    (tester) async {
+      expect(Platform.isWindows || Platform.isMacOS, isTrue);
+      const destinationPath = String.fromEnvironment('NATIVE_RECEIVE_DIR');
+      expect(destinationPath, isNotEmpty);
+      final destination = Directory(destinationPath);
+      expect(destination.existsSync(), isTrue);
+      final existingParts = _temporaryPaths(destination);
+      final senderPlatform = _LiveClockPlatform();
+      final receiverPlatform = _LiveClockPlatform();
+      final receiverIdentity = await DeviceIdentity.fromSeed(
+        List<int>.filled(32, 108),
+      );
+      senderPlatform.seed.complete(
+        await DeviceIdentity.fromSeed(List<int>.filled(32, 107)),
+      );
+      receiverPlatform.seed.complete(receiverIdentity);
+      final sender = ConnectionController(senderPlatform);
+      final receiver = ConnectionController(receiverPlatform);
+      final selectedFiles = TestFileAccess();
+      final senderQueue = TransferQueue(selectedFiles);
+      final receiverQueue = TransferQueue(TestFileAccess());
+      final source = _CutAfterFirstAckSource(selectedFiles.data);
+      final sent = NetworkTransfers(
+        connections: sender,
+        queue: senderQueue,
+        source: source,
+        receive: MemoryReceiveAccess(),
+      );
+      final received = NetworkTransfers(
+        connections: receiver,
+        queue: receiverQueue,
+        source: MemorySourceAccess({}),
+        receive: MethodChannelReceiveAccess(),
+      );
+      ConnectionRelay? relay;
+      try {
+        await receiver.open();
+        relay = await ConnectionRelay.open(
+          receiverPlatform.advertisements.whereType<int>().last,
+        );
+        await sender.connect(
+          '127.0.0.1',
+          relay.port,
+          receiver.code!,
+          expectedPeerKey: receiverIdentity.encodedKey,
+        );
+        final bytes = Uint8List.fromList(
+          List<int>.generate(3 * 256 * 1024 + 13, (index) => index % 251),
+        );
+        final name =
+            'chuan-network-close-${DateTime.now().microsecondsSinceEpoch}.bin';
+        selectedFiles.selection = [
+          SelectedFile(token: 'close-source', name: name, size: bytes.length),
+        ];
+        selectedFiles.data['close-source'] = bytes;
+        await senderQueue.selectFiles();
+        await drainQueue(senderQueue);
+        source.gatePass = source.passes + 2;
+        source.gateEntered = Completer<void>();
+        source.gateRelease = Completer<void>();
+        final job = sent.send(senderQueue.items.single, sender.sessions.single);
+        await source.gateEntered!.future.timeout(const Duration(seconds: 10));
+        expect(job.acknowledgedBytes, 256 * 1024);
+        final closing = Future.wait([sent.close(), received.close()]);
+        source.gateRelease!.complete();
+        await closing.timeout(const Duration(seconds: 20));
+        await job.done.timeout(const Duration(seconds: 20));
+        expect(job.phase, NetworkSendPhase.cancelled);
+        expect(job.canResume, isFalse);
+        expect(job.receipt, isNull);
+        expect(
+          received.receiveHistory.where(
+            (item) => item.file.outcome == FileRetirementOutcome.completed,
+          ),
+          isEmpty,
+        );
+        expect(
+          File('${destination.path}${Platform.pathSeparator}$name')
+              .existsSync(),
+          isFalse,
+        );
+        expect(_temporaryPaths(destination).difference(existingParts), isEmpty);
+        stdout.writeln('NATIVE_NETWORK_CLOSE_REPORT name=$name');
+      } finally {
+        if (source.gateRelease case final release?) {
+          if (!release.isCompleted) release.complete();
+        }
+        await Future.wait([sent.close(), received.close()]);
+        await Future.wait([
+          senderQueue.close(),
+          receiverQueue.close(),
+          sender.disconnectAll(),
+          receiver.disconnectAll(),
+        ]);
+        sent.dispose();
+        received.dispose();
+        senderQueue.dispose();
+        receiverQueue.dispose();
+        sender.dispose();
+        receiver.dispose();
+        await relay?.close();
+      }
+    },
+    timeout: const Timeout(Duration(minutes: 2)),
+  );
 }
 
 Set<String> _temporaryPaths(Directory directory) => {
