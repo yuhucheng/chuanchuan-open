@@ -269,6 +269,52 @@ void main() {
     },
   );
 
+  test('meeting fallback binds the discovered peer identity', () async {
+    final hostIdentity = await DeviceIdentity.fromSeed(List.filled(32, 71));
+    final clientIdentity = await DeviceIdentity.fromSeed(List.filled(32, 72));
+    final otherIdentity = await DeviceIdentity.fromSeed(List.filled(32, 73));
+    final service = _MeetingService(hostIdentity);
+    AuxiliaryRouteController route(DeviceIdentity identity) =>
+        AuxiliaryRouteController(
+          identity: () async => identity,
+          officialOrigin: 'https://selected.example',
+          store: _Store(),
+          transportFactory: (_) => (transport: service, close: () {}),
+        );
+    final hostRoute = route(hostIdentity);
+    final clientRoute = route(clientIdentity);
+    final host = ConnectionController(
+      _Platform(hostIdentity),
+      auxiliaryRoutes: hostRoute,
+    );
+    final client = ConnectionController(
+      _Platform(clientIdentity),
+      auxiliaryRoutes: clientRoute,
+    );
+    addTearDown(() async {
+      await client.disconnectAll();
+      await host.disconnectAll();
+      await clientRoute.stop();
+      await hostRoute.stop();
+      client.dispose();
+      host.dispose();
+    });
+    await host.open();
+    for (var i = 0; i < 100 && service.code == null; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect(service.code, host.code);
+    final result = await client.connectByCode(
+      host.code!,
+      expectedPeerKey: otherIdentity.encodedKey,
+    );
+    expect(result, isNull);
+    expect(client.lastConnectionFailureCode, 'identity_mismatch');
+    expect(client.problem, contains('身份与所选设备不一致'));
+    expect(client.sessions, isEmpty);
+    expect(host.sessions, isEmpty);
+  });
+
   test(
     'switching the selected origin cancels an in-flight code join',
     () async {

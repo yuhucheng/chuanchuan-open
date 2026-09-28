@@ -228,7 +228,7 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
       submitting = attempted = true;
       error = null;
     });
-    final connection = direct
+    TrustedConnection? connection = direct
         ? await widget.controller.connect(
             host.text.trim(),
             number!,
@@ -236,6 +236,23 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
             expectedPeerKey: widget.device?.publicKey,
           )
         : await widget.controller.connectByCode(code.text);
+    final expectedKey = widget.device?.publicKey;
+    if (connection == null &&
+        direct &&
+        expectedKey != null &&
+        widget.controller.auxiliaryRoutes != null &&
+        widget.controller.lastConnectionFailureCode == 'signal_unreachable' &&
+        !widget.controller.busy &&
+        mounted &&
+        !closing &&
+        submitting) {
+      // Only an unreachable TCP endpoint falls back. A bad code, rejected
+      // identity or cancelled handshake must never try a second target.
+      connection = await widget.controller.connectByCode(
+        code.text,
+        expectedPeerKey: expectedKey,
+      );
+    }
     if (!mounted || closing) return;
     if (connection != null && !connection.isClosed) {
       // Finish this submission before popping: disposal must not cancel the
@@ -300,6 +317,9 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
                     ? '验证后建立 8 小时连接。连接本身不采集任何画面，观看或投屏需要单独发起。'
                     : '验证后建立 8 小时连接，并继续${widget.nextActionLabel}。',
               ),
+              if (widget.device?.publicKey != null &&
+                  widget.controller.auxiliaryRoutes != null)
+                const Text('本地地址不可达时，将通过所选辅助服务继续验证该设备。'),
               if (submitting) const Text('正在验证，可随时取消'),
               if (error != null)
                 Semantics(liveRegion: true, child: Text(error!)),

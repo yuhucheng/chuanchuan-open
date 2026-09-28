@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:share_hub_connection/share_hub_connection.dart';
 import 'package:share_hub_media_api/share_hub_media_api.dart';
+import 'package:share_hub_open/features/connections/auxiliary_route_controller.dart';
 import 'package:share_hub_open/features/connections/connection_controller.dart';
 import 'package:share_hub_open/features/connections/connection_panel.dart';
 import 'package:share_hub_open/features/desktop/desktop_lifecycle.dart';
@@ -25,15 +26,19 @@ import 'file_fakes.dart';
 // use real authenticated directional grants, while making the next dialog
 // result controllable without socket I/O inside the widget clock.
 class _DialogConnections extends ConnectionController {
-  _DialogConnections(TrustedConnection incoming)
+  _DialogConnections(TrustedConnection incoming, {super.auxiliaryRoutes})
     : visible = [incoming],
       super(FakeConnectionPlatform());
   final List<TrustedConnection> visible;
   TrustedConnection? nextResult;
   Completer<TrustedConnection?>? pending;
   String? expectedKey;
+  String? relayExpectedKey;
   String? submittedCode;
-  int connects = 0, cancels = 0, revision = 0;
+  String? directFailureCode;
+  int connects = 0, relayConnects = 0, cancels = 0, revision = 0;
+  @override
+  String? get lastConnectionFailureCode => directFailureCode;
   @override
   List<TrustedConnection> get sessions => List.unmodifiable(visible);
   @override
@@ -60,13 +65,22 @@ class _DialogConnections extends ConnectionController {
     final result = await (pending?.future ?? Future.value(nextResult));
     if (current != revision) return null;
     busy = false;
+    if (directFailureCode != null) {
+      notifyListeners();
+      return null;
+    }
     if (result != null) visible.add(result);
     notifyListeners();
     return result;
   }
 
   @override
-  Future<TrustedConnection?> connectByCode(String shortCode) async {
+  Future<TrustedConnection?> connectByCode(
+    String shortCode, {
+    String? expectedPeerKey,
+  }) async {
+    relayConnects++;
+    relayExpectedKey = expectedPeerKey;
     submittedCode = shortCode;
     final result = nextResult;
     if (result != null) visible.add(result);
@@ -80,6 +94,13 @@ class _DialogConnections extends ConnectionController {
     revision++;
     busy = false;
   }
+}
+
+class _RouteStore implements AuxiliaryRouteStore {
+  @override
+  Future<AuxiliaryRouteChoice?> read() async => null;
+  @override
+  Future<void> write(AuxiliaryRouteChoice choice) async {}
 }
 
 class _NoopLink implements RemotePictureLink {
@@ -164,6 +185,7 @@ void main() {
   Future<(_DialogConnections, _RecordingRemote, FakePlatform)> mount(
     WidgetTester tester, {
     bool endpoint = true,
+    bool auxiliary = false,
   }) async {
     tester.view.physicalSize = const Size(1100, 950);
     tester.view.devicePixelRatio = 1;
@@ -171,7 +193,14 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     final platform = FakePlatform()
       ..status = const PermissionStatus(screenRecording: true);
-    final connections = _DialogConnections(incoming);
+    final routes = auxiliary
+        ? AuxiliaryRouteController(
+            identity: () => DeviceIdentity.fromSeed(List.filled(32, 99)),
+            officialOrigin: 'https://official.example',
+            store: _RouteStore(),
+          )
+        : null;
+    final connections = _DialogConnections(incoming, auxiliaryRoutes: routes);
     final devices = DeviceController(platform);
     await devices.initialize();
     devices.discovery = DiscoverySnapshot(
@@ -210,6 +239,7 @@ void main() {
           transfers: transfers,
           desktop: desktop,
           appearance: appearance,
+          auxiliaryRoutes: routes,
           targetPlatform: TargetPlatform.macOS,
         ),
       ),
@@ -223,6 +253,7 @@ void main() {
       transfers.dispose();
       devices.dispose();
       appearance.dispose();
+      await routes?.stop();
       await platform.events.close();
     });
     return (connections, remote, platform);
@@ -344,6 +375,40 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     },
   );
+
+  for (final failure in ['signal_unreachable', 'identity_mismatch']) {
+    testWidgets('discovered device fallback is gated by $failure', (
+      tester,
+    ) async {
+      final (connections, remote, _) = await mount(tester, auxiliary: true);
+      connections.directFailureCode = failure;
+      connections.nextResult = outgoing;
+      await openDevice(tester);
+      await tester.tap(find.text('连接并观看'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.byType(TextField),
+        ),
+        '123456',
+      );
+      await tester.tap(find.text('连接'));
+      await tester.pumpAndSettle();
+      expect(connections.connects, 1);
+      expect(connections.expectedKey, incoming.peerKey);
+      if (failure == 'signal_unreachable') {
+        expect(connections.relayConnects, 1);
+        expect(connections.relayExpectedKey, incoming.peerKey);
+        expect(remote.starts, [(SessionOperation.watch, incoming.peerKey)]);
+      } else {
+        expect(connections.relayConnects, 0);
+        expect(remote.starts, isEmpty);
+        expect(find.byType(AlertDialog), findsOneWidget);
+      }
+      await tester.pumpWidget(const SizedBox());
+    });
+  }
 
   testWidgets(
     'missing reverse endpoint offers refresh instead of unusable operations',

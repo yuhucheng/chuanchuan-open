@@ -104,6 +104,10 @@ class ConnectionController extends ChangeNotifier {
   String? get message => notice?.message;
   String? get problem =>
       notice?.kind == ConnectionNoticeKind.problem ? notice?.message : null;
+  String? _lastConnectionFailureCode;
+
+  /// A typed result for choosing a transport fallback, never UI text parsing.
+  String? get lastConnectionFailureCode => _lastConnectionFailureCode;
   final List<TrustedConnection> _sessions = [];
   List<TrustedConnection> get sessions => List.unmodifiable(_sessions);
   bool get accepting => _host?.port != null;
@@ -403,12 +407,19 @@ class ConnectionController extends ChangeNotifier {
               _connect(host, port, shortCode, expectedPeerKey: expectedPeerKey),
         );
 
-  Future<TrustedConnection?> connectByCode(String shortCode) =>
-      _shutdownRequested
+  Future<TrustedConnection?> connectByCode(
+    String shortCode, {
+    String? expectedPeerKey,
+  }) => _shutdownRequested
       ? Future<TrustedConnection?>.value()
-      : _startTracked<TrustedConnection?>(() => _connectByCode(shortCode));
+      : _startTracked<TrustedConnection?>(
+          () => _connectByCode(shortCode, expectedPeerKey: expectedPeerKey),
+        );
 
-  Future<TrustedConnection?> _connectByCode(String shortCode) async {
+  Future<TrustedConnection?> _connectByCode(
+    String shortCode, {
+    String? expectedPeerKey,
+  }) async {
     if (busy || _disposed || _disconnecting || _shutdownRequested) return null;
     if (_sessions.length + _recoveries.length >= 8) {
       _notice = const ConnectionNotice.problem('连接数量已达上限，请先断开一个连接。');
@@ -416,6 +427,7 @@ class ConnectionController extends ChangeNotifier {
       return null;
     }
     final generation = ++_generation;
+    _lastConnectionFailureCode = null;
     busy = true;
     _connecting = true;
     _notice = const ConnectionNotice.status('正在通过所选辅助服务验证短接码和对端身份…');
@@ -437,6 +449,7 @@ class ConnectionController extends ChangeNotifier {
       final connection = await attempt.connectWithWire(
         () => routes.openMeetingWire(shortCode, cancellation),
         shortCode,
+        expectedPeerKey: expectedPeerKey,
       );
       if (_disposed || _shutdownRequested || generation != _generation) {
         _close(connection, 'cancelled');
@@ -450,8 +463,15 @@ class ConnectionController extends ChangeNotifier {
       return connection;
     } catch (error) {
       if (!_disposed && generation == _generation) {
+        _lastConnectionFailureCode = switch (error) {
+          ConnectionFailure(:final code) => code,
+          AuxiliaryFailure(:final code) => code,
+          _ => null,
+        };
         _notice = ConnectionNotice.problem(switch (error) {
           ConnectionFailure(code: 'invalid_input') => '请输入完整的 6 位纯数字短接码。',
+          ConnectionFailure(code: 'identity_mismatch') =>
+            '辅助服务返回的设备身份与所选设备不一致，请重新发现设备或检查服务。',
           ConnectionFailure(code: 'cancelled') => '连接已取消或握手超时。',
           ConnectionFailure(code: 'entry_unavailable') =>
             '短接码不可用、已过期或已被使用，请让对方重新生成。',
@@ -494,6 +514,7 @@ class ConnectionController extends ChangeNotifier {
       return null;
     }
     final generation = ++_generation;
+    _lastConnectionFailureCode = null;
     busy = true;
     _connecting = true;
     _notice = const ConnectionNotice.status('正在验证短接码和对端身份…');
@@ -531,6 +552,9 @@ class ConnectionController extends ChangeNotifier {
       return connection;
     } catch (error) {
       if (!_disposed && generation == _generation) {
+        _lastConnectionFailureCode = error is ConnectionFailure
+            ? error.code
+            : null;
         _notice = ConnectionNotice.problem(switch (error) {
           ConnectionFailure(code: 'identity_mismatch') =>
             '对端身份与所选设备不一致，请重新发现设备。',
@@ -554,6 +578,7 @@ class ConnectionController extends ChangeNotifier {
 
   void cancel() {
     _generation++;
+    _lastConnectionFailureCode = null;
     _attempt?.cancel();
     _meetingJoinCancellation?.cancel();
     _attempt = null;
