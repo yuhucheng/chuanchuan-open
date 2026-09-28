@@ -52,6 +52,7 @@ final class WindowsControlClipboardControllerOwner {
     MethodChannel channel = const MethodChannel('dev.sharehub.client/platform'),
     String Function()? newUpdateId,
     int Function()? monotonicMicros,
+    void Function()? requireOpeningCurrent,
   }) async {
     if (!context.localIsController || !pictureReady) {
       throw const SessionFailure('not_ready');
@@ -65,6 +66,7 @@ final class WindowsControlClipboardControllerOwner {
     );
     try {
       final baseline = await access.read();
+      requireOpeningCurrent?.call();
       final state = ClipboardControllerState(monotonicMicros: monotonicMicros);
       state.acceptReady(
         ready,
@@ -84,6 +86,7 @@ final class WindowsControlClipboardControllerOwner {
         targetState.revision,
       );
       await owner._applyAuthoritative(ready.text);
+      requireOpeningCurrent?.call();
       owner._requireCurrent();
       return owner;
     } catch (_) {

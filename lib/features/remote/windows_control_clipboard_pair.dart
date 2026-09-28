@@ -111,6 +111,8 @@ final class WindowsControlClipboardPair {
             message.targetStateRevision != peer.revision) {
           throw const SessionFailure('stale_operation');
         }
+        final localRevision = _local.revision;
+        final peerRevision = peer.revision;
         await _retireOwner();
         final owner = await WindowsControlClipboardControllerOwner.open(
           context: context,
@@ -122,10 +124,14 @@ final class WindowsControlClipboardPair {
           channel: channel,
           newUpdateId: newUpdateId,
           monotonicMicros: monotonicMicros,
+          requireOpeningCurrent: () =>
+              _requireOpeningPair(localRevision, peerRevision),
         );
-        if (_closed || !_pictureReady) {
+        try {
+          _requireOpeningPair(localRevision, peerRevision);
+        } catch (_) {
           await owner.close();
-          throw const SessionFailure('operation_stopped');
+          rethrow;
         }
         _lastReadyEpoch = message.epoch;
         _controller = owner;
@@ -146,6 +152,17 @@ final class WindowsControlClipboardPair {
     await owner.receive(message);
   });
 
+  void _requireOpeningPair(int localRevision, int peerRevision) {
+    if (_closed ||
+        !_pictureReady ||
+        !_local.permitsSync ||
+        _local.revision != localRevision ||
+        _peer?.revision != peerRevision ||
+        !(_peer?.permitsSync ?? false)) {
+      throw const SessionFailure('operation_stopped');
+    }
+  }
+
   Future<void> _maybeOpenTarget() async {
     final peer = _peer;
     if (_closed ||
@@ -160,19 +177,26 @@ final class WindowsControlClipboardPair {
     if (_nextEpoch == 0x7fffffffffffffff) {
       throw const SessionFailure('operation_limit');
     }
+    final localRevision = _local.revision;
+    final peerRevision = peer.revision;
     final owner = await WindowsControlClipboardTargetOwner.open(
       context: context,
       epoch: ++_nextEpoch,
       controllerState: peer,
       targetState: _local,
       pictureReady: true,
-      send: send,
+      send: (message) {
+        _requireOpeningPair(localRevision, peerRevision);
+        return send(message);
+      },
       channel: channel,
       monotonicMicros: monotonicMicros,
     );
-    if (_closed || !_pictureReady) {
+    try {
+      _requireOpeningPair(localRevision, peerRevision);
+    } catch (_) {
       await owner.close();
-      throw const SessionFailure('operation_stopped');
+      rethrow;
     }
     _target = owner;
     owner.startWatching(
@@ -225,7 +249,7 @@ final class WindowsControlClipboardPair {
     );
     final cleanup = _retireOwner();
     final notice = send(_local);
-    return Future.wait<void>([cleanup, notice]).then((_) {});
+    return Future.wait<void>([cleanup, notice, _tail]).then((_) {});
   }
 
   /// Local setting changes seal the current OS lease before the new state is

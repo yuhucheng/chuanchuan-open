@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:share_hub_media_api/share_hub_media_api.dart';
@@ -94,6 +96,147 @@ void main() {
     expect(nativeCalls, 0);
     await controller.stop();
     await target.stop();
+  });
+
+  test('disabling while target lease opens retires that lease', () async {
+    final (_, targetContext) = await contexts();
+    final readStarted = Completer<void>();
+    final finishRead = Completer<void>();
+    final outgoing = <ClipboardWireMessage>[];
+    var closes = 0;
+    messenger.setMockMethodCallHandler(targetChannel, (call) async {
+      switch (call.method) {
+        case 'control.clipboard.open':
+          return 2;
+        case 'control.clipboard.read':
+          readStarted.complete();
+          await finishRead.future;
+          return {'sequence': 1, 'text': 'keep local text'};
+        case 'control.clipboard.close':
+          closes++;
+          return null;
+      }
+      throw StateError(call.method);
+    });
+    final target = WindowsControlClipboardPair(
+      context: targetContext,
+      channel: targetChannel,
+      notificationChannel: targetNotice,
+      send: (message) async => outgoing.add(message),
+      onFailure: (_) => fail('target clipboard failure'),
+    );
+    await target.markPictureReady();
+    outgoing.clear();
+    final opening = target.receive(
+      ClipboardSideState(revision: 1, enabled: true, available: true),
+    );
+    await readStarted.future;
+    final disabled = target.setEnabled(false);
+    finishRead.complete();
+    await expectLater(opening, throwsA(isA<SessionFailure>()));
+    await disabled;
+    expect(outgoing.whereType<ClipboardReady>(), isEmpty);
+    expect(closes, 1);
+    await target.stop();
+  });
+
+  test('picture invalidation waits for an opening target lease', () async {
+    final (_, targetContext) = await contexts();
+    final readStarted = Completer<void>();
+    final finishRead = Completer<void>();
+    final outgoing = <ClipboardWireMessage>[];
+    var closes = 0;
+    messenger.setMockMethodCallHandler(targetChannel, (call) async {
+      switch (call.method) {
+        case 'control.clipboard.open':
+          return 2;
+        case 'control.clipboard.read':
+          readStarted.complete();
+          await finishRead.future;
+          return {'sequence': 1, 'text': 'original OS text'};
+        case 'control.clipboard.close':
+          closes++;
+          return null;
+      }
+      throw StateError(call.method);
+    });
+    final target = WindowsControlClipboardPair(
+      context: targetContext,
+      channel: targetChannel,
+      notificationChannel: targetNotice,
+      send: (message) async => outgoing.add(message),
+      onFailure: (_) => fail('target clipboard failure'),
+    );
+    await target.markPictureReady();
+    outgoing.clear();
+    final opening = target.receive(
+      ClipboardSideState(revision: 1, enabled: true, available: true),
+    );
+    await readStarted.future;
+    var invalidationFinished = false;
+    final invalidation = target.invalidatePicture().then(
+      (_) => invalidationFinished = true,
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(invalidationFinished, isFalse);
+    finishRead.complete();
+    await expectLater(opening, throwsA(isA<SessionFailure>()));
+    await invalidation;
+    expect(invalidationFinished, isTrue);
+    expect(outgoing.whereType<ClipboardReady>(), isEmpty);
+    expect(closes, 1);
+    await target.stop();
+  });
+
+  test('disabling while controller lease opens preserves OS text', () async {
+    final (controllerContext, _) = await contexts();
+    final readStarted = Completer<void>();
+    final finishRead = Completer<void>();
+    var closes = 0, writes = 0;
+    messenger.setMockMethodCallHandler(controllerChannel, (call) async {
+      switch (call.method) {
+        case 'control.clipboard.open':
+          return 1;
+        case 'control.clipboard.read':
+          readStarted.complete();
+          await finishRead.future;
+          return {'sequence': 1, 'text': 'original OS text'};
+        case 'control.clipboard.write':
+          writes++;
+          return {'status': 'written', 'sequence': 2};
+        case 'control.clipboard.close':
+          closes++;
+          return null;
+      }
+      throw StateError(call.method);
+    });
+    final controller = WindowsControlClipboardPair(
+      context: controllerContext,
+      channel: controllerChannel,
+      notificationChannel: controllerNotice,
+      send: (_) async {},
+      onFailure: (_) => fail('controller clipboard failure'),
+    );
+    await controller.markPictureReady();
+    await controller.receive(
+      ClipboardSideState(revision: 1, enabled: true, available: true),
+    );
+    final opening = controller.receive(
+      ClipboardReady(
+        epoch: 1,
+        controllerStateRevision: 1,
+        targetStateRevision: 1,
+        text: 'remote text',
+      ),
+    );
+    await readStarted.future;
+    final disabled = controller.setEnabled(false);
+    finishRead.complete();
+    await expectLater(opening, throwsA(isA<SessionFailure>()));
+    await disabled;
+    expect(writes, 0);
+    expect(closes, 1);
+    await controller.stop();
   });
 
   test(
