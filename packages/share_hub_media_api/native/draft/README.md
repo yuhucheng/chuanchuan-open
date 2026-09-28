@@ -1,15 +1,17 @@
 # Native media boundary — review draft 2
 
-**Unimplemented draft.** No shipping SDK exports `shm_draft_*`. This directory is
+**Unreleased draft.** No shipping SDK exports `shm_draft_*`. This directory is
 not consumed by the Dart package, plugin build or installer. Dart media API
-0.7.0, session API 0.1.0 and existing wire profiles are unchanged. The header is
+0.8.0, session API 0.1.0 and existing wire profiles are unchanged. The header is
 public interface work, not private SDK implementation or a binary delivery.
 
 The boundary header specifies authorization/provider, resource ownership and
 shutdown. [Media operations](MEDIA.md) and `share_hub_media_operations.h` add
 sources, start, playback, recovery, measurements, presentation, wakeup and bounded
-queues/frame storage. Both are review declarations; neither header has a linked
-implementation. [Package layout and compatibility metadata](PACKAGING.md) now have a concrete
+queues/frame storage. A private authority-only prototype implements the lifecycle
+subset and the two capability/limit queries; it reports zero media capabilities.
+All media operations remain declarations without a linked implementation.
+[Package layout and compatibility metadata](PACKAGING.md) now have a concrete
 proposal and non-installable examples; production validation, GPU interop and stable
 ABI extension rules remain design/acceptance work. No program can run media by including these headers alone.
 

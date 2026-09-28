@@ -1,7 +1,9 @@
 # Media operations and bounded ownership — draft 2
 
-These are proposed semantics for `share_hub_media_operations.h`, not implemented
-SDK behavior. Read [the authorization/lifetime boundary](README.md) first. Draft
+These are proposed semantics for `share_hub_media_operations.h`, not shipping
+SDK behavior. A private authority-only prototype implements the capability and
+limit queries, reporting zero media capability and zero media resource limits;
+the media operations are still unimplemented. Read [the authorization/lifetime boundary](README.md) first. Draft
 revision 2 replaces draft 1 declarations; neither has a compatibility promise.
 The current Dart API and wire formats remain unchanged.
 

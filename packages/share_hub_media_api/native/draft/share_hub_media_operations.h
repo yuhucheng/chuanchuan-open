@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0
- * UNIMPLEMENTED review draft 2. See MEDIA.md and README.md.
- * Includes no platform/UI types. No SDK exports these declarations yet.
+ * Review draft 2. See MEDIA.md and README.md. Includes no platform/UI types.
+ * A private authority-only prototype exports the two query functions below
+ * with zero media capabilities; all media operations remain unimplemented.
  */
 #ifndef SHARE_HUB_MEDIA_OPERATIONS_DRAFT_H
 #define SHARE_HUB_MEDIA_OPERATIONS_DRAFT_H
