@@ -3,6 +3,7 @@ import 'field_test_helpers.dart';
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -218,8 +219,18 @@ void main() {
       expect(find.byTooltip('屏幕预览'), findsNothing);
       expect(find.byTooltip('文件传送'), findsNothing);
       expect(find.byType(NavigationRail), findsNothing);
+      expect(find.byType(NavigationBar), findsNothing);
+      expect(find.byType(BottomNavigationBar), findsNothing);
+      expect(find.byType(PageView), findsNothing);
       // The field keys a node by identity, not by the display name.
       final node = find.byKey(const ValueKey('device-key'));
+      final pointer = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await pointer.addPointer(location: tester.getCenter(node));
+      await pointer.moveTo(tester.getCenter(node) + const Offset(1, 0));
+      await tester.pump();
+      expect(engine.sourceCalls, 0);
+      expect(engine.starts, 0);
+      await pointer.removePointer();
       await tester.tap(node);
       await tester.pumpAndSettle();
       expect(find.text('远控 · 尚未交付'), findsNothing);
