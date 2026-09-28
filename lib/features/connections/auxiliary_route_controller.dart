@@ -166,12 +166,17 @@ final class AuxiliaryRouteController extends ChangeNotifier {
     required this.identity,
     required this.officialOrigin,
     required this.store,
+    this.peerHintBudget = const Duration(milliseconds: 750),
     AuxiliaryTransportFactory? transportFactory,
-  }) : _transportFactory = transportFactory ?? _httpsTransport;
+  }) : assert(peerHintBudget > Duration.zero),
+       _transportFactory = transportFactory ?? _httpsTransport;
 
   final Future<DeviceIdentity> Function() identity;
   final String officialOrigin;
   final AuxiliaryRouteStore store;
+
+  /// A room-scoped direct-route hint must not consume the relay recovery attempt.
+  final Duration peerHintBudget;
 
   /// Changes whenever the selected origin or its ownership is replaced.
   int get selectionRevision => _revision;
@@ -291,14 +296,28 @@ final class AuxiliaryRouteController extends ChangeNotifier {
             cancellation: cancellation,
           );
       await channel.awaitReady();
+      final hintCancellation = AuxiliaryCancellation();
+      void cancelHint() => hintCancellation.cancel();
+      cancellation.onCancel(cancelHint);
       try {
-        final address = await channel.peerAddress();
+        final address = await channel
+            .peerAddress(requestCancellation: hintCancellation)
+            .timeout(
+              peerHintBudget,
+              onTimeout: () {
+                hintCancellation.cancel();
+                throw const AuxiliaryFailure('hint_timeout');
+              },
+            );
         if (!_stopped && revision == _revision && !owner.closed) {
           onPeerAddress?.call(address);
         }
       } on AuxiliaryFailure {
-        // Older custom services may relay without the room-scoped address
+        // A slow or older custom service may lack this optional room-scoped
         // hint. The authenticated relay remains a valid recovery path.
+      } finally {
+        cancellation.removeOnCancel(cancelHint);
+        hintCancellation.cancel();
       }
       final wire = owner.wire = await previous.openRelayWire(channel);
       if (_stopped || revision != _revision || owner.closed) {

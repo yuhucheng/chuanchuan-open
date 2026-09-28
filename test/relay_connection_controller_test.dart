@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -41,6 +42,8 @@ final class _Relay implements AuxiliaryTransport {
   int forwarded = 0;
   bool failPoll = false;
   bool failChallenge = false;
+  bool stallPeerHint = false;
+  int cancelledPeerHints = 0;
 
   @override
   Future<Map<String, Object?>> post(
@@ -91,6 +94,15 @@ final class _Relay implements AuxiliaryTransport {
       };
     }
     if (path == '/v1/signal/peer') {
+      if (stallPeerHint) {
+        final cancelled = Completer<void>();
+        cancellation.onCancel(() {
+          cancelledPeerHints++;
+          cancelled.complete();
+        });
+        await cancelled.future;
+        cancellation.throwIfCancelled();
+      }
       final sender = members[body['token']];
       final peer = members.values.singleWhere((key) => key != sender);
       return {'publicKey': peer, 'address': '127.0.0.1'};
@@ -158,6 +170,7 @@ void main() {
           store: _Store(
             const AuxiliaryRouteChoice(AuxiliaryRouteMode.official, ''),
           ),
+          peerHintBudget: const Duration(milliseconds: 40),
           transportFactory: (uri) {
             requested.add(uri);
             return (transport: relay, close: () {});
@@ -209,6 +222,7 @@ void main() {
       );
       await Future.wait([aRoutes.select(custom), bRoutes.select(custom)]);
       relay.failChallenge = false;
+      relay.stallPeerHint = true;
       await proxy.close();
       await _until(
         () =>
@@ -221,6 +235,7 @@ void main() {
       expect(grantA.expiresMicros, expiry);
       expect(grantA.generation, 3);
       expect(relay.forwarded, greaterThan(3));
+      expect(relay.cancelledPeerHints, greaterThanOrEqualTo(1));
       final customStart = requested.indexWhere(
         (uri) => uri.host == 'lan.example',
       );

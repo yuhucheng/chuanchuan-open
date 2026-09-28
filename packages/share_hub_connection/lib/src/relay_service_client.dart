@@ -160,15 +160,20 @@ final class RelaySignalChannel {
   /// A room-scoped hint for an already proved peer. It is neither a listener
   /// port nor fresh end-to-end authorization; any direct connection must still
   /// complete the original grant's authenticated recovery handshake.
-  Future<String> peerAddress() async {
+  Future<String> peerAddress({
+    AuxiliaryCancellation? requestCancellation,
+  }) async {
     if (closed || !_ready) throw const AuxiliaryFailure('room_closed');
     await _grant.checkValidity();
     _cancellation.throwIfCancelled();
+    final request = requestCancellation ?? _cancellation;
+    request.throwIfCancelled();
     final response = await _transport.post('/v1/signal/peer', {
       'room': room,
       'token': _token,
-    }, _cancellation);
+    }, request);
     _cancellation.throwIfCancelled();
+    request.throwIfCancelled();
     await _grant.checkValidity();
     final peer = _identity.encodedKey == encodeBytes(claim.initiator)
         ? encodeBytes(claim.receiver)
