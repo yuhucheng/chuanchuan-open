@@ -186,6 +186,8 @@ source-loss（采集真实 TextEdit 窗口，随后用 `pkill` 关闭该窗口�
 | 停止控制（当前无远控会话） | true |
 | 退出串串 | true |
 
+2026-09-28 补记：上表是当时的菜单快照。当前 0.1.0 尚无远控执行器，macOS/Windows 托盘已移除点击后只返回 `false` 的「停止控制」占位入口；实际托盘保留打开主窗口、允许连接和退出。桌面生命周期定向测试 16/16 与 Flutter 静态分析通过；本次未重做 Windows 实机后台矩阵。
+
 `trayInstalled=true`、`trayButtonAvailable=true`、`desktopReady=true`，且以上状态在**全部七个阶段**（含关闭到后台后）都保持为真 —— 菜单栏入口在窗口不可见时未被拆除，这是「关闭到后台」可恢复的前提。
 
 关闭到后台走真实 `close()` 路径：`visible=false` 但 `processAliveAfterClose=true`、`controllerAfterClose.active=true`、`cleanupFailed=false` —— 引擎、采集会话与菜单栏进程内保留。

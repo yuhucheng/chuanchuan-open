@@ -51,10 +51,6 @@ class DesktopLifecycle extends ChangeNotifier {
           }
           await _publish();
           return connections.accepting;
-        case 'stopControl':
-          // No remote input engine is shipped yet; never disconnect a grant
-          // or pretend that stopping local preview stops remote control.
-          return false;
         default:
           throw MissingPluginException(call.method);
       }

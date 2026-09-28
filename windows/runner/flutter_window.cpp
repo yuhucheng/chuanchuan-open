@@ -11,7 +11,7 @@ namespace {
 constexpr UINT kTrayCallback = WM_APP + 72;
 constexpr UINT kExitApproved = WM_APP + 73;
 constexpr UINT kRefreshTrayIcon = WM_APP + 74;
-constexpr UINT kOpen = 2101, kAllow = 2102, kStopControl = 2103, kQuit = 2104;
+constexpr UINT kOpen = 2101, kAllow = 2102, kQuit = 2104;
 using Value = flutter::EncodableValue;
 using Map = flutter::EncodableMap;
 
@@ -477,7 +477,6 @@ std::vector<TrayItem> FlutterWindow::TrayItems() const {
     {L"打开主窗口", true, false, kOpen, false},
     {connection_supported_ ? L"允许连接" : L"允许连接（当前平台不可用）",
      connection_supported_ && !quit_pending_, allow_connections_, kAllow, false},
-    {L"停止控制（当前无远控会话）", !quit_pending_, false, kStopControl, false},
     {L"退出串串", !quit_pending_, false, kQuit, true},
   };
 }
@@ -536,7 +535,6 @@ void FlutterWindow::TrayMenu() {
   if (selected == kQuit) RequestQuit();
   if (desktop_ready_ && !quit_pending_) {
     if (selected == kAllow) desktop_->InvokeMethod("toggleAllow", nullptr);
-    if (selected == kStopControl) desktop_->InvokeMethod("stopControl", nullptr);
   }
 }
 void FlutterWindow::RequestQuit() {

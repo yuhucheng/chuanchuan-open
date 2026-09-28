@@ -225,7 +225,6 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     allowItem = entry(connectionSupported ? "允许连接" : "允许连接（当前平台不可用）", #selector(toggleAllow))
     allowItem?.isEnabled = connectionSupported
     menu.autoenablesItems = false
-    _ = entry("停止控制（当前无远控会话）", #selector(stopControl))
     menu.addItem(.separator())
     _ = entry("退出串串", #selector(quitApplication))
     item.menu = menu
@@ -244,10 +243,6 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
       guard let self else { return }
       self.allowItem?.isEnabled = self.connectionSupported
     }
-  }
-  @objc private func stopControl() {
-    guard desktopReady, !quitPending else { return }
-    desktop?.invokeMethod("stopControl", arguments: nil)
   }
   @objc private func quitApplication() { NSApp.terminate(nil) }
 
