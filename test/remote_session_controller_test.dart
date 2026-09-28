@@ -1623,10 +1623,31 @@ void main() {
       ),
     );
     factoryA.current.emit(MediaEventKind.firstFrame);
-    await tester.pump();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: RemotePicturePanel(controller: remoteA)),
+      ),
+    );
     expect(find.text('控制 另一台电脑'), findsOneWidget);
     expect(find.text('停止控制'), findsOneWidget);
     expect(find.text('暂停'), findsNothing);
+    expect(find.textContaining('输入仍需单独核验'), findsOneWidget);
+    final control = factoryA.current as _FakeControlPicture;
+    control.ready(
+      const RemoteControlInputScope(
+        inputEpoch: 8,
+        geometryRevision: 2,
+        mediaRevision: 0,
+        width: 640,
+        height: 360,
+      ),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: RemotePicturePanel(controller: remoteA)),
+      ),
+    );
+    expect(find.textContaining('远程控制中'), findsOneWidget);
     await tester.runAsync(() => remoteA.stop());
   });
 

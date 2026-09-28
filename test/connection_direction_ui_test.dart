@@ -128,6 +128,31 @@ class _RecordingRemote extends RemoteSessionController {
          listSources: () async => [],
        );
   final starts = <(SessionOperation, String)>[];
+  bool _incomingControl = false;
+
+  void showIncomingControl() {
+    _incomingControl = true;
+    notifyListeners();
+  }
+
+  @override
+  bool get occupied => _incomingControl || super.occupied;
+  @override
+  SessionOperation? get operation =>
+      _incomingControl ? SessionOperation.control : super.operation;
+  @override
+  bool get sending => _incomingControl || super.sending;
+  @override
+  RemotePhase get phase => _incomingControl ? RemotePhase.active : super.phase;
+
+  @override
+  Future<void> stop({String? reason, bool failed = false}) {
+    if (!_incomingControl) return super.stop(reason: reason, failed: failed);
+    _incomingControl = false;
+    notifyListeners();
+    return Future<void>.value();
+  }
+
   @override
   Future<void> start(
     SessionOperation operation, {
@@ -288,6 +313,42 @@ void main() {
     expect(remote.starts, [(SessionOperation.control, incoming.peerKey)]);
     await tester.pumpWidget(const SizedBox());
   });
+
+  testWidgets(
+    'target can hide its notice, stop control, and restart on the same grant',
+    (tester) async {
+      final (connections, remote, _) = await mount(
+        tester,
+        initialOutgoing: true,
+        offerControl: true,
+      );
+      remote.showIncomingControl();
+      await tester.pumpAndSettle();
+      expect(find.textContaining('对方已发起远程控制操作'), findsOneWidget);
+      final desktop = tester
+          .widget<FieldShell>(find.byType(FieldShell))
+          .desktop;
+      expect(desktop.controlNoticeEnabled, isTrue);
+      await desktop.setControlNoticeEnabled(false);
+      await tester.pumpAndSettle();
+      expect(find.textContaining('对方已发起远程控制操作'), findsNothing);
+      expect(find.text('停止控制'), findsWidgets);
+      await tester.tap(find.text('停止控制').first);
+      await tester.pumpAndSettle();
+      expect(remote.occupied, isFalse);
+      expect(connections.sessions, [incoming, outgoing]);
+      expect(incoming.isClosed, isFalse);
+      expect(outgoing.isClosed, isFalse);
+
+      await openDevice(tester);
+      await tester.ensureVisible(find.text('控制该设备'));
+      await tester.tap(find.text('控制该设备'));
+      await tester.pumpAndSettle();
+      expect(remote.starts, [(SessionOperation.control, incoming.peerKey)]);
+      expect(find.byType(AlertDialog), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
 
   testWidgets(
     'receiver direction requests a new code and cancel keeps the old connection',

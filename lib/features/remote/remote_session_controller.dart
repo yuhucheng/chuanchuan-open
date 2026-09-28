@@ -126,7 +126,16 @@ class RemoteSessionController extends ChangeNotifier {
     RemoteControlPicture control when !control.sends => control,
     _ => null,
   };
-  RemoteControlInputScope? get controlInputScope => controlSession?.inputScope;
+  RemoteControlInputScope? get controlInputScope {
+    final attempt = _attempt;
+    if (attempt == null ||
+        !_isCurrent(attempt) ||
+        _phase != RemotePhase.active) {
+      return null;
+    }
+    return controlSession?.inputScope;
+  }
+
   SessionOperation? get operation => _attempt?.operation;
   String? get peerKey => _attempt?.peerKey;
   String? get peerLabel => _attempt?.label;

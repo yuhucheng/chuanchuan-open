@@ -281,7 +281,9 @@ class _FieldShellState extends State<FieldShell> {
                               child: Row(
                                 children: [
                                   const Expanded(
-                                    child: Text('此设备正在被远程控制；停止本次控制后，连接仍保持有效。'),
+                                    child: Text(
+                                      '对方已发起远程控制操作；可随时停止本次操作，连接仍保持有效。',
+                                    ),
                                   ),
                                   TextButton(
                                     onPressed: widget.remote.stop,

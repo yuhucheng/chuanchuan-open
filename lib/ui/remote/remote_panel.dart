@@ -36,7 +36,10 @@ class RemotePicturePanel extends StatelessWidget {
     if (controller.cleanupFailed) return '资源释放失败，尚未完全停止。';
     if (controller.operation == SessionOperation.control &&
         controller.phase == RemotePhase.active) {
-      return controller.sending ? '本机控制画面已呈现；输入仍需单独核验。' : '已收到控制画面；输入仍需单独核验。';
+      if (controller.sending) return '本机控制画面已呈现；输入仍需单独核验。';
+      return controller.controlInputScope == null
+          ? '已收到控制画面；输入仍需单独核验。'
+          : '远程控制中；输入已就绪。';
     }
     return switch (controller.phase) {
       RemotePhase.idle => controller.error ?? '未开始。',
