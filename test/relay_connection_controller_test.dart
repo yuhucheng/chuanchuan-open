@@ -42,6 +42,7 @@ final class _Relay implements AuxiliaryTransport {
   int forwarded = 0;
   bool failPoll = false;
   bool failChallenge = false;
+  bool failCredentials = false;
   bool stallPeerHint = false;
   int cancelledPeerHints = 0;
 
@@ -53,6 +54,7 @@ final class _Relay implements AuxiliaryTransport {
   ) async {
     cancellation.throwIfCancelled();
     if (path == '/v1/aux/challenge') {
+      if (failCredentials) throw const AuxiliaryFailure('unreachable');
       return {'nonce': nonce, 'expiresAt': 1};
     }
     if (path == '/v1/devices/register') {
@@ -158,6 +160,68 @@ Future<void> _until(bool Function() ready) async {
 }
 
 void main() {
+  test(
+    'cloud credential failure cannot block local short-code connection',
+    () async {
+      final alice = await DeviceIdentity.fromSeed(List<int>.filled(32, 91));
+      final bob = await DeviceIdentity.fromSeed(List<int>.filled(32, 92));
+      final relay = _Relay([alice, bob])..failCredentials = true;
+      final requested = <Uri>[];
+      AuxiliaryRouteController routes(DeviceIdentity device) =>
+          AuxiliaryRouteController(
+            identity: () async => device,
+            officialOrigin: 'https://official.example',
+            store: _Store(
+              const AuxiliaryRouteChoice(AuxiliaryRouteMode.official, ''),
+            ),
+            transportFactory: (uri) {
+              requested.add(uri);
+              return (transport: relay, close: () {});
+            },
+          );
+      final aRoutes = routes(alice), bRoutes = routes(bob);
+      await Future.wait([aRoutes.load(), bRoutes.load()]);
+      aRoutes.setNeeded(true);
+      bRoutes.setNeeded(true);
+      await _until(
+        () =>
+            aRoutes.connectionFailure == 'unreachable' &&
+            bRoutes.connectionFailure == 'unreachable',
+      );
+      final aPlatform = _Platform(alice), bPlatform = _Platform(bob);
+      final a = ConnectionController(aPlatform, auxiliaryRoutes: aRoutes);
+      final b = ConnectionController(bPlatform, auxiliaryRoutes: bRoutes);
+      _Proxy? proxy;
+      try {
+        await b.open();
+        proxy = _Proxy();
+        await proxy.start(bPlatform.port!);
+        final connected = await a.connect(
+          '127.0.0.1',
+          proxy.server.port,
+          b.code!,
+          expectedPeerKey: bob.encodedKey,
+        );
+        expect(connected?.grant?.phase, GrantPhase.active);
+        expect(b.sessions.single.grant?.phase, GrantPhase.active);
+        expect(aRoutes.current, isNull);
+        expect(bRoutes.current, isNull);
+        expect(
+          requested.every((uri) => uri.host == 'official.example'),
+          isTrue,
+        );
+      } finally {
+        await a.shutdown();
+        await b.shutdown();
+        aRoutes.stop();
+        bRoutes.stop();
+        if (proxy case final pending?) await pending.close();
+        a.dispose();
+        b.dispose();
+      }
+    },
+  );
+
   test('official failure keeps local recovery; selected custom relay restores next loss', () async {
     final alice = await DeviceIdentity.fromSeed(List<int>.filled(32, 81));
     final bob = await DeviceIdentity.fromSeed(List<int>.filled(32, 82));
