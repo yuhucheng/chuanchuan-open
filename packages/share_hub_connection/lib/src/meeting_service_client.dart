@@ -24,20 +24,25 @@ final class MeetingServiceClient {
     if (!identical(offer, host.offer)) {
       throw const AuxiliaryFailure('cancelled');
     }
-    final response = await AuxiliaryServiceClient(transport)
-        .publishMeeting(host.identity, offer.code, cancellation: cancellation);
-    final token = response['token'];
-    final lifetime = response['expiresInSeconds'];
-    if (response.length != 2 ||
-        token is! String ||
-        lifetime is! int ||
-        lifetime < 1 ||
-        lifetime > 300) {
-      throw const AuxiliaryFailure('invalid_response');
-    }
+    final service = AuxiliaryServiceClient(transport);
     try {
+      final response = await service.publishMeeting(
+        host.identity,
+        offer.code,
+        offerId: offer.id,
+        cancellation: cancellation,
+      );
+      final token = response['token'];
+      final lifetime = response['expiresInSeconds'];
+      if (response.length != 2 ||
+          token is! String ||
+          lifetime is! int ||
+          lifetime < 1 ||
+          lifetime > 300) {
+        throw const AuxiliaryFailure('invalid_response');
+      }
       decodeBytes(token, 32);
-      if (!identical(offer, host.offer)) {
+      if (cancellation.isCancelled || !identical(offer, host.offer)) {
         throw const AuxiliaryFailure('cancelled');
       }
       return MeetingListing(
@@ -48,13 +53,16 @@ final class MeetingServiceClient {
         onActivated: onActivated,
       );
     } catch (_) {
-      unawaited(
-        transport
-            .post('/v1/meet/unpublish', {
-              'token': token,
-            }, AuxiliaryCancellation())
-            .then<void>((_) {}, onError: (Object _) {}),
-      );
+      try {
+        await service.unpublishOwnedMeeting(
+          host.identity,
+          offer.id,
+          cancellation: AuxiliaryCancellation(),
+        );
+      } catch (_) {
+        // An unreachable service still expires this bounded entry. The local
+        // offer and every late response remain invalid after cancellation.
+      }
       rethrow;
     }
   }
@@ -278,7 +286,13 @@ final class MeetingConnectionWire implements ConnectionWire {
         throw const ConnectionFailure('invalid_message');
       }
       _receiveSequence++;
-      final decoded = jsonDecode(frame);
+      dynamic decoded;
+      try {
+        decoded = jsonDecode(frame);
+      } on FormatException {
+        close();
+        throw const ConnectionFailure('invalid_message');
+      }
       if (decoded is! Map<String, dynamic>) {
         close();
         throw const ConnectionFailure('invalid_message');

@@ -60,7 +60,66 @@ final class _MeetingTransport implements AuxiliaryTransport {
   }
 }
 
+final class _LostPublishTransport implements AuxiliaryTransport {
+  _LostPublishTransport(this.identity);
+  final DeviceIdentity identity;
+  String? publishedOffer;
+  bool withdrawn = false;
+
+  @override
+  Future<Map<String, Object?>> post(
+    String path,
+    Map<String, String> body,
+    AuxiliaryCancellation cancellation,
+  ) async {
+    cancellation.throwIfCancelled();
+    switch (path) {
+      case '/v1/aux/challenge':
+        return {
+          'nonce': _MeetingTransport.base64Token(32, 4),
+          'expiresAt': 1800000030,
+        };
+      case '/v1/devices/register':
+        return {'deviceId': identity.id};
+      case '/v1/meet/publish':
+        publishedOffer = body['offerId'];
+        throw const AuxiliaryFailure('cancelled');
+      case '/v1/meet/unpublish-owned':
+        if (body['offerId'] != publishedOffer) {
+          throw const AuxiliaryFailure('entry_unavailable');
+        }
+        withdrawn = true;
+        return {'closed': true};
+      default:
+        throw const AuxiliaryFailure('invalid_request');
+    }
+  }
+}
+
 void main() {
+  test(
+    'lost publish response withdraws the exact offer by holder proof',
+    () async {
+      final identity = await DeviceIdentity.fromSeed(List.filled(32, 53));
+      final host = PairingHost(
+        identity: identity,
+        clock: () async => 1000000,
+        onConnection: (_) {},
+        protocolVersion: 2,
+      );
+      addTearDown(host.close);
+      await host.open(address: InternetAddress.loopbackIPv4);
+      final transport = _LostPublishTransport(identity);
+      await expectLater(
+        MeetingServiceClient(transport)
+            .publish(host, cancellation: AuxiliaryCancellation()),
+        throwsA(isA<AuxiliaryFailure>()),
+      );
+      expect(transport.publishedOffer, host.offer!.id);
+      expect(transport.withdrawn, isTrue);
+    },
+  );
+
   test('meeting wire carries the real v2 PAKE and grant activation', () async {
     final hostIdentity = await DeviceIdentity.fromSeed(List.filled(32, 51));
     final clientIdentity = await DeviceIdentity.fromSeed(List.filled(32, 52));

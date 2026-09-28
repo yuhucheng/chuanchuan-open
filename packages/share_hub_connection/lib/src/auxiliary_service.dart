@@ -173,7 +173,8 @@ final class HttpsAuxiliaryTransport implements AuxiliaryTransport {
               response.statusCode == 409 &&
                   (error == 'room_closed' ||
                       error == 'stale_relay_message' ||
-                      error == 'entry_unavailable' || error == 'stale_message') ||
+                      error == 'entry_unavailable' ||
+                      error == 'stale_message') ||
               response.statusCode == 429 && error == 'capacity_limited')) {
         throw AuxiliaryFailure(error);
       }
@@ -244,6 +245,7 @@ final class AuxiliaryServiceClient {
   Future<Map<String, Object?>> publishMeeting(
     DeviceIdentity identity,
     String code, {
+    required String offerId,
     required AuxiliaryCancellation cancellation,
   }) async {
     return _prove(
@@ -251,8 +253,27 @@ final class AuxiliaryServiceClient {
       'meet',
       '/v1/meet/publish',
       cancellation,
-      extraFields: {'code': code},
+      extraFields: {'code': code, 'offerId': offerId},
     );
+  }
+
+  /// A fresh holder proof can remove an entry even when publish succeeded at
+  /// the service but its token-bearing response was lost or cancelled.
+  Future<void> unpublishOwnedMeeting(
+    DeviceIdentity identity,
+    String offerId, {
+    required AuxiliaryCancellation cancellation,
+  }) async {
+    final result = await _prove(
+      identity,
+      'meet',
+      '/v1/meet/unpublish-owned',
+      cancellation,
+      extraFields: {'offerId': offerId},
+    );
+    if (result.length != 1 || result['closed'] != true) {
+      throw const AuxiliaryFailure('invalid_response');
+    }
   }
 
   /// Retires this identity's official registration after fresh possession
