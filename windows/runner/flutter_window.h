@@ -42,6 +42,7 @@ class FlutterWindow : public Win32Window {
 
  private:
   void InstallTray();
+  void UpdateTrayIcon(UINT dpi);
   void ShowMainWindow();
   void RequestQuit();
   void TrayMenu();
@@ -54,6 +55,7 @@ class FlutterWindow : public Win32Window {
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> control_display_;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> control_clipboard_;
   NOTIFYICONDATAW tray_{};
+  HICON tray_icon_ = nullptr;
   bool desktop_ready_ = false, tray_installed_ = false, quit_pending_ = false;
   bool allow_connections_ = false, connection_supported_ = false;
   bool control_active_ = false;

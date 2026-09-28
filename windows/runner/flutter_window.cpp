@@ -264,6 +264,8 @@ void FlutterWindow::OnDestroy() {
   alive_.reset();
   if (tray_installed_) Shell_NotifyIconW(NIM_DELETE, &tray_);
   tray_installed_ = false;
+  if (tray_icon_) DestroyIcon(tray_icon_);
+  tray_icon_ = nullptr;
   desktop_.reset();
   control_display_.reset();
   control_clipboard_.reset();
@@ -305,6 +307,9 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
   if ((message == WM_DISPLAYCHANGE || message == WM_DPICHANGED) &&
       control_display_) {
     control_display_->InvokeMethod("changed", nullptr);
+  }
+  if (message == WM_DPICHANGED && tray_installed_) {
+    UpdateTrayIcon(HIWORD(wparam));
   }
   if (message == WM_CLIPBOARDUPDATE && control_clipboard_) {
     control_clipboard_->InvokeMethod("changed", nullptr);
@@ -352,9 +357,28 @@ void FlutterWindow::InstallTray() {
   tray_.cbSize = sizeof(tray_); tray_.hWnd = GetHandle(); tray_.uID = 1;
   tray_.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
   tray_.uCallbackMessage = kTrayCallback;
-  tray_.hIcon = LoadIcon(GetModuleHandle(nullptr), MAKEINTRESOURCE(IDI_APP_ICON));
+  UpdateTrayIcon(GetDpiForWindow(GetHandle()));
+  tray_.hIcon = tray_icon_ ? tray_icon_ : LoadIcon(GetModuleHandle(nullptr), MAKEINTRESOURCE(IDI_APP_ICON));
   wcscpy_s(tray_.szTip, L"串串 · 后台连接与会话");
   tray_installed_ = Shell_NotifyIconW(NIM_ADD, &tray_) != FALSE;
+}
+void FlutterWindow::UpdateTrayIcon(UINT dpi) {
+  const int width = GetSystemMetricsForDpi(SM_CXSMICON, dpi);
+  const int height = GetSystemMetricsForDpi(SM_CYSMICON, dpi);
+  auto next = static_cast<HICON>(LoadImageW(
+      GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDI_TRAY_ICON), IMAGE_ICON,
+      width, height, 0));
+  if (!next) return;
+  auto previous = tray_icon_;
+  tray_icon_ = next;
+  tray_.hIcon = next;
+  if (tray_installed_ && !Shell_NotifyIconW(NIM_MODIFY, &tray_)) {
+    tray_icon_ = previous;
+    tray_.hIcon = previous;
+    DestroyIcon(next);
+    return;
+  }
+  if (previous) DestroyIcon(previous);
 }
 void FlutterWindow::ShowMainWindow() {
   ShowWindow(GetHandle(), IsIconic(GetHandle()) ? SW_RESTORE : SW_SHOW);
