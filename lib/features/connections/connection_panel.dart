@@ -196,6 +196,7 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
   bool submitting = false;
   bool attempted = false;
   bool closing = false;
+  bool manualAddress = false;
   String? error;
   @override
   void dispose() {
@@ -210,8 +211,8 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
     final number = int.tryParse(port.text);
     final direct =
         widget.device != null ||
-        host.text.trim().isNotEmpty ||
-        port.text.isNotEmpty;
+        (manualAddress &&
+            (host.text.trim().isNotEmpty || port.text.isNotEmpty));
     if (!RegExp(r'^\d{6}$').hasMatch(code.text) ||
         (direct &&
             (host.text.trim().isEmpty ||
@@ -288,19 +289,7 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
             mainAxisSize: MainAxisSize.min,
             children: [
               if (widget.device == null) ...[
-                const Text('仅输入短接码即可跨网连接；同一局域网也可填写地址和端口直连。'),
-                TextField(
-                  controller: host,
-                  enabled: !submitting,
-                  decoration: const InputDecoration(labelText: '对端地址（可选）'),
-                ),
-                TextField(
-                  controller: port,
-                  enabled: !submitting,
-                  keyboardType: TextInputType.number,
-                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                  decoration: const InputDecoration(labelText: '端口（可选）'),
-                ),
+                const Text('输入对方显示的 6 位短接码即可发起连接。'),
               ],
               TextField(
                 controller: code,
@@ -312,6 +301,31 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
                 onSubmitted: (_) => submit(),
                 decoration: const InputDecoration(labelText: '6 位纯数字短接码'),
               ),
+              if (widget.device == null) ...[
+                const Text(
+                  '首次跨网连接由所选辅助服务按短接码匹配设备。服务若配置错误或遭冒用，可能连到错误设备；连接后请核对设备身份。',
+                ),
+                TextButton(
+                  onPressed: submitting
+                      ? null
+                      : () => setState(() => manualAddress = !manualAddress),
+                  child: Text(manualAddress ? '收起手动直连' : '手动输入地址直连'),
+                ),
+                if (manualAddress) ...[
+                  TextField(
+                    controller: host,
+                    enabled: !submitting,
+                    decoration: const InputDecoration(labelText: '对端地址'),
+                  ),
+                  TextField(
+                    controller: port,
+                    enabled: !submitting,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    decoration: const InputDecoration(labelText: '端口'),
+                  ),
+                ],
+              ],
               Text(
                 widget.nextActionLabel == null
                     ? '验证后建立 8 小时连接。连接本身不采集任何画面，观看或投屏需要单独发起。'

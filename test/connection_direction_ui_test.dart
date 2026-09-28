@@ -278,12 +278,36 @@ void main() {
       of: find.byType(AlertDialog),
       matching: find.byType(TextField),
     );
-    expect(fields, findsNWidgets(3));
-    await tester.enterText(fields.last, '123456');
+    expect(fields, findsOneWidget);
+    await tester.enterText(fields, '123456');
     await tester.tap(find.text('连接'));
     await tester.pumpAndSettle();
     expect(connections.submittedCode, '123456');
     expect(connections.connects, 0);
+    expect(remote.starts, [(SessionOperation.watch, outgoing.peerKey)]);
+  });
+
+  testWidgets('manual direct address is available without a discovered device', (
+    tester,
+  ) async {
+    final (connections, remote, _) = await mount(tester);
+    connections.nextResult = outgoing;
+    await tester.tap(find.text('请求观看 · 输入对方短接码'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('手动输入地址直连'));
+    await tester.pumpAndSettle();
+    final fields = find.descendant(
+      of: find.byType(AlertDialog),
+      matching: find.byType(TextField),
+    );
+    expect(fields, findsNWidgets(3));
+    await tester.enterText(fields.at(0), '123456');
+    await tester.enterText(fields.at(1), '127.0.0.1');
+    await tester.enterText(fields.at(2), '12345');
+    await tester.tap(find.text('连接'));
+    await tester.pumpAndSettle();
+    expect(connections.connects, 1);
+    expect(connections.relayConnects, 0);
     expect(remote.starts, [(SessionOperation.watch, outgoing.peerKey)]);
   });
 

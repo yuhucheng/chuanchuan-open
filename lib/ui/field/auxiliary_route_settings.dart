@@ -52,6 +52,7 @@ class _AuxiliaryRouteSettingsState extends State<AuxiliaryRouteSettings> {
         Text('辅助连接', style: Theme.of(context).textTheme.titleLarge),
         const SizedBox(height: 8),
         const Text('局域网直连不等待辅助服务。自定义配置失败时不会转回官方公网服务。'),
+        const Text('首次仅凭短接码跨网连接时，所选服务负责匹配目标设备；连接后请核对设备身份。'),
         const SizedBox(height: 12),
         DropdownButtonFormField<AuxiliaryRouteMode>(
           key: ValueKey(mode),
