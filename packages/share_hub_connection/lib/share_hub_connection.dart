@@ -9,6 +9,8 @@ export 'src/auxiliary_service.dart'
         HttpsAuxiliaryTransport,
         AuxiliaryServiceClient;
 export 'src/identity.dart' show DeviceIdentity, ConnectionFailure;
+export 'src/meeting_service_client.dart'
+    show MeetingServiceClient, MeetingListing, MeetingConnectionWire;
 export 'src/channel.dart' show ConnectionWire;
 export 'src/pairing.dart'
     show PairingHost, PairingAttempt, PairingOffer, offerLifetime;

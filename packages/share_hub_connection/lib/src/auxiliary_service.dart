@@ -141,7 +141,9 @@ final class HttpsAuxiliaryTransport implements AuxiliaryTransport {
       opened.add(payload);
       final response = await waitFor(opened.close());
       cancellation.throwIfCancelled();
-      final responseLimit = path == '/v1/signal/poll' ? 210000 : 4096;
+      final responseLimit = path == '/v1/signal/poll' || path == '/v1/meet/poll'
+          ? 210000
+          : 4096;
       final bytes = await waitFor(
         response.fold<List<int>>(<int>[], (value, chunk) {
           if (value.length + chunk.length > responseLimit) {
@@ -169,7 +171,9 @@ final class HttpsAuxiliaryTransport implements AuxiliaryTransport {
                       error == 'not_eligible' ||
                       error == 'not_member') ||
               response.statusCode == 409 &&
-                  (error == 'room_closed' || error == 'stale_relay_message') ||
+                  (error == 'room_closed' ||
+                      error == 'stale_relay_message' ||
+                      error == 'entry_unavailable' || error == 'stale_message') ||
               response.statusCode == 429 && error == 'capacity_limited')) {
         throw AuxiliaryFailure(error);
       }
@@ -234,6 +238,21 @@ final class AuxiliaryServiceClient {
     if (result.length != 1 || result['deviceId'] != identity.id) {
       throw const AuxiliaryFailure('invalid_response');
     }
+  }
+
+  /// Publish only a short-lived routing entry, not an endpoint grant.
+  Future<Map<String, Object?>> publishMeeting(
+    DeviceIdentity identity,
+    String code, {
+    required AuxiliaryCancellation cancellation,
+  }) async {
+    return _prove(
+      identity,
+      'meet',
+      '/v1/meet/publish',
+      cancellation,
+      extraFields: {'code': code},
+    );
   }
 
   /// Retires this identity's official registration after fresh possession

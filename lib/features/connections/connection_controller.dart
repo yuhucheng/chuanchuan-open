@@ -84,6 +84,9 @@ class ConnectionController extends ChangeNotifier {
   DeviceIdentity? _identity;
   PairingHost? _host;
   PairingAttempt? _attempt;
+  MeetingRoute? _meetingRoute;
+  AuxiliaryCancellation? _meetingCancellation;
+  AuxiliaryCancellation? _meetingJoinCancellation;
   Timer? _timer;
   bool _disposed = false;
   bool _disconnecting = false;
@@ -162,6 +165,11 @@ class ConnectionController extends ChangeNotifier {
       await _clearAdvertisement();
       if (_disposed || _shutdownRequested || generation != _generation) return;
       final existing = _host;
+      _meetingCancellation?.cancel();
+      _meetingCancellation = null;
+      final oldMeeting = _meetingRoute;
+      _meetingRoute = null;
+      await oldMeeting?.closeAdmission();
       final host = opening = existing?.port != null
           ? existing!
           : PairingHost(
@@ -185,6 +193,8 @@ class ConnectionController extends ChangeNotifier {
                 }
                 if (!_track(connection)) return;
                 code = null;
+                final meeting = _meetingRoute;
+                if (meeting != null) unawaited(meeting.closeAdmission());
                 _notice = ConnectionNotice.status(
                   '连接已建立，短接码已消费。${formatGrantPolicy(connection.grant!)}，可随时断开。',
                 );
@@ -211,6 +221,11 @@ class ConnectionController extends ChangeNotifier {
       }
       code = host.offer!.code;
       address = hostname == null ? null : '$hostname:${host.port}';
+      if (auxiliaryRoutes != null) {
+        unawaited(
+          _startTracked<void>(() => _publishMeeting(host, host.offer!)),
+        );
+      }
       _timer ??= Timer.periodic(
         const Duration(seconds: 1),
         (_) => unawaited(_tick()),
@@ -227,6 +242,41 @@ class ConnectionController extends ChangeNotifier {
     }
   }
 
+  Future<void> _publishMeeting(PairingHost host, PairingOffer offer) async {
+    final cancellation = _meetingCancellation = AuxiliaryCancellation();
+    MeetingRoute? route;
+    try {
+      route = await auxiliaryRoutes!.openMeetingHost(host, cancellation);
+      if (_disposed ||
+          _shutdownRequested ||
+          !identical(_host, host) ||
+          !identical(host.offer, offer) ||
+          code == null ||
+          !offer.reservable(await platform.now())) {
+        await route.closeAdmission();
+        return;
+      }
+      _meetingRoute = route;
+      await route.serve();
+    } catch (_) {
+      if (route != null && !route.activated) await route.closeAdmission();
+      if (!_disposed &&
+          identical(_host, host) &&
+          identical(host.offer, offer) &&
+          code != null &&
+          !cancellation.isCancelled) {
+        _notice = const ConnectionNotice.problem(
+          '本地接入已开启，但所选辅助服务暂不可用；跨网首次连接需检查辅助服务。',
+        );
+        _emit();
+      }
+    } finally {
+      if (identical(_meetingCancellation, cancellation)) {
+        _meetingCancellation = null;
+      }
+    }
+  }
+
   bool _ticking = false;
   Future<void> _tick() async {
     if (_disposed || _shutdownRequested || _ticking) return;
@@ -240,6 +290,10 @@ class ConnectionController extends ChangeNotifier {
       if (code != null && (offer == null || !offer.reservable(now))) {
         code = null;
         _notice = const ConnectionNotice.problem('短接码已失效或尝试次数已用完，请重新生成。');
+        _meetingCancellation?.cancel();
+        final meeting = _meetingRoute;
+        _meetingRoute = null;
+        await meeting?.closeAdmission();
         await _clearAdvertisement();
       }
       _emit();
@@ -268,6 +322,13 @@ class ConnectionController extends ChangeNotifier {
     _connecting = false;
     _attempt?.cancel();
     _attempt = null;
+    _meetingCancellation?.cancel();
+    _meetingCancellation = null;
+    _meetingJoinCancellation?.cancel();
+    _meetingJoinCancellation = null;
+    final meeting = _meetingRoute;
+    _meetingRoute = null;
+    await meeting?.closeAdmission();
     code = null;
     address = null;
     await _host?.stopAccepting();
@@ -334,6 +395,84 @@ class ConnectionController extends ChangeNotifier {
           () =>
               _connect(host, port, shortCode, expectedPeerKey: expectedPeerKey),
         );
+
+  Future<TrustedConnection?> connectByCode(String shortCode) =>
+      _shutdownRequested
+      ? Future<TrustedConnection?>.value()
+      : _startTracked<TrustedConnection?>(() => _connectByCode(shortCode));
+
+  Future<TrustedConnection?> _connectByCode(String shortCode) async {
+    if (busy || _disposed || _disconnecting || _shutdownRequested) return null;
+    if (_sessions.length + _recoveries.length >= 8) {
+      _notice = const ConnectionNotice.problem('连接数量已达上限，请先断开一个连接。');
+      _emit();
+      return null;
+    }
+    final generation = ++_generation;
+    busy = true;
+    _connecting = true;
+    _notice = const ConnectionNotice.status('正在通过所选辅助服务验证短接码和对端身份…');
+    _emit();
+    final cancellation = _meetingJoinCancellation = AuxiliaryCancellation();
+    try {
+      final identity = await _loadIdentity();
+      if (_disposed || _shutdownRequested || generation != _generation) {
+        return null;
+      }
+      final routes = auxiliaryRoutes;
+      if (routes == null) throw const AuxiliaryFailure('route_unavailable');
+      final attempt = _attempt = PairingAttempt(
+        identity: identity,
+        clock: platform.now,
+        protocolVersion: 2,
+        enableRecovery: true,
+      );
+      final connection = await attempt.connectWithWire(
+        () => routes.openMeetingWire(shortCode, cancellation),
+        shortCode,
+      );
+      if (_disposed || _shutdownRequested || generation != _generation) {
+        _close(connection, 'cancelled');
+        return null;
+      }
+      _attempt = null;
+      if (!_track(connection)) return null;
+      _notice = ConnectionNotice.status(
+        '身份验证通过，已通过辅助服务建立连接。${formatGrantPolicy(connection.grant!)}。',
+      );
+      return connection;
+    } catch (error) {
+      if (!_disposed && generation == _generation) {
+        _notice = ConnectionNotice.problem(switch (error) {
+          ConnectionFailure(code: 'invalid_input') => '请输入完整的 6 位纯数字短接码。',
+          ConnectionFailure(code: 'cancelled') => '连接已取消或握手超时。',
+          ConnectionFailure(code: 'entry_unavailable') =>
+            '短接码不可用、已过期或已被使用，请让对方重新生成。',
+          ConnectionFailure(code: 'capacity_limited') =>
+            '会合请求过多，请稍后重试或让对方重新生成短接码。',
+          ConnectionFailure(code: 'timeout' || 'unreachable' || 'tls_error') =>
+            '所选辅助服务不可达或 TLS 校验失败，请检查服务地址与网络。',
+          AuxiliaryFailure(code: 'route_unavailable') =>
+            '所选辅助服务未配置或不可用，请在设置中选择可达的 HTTPS 服务。',
+          ConnectionFailure(code: 'route_unavailable') =>
+            '所选辅助服务未配置或不可用，请在设置中选择可达的 HTTPS 服务。',
+          _ => '跨网连接未建立，请检查短接码、对端接入状态及所选辅助服务。',
+        });
+      }
+    } finally {
+      cancellation.cancel();
+      if (identical(_meetingJoinCancellation, cancellation)) {
+        _meetingJoinCancellation = null;
+      }
+      if (generation == _generation) {
+        busy = false;
+        _connecting = false;
+        _attempt = null;
+      }
+      _emit();
+    }
+    return null;
+  }
 
   Future<TrustedConnection?> _connect(
     String host,
@@ -409,6 +548,7 @@ class ConnectionController extends ChangeNotifier {
   void cancel() {
     _generation++;
     _attempt?.cancel();
+    _meetingJoinCancellation?.cancel();
     _attempt = null;
     busy = false;
     _connecting = false;
@@ -630,6 +770,9 @@ class ConnectionController extends ChangeNotifier {
     _disposed = true;
     _generation++;
     _attempt?.cancel();
+    _meetingJoinCancellation?.cancel();
+    _meetingCancellation?.cancel();
+    unawaited(_meetingRoute?.close() ?? Future.value());
     _timer?.cancel();
     _cancelRecoveries();
     grants.revokeAll();

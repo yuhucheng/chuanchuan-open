@@ -208,12 +208,19 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
 
   Future<void> submit() async {
     final number = int.tryParse(port.text);
+    final direct =
+        widget.device != null ||
+        host.text.trim().isNotEmpty ||
+        port.text.isNotEmpty;
     if (!RegExp(r'^\d{6}$').hasMatch(code.text) ||
-        host.text.trim().isEmpty ||
-        number == null ||
-        number < 1 ||
-        number > 65535) {
-      setState(() => error = '请输入有效地址、端口和 6 位纯数字短接码。');
+        (direct &&
+            (host.text.trim().isEmpty ||
+                number == null ||
+                number < 1 ||
+                number > 65535))) {
+      setState(
+        () => error = direct ? '请输入有效地址、端口和 6 位纯数字短接码。' : '请输入完整的 6 位纯数字短接码。',
+      );
       return;
     }
     if (widget.controller.busy || submitting) return;
@@ -221,12 +228,14 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
       submitting = attempted = true;
       error = null;
     });
-    final connection = await widget.controller.connect(
-      host.text.trim(),
-      number,
-      code.text,
-      expectedPeerKey: widget.device?.publicKey,
-    );
+    final connection = direct
+        ? await widget.controller.connect(
+            host.text.trim(),
+            number!,
+            code.text,
+            expectedPeerKey: widget.device?.publicKey,
+          )
+        : await widget.controller.connectByCode(code.text);
     if (!mounted || closing) return;
     if (connection != null && !connection.isClosed) {
       // Finish this submission before popping: disposal must not cancel the
@@ -262,17 +271,18 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
             mainAxisSize: MainAxisSize.min,
             children: [
               if (widget.device == null) ...[
+                const Text('仅输入短接码即可跨网连接；同一局域网也可填写地址和端口直连。'),
                 TextField(
                   controller: host,
                   enabled: !submitting,
-                  decoration: const InputDecoration(labelText: '对端地址'),
+                  decoration: const InputDecoration(labelText: '对端地址（可选）'),
                 ),
                 TextField(
                   controller: port,
                   enabled: !submitting,
                   keyboardType: TextInputType.number,
                   inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                  decoration: const InputDecoration(labelText: '端口'),
+                  decoration: const InputDecoration(labelText: '端口（可选）'),
                 ),
               ],
               TextField(

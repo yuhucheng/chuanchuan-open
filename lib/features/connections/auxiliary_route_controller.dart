@@ -106,6 +106,47 @@ final class _SelectedSignalWire implements ConnectionWire {
   void close() => unawaited(_owner.close());
 }
 
+/// Keeps the selected HTTPS transport alive for an activated meeting session.
+/// Refreshing the displayed code closes admission, while origin changes revoke
+/// the old transport and every session still using it.
+final class MeetingRoute {
+  MeetingRoute(
+    this.listing,
+    this.cancellation,
+    this.closeTransport,
+    this.onClosed,
+  );
+  final MeetingListing listing;
+  final AuxiliaryCancellation cancellation;
+  final void Function() closeTransport, onClosed;
+  bool _closed = false;
+
+  bool get admissionPending => listing.admissionPending;
+  bool get activated => listing.activated;
+  Future<void> serve() => listing.serve();
+
+  Future<void> closeAdmission() async {
+    await listing.closeAdmission();
+    if (!listing.activated) _cleanup();
+  }
+
+  Future<void> close() async {
+    if (_closed) return;
+    await listing.close();
+    _cleanup();
+  }
+
+  void activeWireClosed() => _cleanup();
+
+  void _cleanup() {
+    if (_closed) return;
+    _closed = true;
+    cancellation.cancel();
+    closeTransport();
+    onClosed();
+  }
+}
+
 /// Owns exactly one auxiliary origin. Switching first cancels the old network
 /// owner and discards its lease; no failure can silently select the other route.
 final class AuxiliaryRouteController extends ChangeNotifier {
@@ -123,7 +164,9 @@ final class AuxiliaryRouteController extends ChangeNotifier {
   RelayCredentialOwner? _owner;
   Uri? _selectedUri;
   final _signalOwners = <_SignalOwner>{};
+  final _meetingRoutes = <MeetingRoute>{};
   bool _needed = false, _stopped = false, _loaded = false;
+  Future<void>? _loading;
   int _revision = 0;
   Future<void> _writeQueue = Future.value();
   AuxiliaryRouteChoice choice = const AuxiliaryRouteChoice(
@@ -133,6 +176,11 @@ final class AuxiliaryRouteController extends ChangeNotifier {
   String? error;
 
   bool get loaded => _loaded;
+  Future<void> ensureLoaded() {
+    if (_loaded || _stopped) return Future.value();
+    return _loading ??= load().whenComplete(() => _loading = null);
+  }
+
   AuxiliaryTurnCredential? get current => _owner?.current;
   String? get connectionFailure => _owner?.lastFailure;
   Future<void> refresh() => _owner?.refresh() ?? Future.value();
@@ -177,6 +225,9 @@ final class AuxiliaryRouteController extends ChangeNotifier {
   void _install(AuxiliaryRouteChoice selected, RelayCredentialOwner? next) {
     for (final owner in _signalOwners.toList()) {
       unawaited(owner.close(immediate: true));
+    }
+    for (final route in _meetingRoutes.toList()) {
+      unawaited(route.close());
     }
     final previous = _owner;
     previous?.removeListener(notifyListeners);
@@ -237,6 +288,75 @@ final class AuxiliaryRouteController extends ChangeNotifier {
         throw const AuxiliaryFailure('cancelled');
       }
       return _SelectedSignalWire(wire, owner);
+    } catch (_) {
+      await owner.close();
+      rethrow;
+    }
+  }
+
+  Future<MeetingRoute> openMeetingHost(
+    PairingHost host,
+    AuxiliaryCancellation cancellation,
+  ) async {
+    await ensureLoaded();
+    final uri = _selectedUri;
+    if (_stopped || !_loaded || uri == null) {
+      throw const AuxiliaryFailure('route_unavailable');
+    }
+    final revision = _revision;
+    final endpoint = _transportFactory(uri);
+    MeetingRoute? owner;
+    try {
+      final listing = await MeetingServiceClient(endpoint.transport).publish(
+        host,
+        cancellation: cancellation,
+        onActivated: (wire) {
+          wire.onClosed = () => owner?.activeWireClosed();
+        },
+      );
+      owner = MeetingRoute(
+        listing,
+        cancellation,
+        endpoint.close,
+        () => _meetingRoutes.remove(owner),
+      );
+      if (_stopped || revision != _revision || cancellation.isCancelled) {
+        await owner.close();
+        throw const AuxiliaryFailure('cancelled');
+      }
+      _meetingRoutes.add(owner);
+      return owner;
+    } catch (_) {
+      if (owner == null) endpoint.close();
+      rethrow;
+    }
+  }
+
+  Future<ConnectionWire> openMeetingWire(
+    String code,
+    AuxiliaryCancellation cancellation,
+  ) async {
+    await ensureLoaded();
+    final uri = _selectedUri;
+    if (_stopped || !_loaded || uri == null) {
+      throw const AuxiliaryFailure('route_unavailable');
+    }
+    final revision = _revision;
+    final endpoint = _transportFactory(uri);
+    late final _SignalOwner owner;
+    owner = _SignalOwner(
+      cancellation,
+      endpoint.close,
+      () => _signalOwners.remove(owner),
+    );
+    _signalOwners.add(owner);
+    try {
+      owner.wire = await MeetingServiceClient(endpoint.transport)
+          .join(code, cancellation: cancellation);
+      if (_stopped || revision != _revision || cancellation.isCancelled) {
+        throw const AuxiliaryFailure('cancelled');
+      }
+      return _SelectedSignalWire(owner.wire!, owner);
     } catch (_) {
       await owner.close();
       rethrow;
@@ -323,6 +443,9 @@ final class AuxiliaryRouteController extends ChangeNotifier {
     ++_revision;
     for (final owner in _signalOwners.toList()) {
       unawaited(owner.close(immediate: true));
+    }
+    for (final route in _meetingRoutes.toList()) {
+      unawaited(route.close());
     }
     _owner?.removeListener(notifyListeners);
     _owner?.stop();

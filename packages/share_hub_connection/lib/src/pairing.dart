@@ -11,6 +11,7 @@ import 'package:pointycastle/srp/srp6_standard_groups.dart';
 import 'package:pointycastle/srp/srp6_verifier_generator.dart';
 
 import 'channel.dart';
+import 'auxiliary_service.dart';
 import 'identity.dart';
 import 'session.dart';
 
@@ -157,22 +158,29 @@ class PairingHost {
     _offer = PairingOffer(now);
     _server = server;
     server.listen((socket) {
-      acceptWire(WireChannel(socket));
+      unawaited(acceptWire(WireChannel(socket)));
     });
   }
 
   /// Admit an already established first-pairing transport. Local TCP and a
   /// future rendezvous transport share the same offer and attempt budget.
-  void acceptWire(ConnectionWire wire) {
+  Future<TrustedConnection?> acceptWire(
+    ConnectionWire wire, {
+    Future<void> Function(TrustedConnection)? beforeConnected,
+  }) {
     if (_server == null || _offer == null || _pending.length >= 4) {
       wire.close();
-      return;
+      return Future.value();
     }
     _pending.add(wire);
-    unawaited(_accept(wire, _generation));
+    return _accept(wire, _generation, beforeConnected);
   }
 
-  Future<void> _accept(ConnectionWire wire, int generation) async {
+  Future<TrustedConnection?> _accept(
+    ConnectionWire wire,
+    int generation,
+    Future<void> Function(TrustedConnection)? beforeConnected,
+  ) async {
     final timeout = Timer(handshakeTimeout, wire.close);
     TrustedConnection? connection;
     final offer = _offer;
@@ -196,7 +204,7 @@ class PairingHost {
           }
         });
         _publish(connection);
-        return;
+        return connection;
       }
       if (offer == null) throw const ConnectionFailure('offer_unavailable');
       reserved = true;
@@ -305,6 +313,10 @@ class PairingHost {
       if (generation != _generation || !identical(offer, _offer)) {
         throw const ConnectionFailure('cancelled');
       }
+      await beforeConnected?.call(connection);
+      if (generation != _generation || !identical(offer, _offer)) {
+        throw const ConnectionFailure('cancelled');
+      }
       await cipher.send({
         'type': 'connected',
         'lifetimeSeconds': grantPolicy.lifetime.inSeconds,
@@ -318,9 +330,11 @@ class PairingHost {
         throw const ConnectionFailure('cancelled');
       }
       _publish(connection);
+      return connection;
     } catch (_) {
       connection?.close('handshake_failed');
       wire.close();
+      return null;
     } finally {
       // A silent or malformed new-pairing socket still consumes a reservation.
       // A recovery preface never guesses or consumes a short code.
@@ -610,6 +624,7 @@ class PairingAttempt {
       _wire?.close();
       if (_cancelled) throw const ConnectionFailure('cancelled');
       if (error is ConnectionFailure) rethrow;
+      if (error is AuxiliaryFailure) throw ConnectionFailure(error.code);
       throw const ConnectionFailure('connection_failed');
     } finally {
       timeout.cancel();

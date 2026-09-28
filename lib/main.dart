@@ -17,7 +17,7 @@ void main() {
     officialOrigin: origin,
     store: const NativeAuxiliaryRouteStore(),
   );
-  unawaited(routes.load());
+  unawaited(routes.ensureLoaded());
   runApp(
     ShareHubApp(
       appTitle: 'chuanchuan',

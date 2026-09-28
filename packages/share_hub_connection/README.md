@@ -20,6 +20,19 @@ an already available credential. This package alone does not establish relay;
 official deployment, custom intranet selection and a real selected-pair proof
 remain necessary.
 
+## First pairing over a selected auxiliary origin
+
+`MeetingServiceClient` and `MeetingConnectionWire` adapt the existing v2
+`PairingHost` / `PairingAttempt` PAKE and grant activation to the short-lived
+meeting service. The host publishes its current six-digit offer after device
+registration, serves bounded join attempts, and activates only a connection
+returned by the real pairing state machine. The initiator can join with the code
+alone. The service routes frames and sees the low-entropy code; it does not
+authorize a grant. A successful handshake may keep its selected meeting wire
+for encrypted operation frames until the original lease ends. Product route
+ownership, the no-discovery entry point, cross-network device testing and
+deployment are still pending; this package API is not a claim of delivery.
+
 ## Connection recovery adapter
 
 Pairing protocol 2 binds the encrypted `connected` reply, the local connection
