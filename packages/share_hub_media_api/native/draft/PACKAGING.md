@@ -258,3 +258,9 @@ now checks matching outer/native identities, target directories, pinned nested
 manifest bytes, both file inventories, draft candidate declarations and required
 bridge/native layout on POSIX. It remains read-only and does not replace the
 final release schema, signature, real-binary or installation validation.
+
+The [release-index preflight](../../../../docs/sdk/release-index-preflight.md)
+checks a caller-pinned index against all six named ZIP attachments and their
+manifest identities, including each Flutter/native pair. It rejects the example
+index and reports `installable: false` even when a synthetic complete byte matrix
+passes; publisher trust and binary/release acceptance remain separate gates.
