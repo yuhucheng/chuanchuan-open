@@ -29,9 +29,11 @@ registration, serves bounded join attempts, and activates only a connection
 returned by the real pairing state machine. The initiator can join with the code
 alone. The service routes frames and sees the low-entropy code; it does not
 authorize a grant. A successful handshake may keep its selected meeting wire
-for encrypted operation frames until the original lease ends. Product route
-ownership, the no-discovery entry point, cross-network device testing and
-deployment are still pending; this package API is not a claim of delivery.
+for encrypted operation frames until the original lease ends. The desktop
+client now owns the selected origin and exposes a code-only entry point when
+there is no discovered device. Cross-network testing with two previously
+unpaired devices and service deployment remain pending; the local TLS probe
+is not a claim of delivery.
 
 ## Connection recovery adapter
 
