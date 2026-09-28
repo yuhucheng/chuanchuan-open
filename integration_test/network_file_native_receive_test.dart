@@ -6,6 +6,7 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:share_hub_connection/share_hub_connection.dart';
+import 'package:share_hub_file_transfer/share_hub_file_transfer.dart';
 import 'package:share_hub_open/features/connections/connection_controller.dart';
 import 'package:share_hub_open/features/transfers/file_access.dart';
 import 'package:share_hub_open/features/transfers/network_transfers.dart';
@@ -323,4 +324,121 @@ void main() {
     },
     timeout: const Timeout(Duration(minutes: 2)),
   );
+
+  testWidgets(
+    'off during authenticated TCP transfer stops native publication',
+    (tester) async {
+      expect(Platform.isWindows || Platform.isMacOS, isTrue);
+      const destinationPath = String.fromEnvironment('NATIVE_RECEIVE_DIR');
+      expect(destinationPath, isNotEmpty);
+      final destination = Directory(destinationPath);
+      expect(destination.existsSync(), isTrue);
+      final existingParts = _temporaryPaths(destination);
+      final senderPlatform = _LiveClockPlatform();
+      final receiverPlatform = _LiveClockPlatform();
+      final receiverIdentity = await DeviceIdentity.fromSeed(
+        List<int>.filled(32, 106),
+      );
+      senderPlatform.seed.complete(
+        await DeviceIdentity.fromSeed(List<int>.filled(32, 105)),
+      );
+      receiverPlatform.seed.complete(receiverIdentity);
+      final sender = ConnectionController(senderPlatform);
+      final receiver = ConnectionController(receiverPlatform);
+      final selectedFiles = TestFileAccess();
+      final senderQueue = TransferQueue(selectedFiles);
+      final receiverQueue = TransferQueue(TestFileAccess());
+      final source = _CutAfterFirstAckSource(selectedFiles.data);
+      final sent = NetworkTransfers(
+        connections: sender,
+        queue: senderQueue,
+        source: source,
+        receive: MemoryReceiveAccess(),
+      );
+      final received = NetworkTransfers(
+        connections: receiver,
+        queue: receiverQueue,
+        source: MemorySourceAccess({}),
+        receive: MethodChannelReceiveAccess(),
+      );
+      ConnectionRelay? relay;
+      try {
+        await receiver.open();
+        relay = await ConnectionRelay.open(
+          receiverPlatform.advertisements.whereType<int>().last,
+        );
+        await sender.connect(
+          '127.0.0.1',
+          relay.port,
+          receiver.code!,
+          expectedPeerKey: receiverIdentity.encodedKey,
+        );
+        final bytes = Uint8List.fromList(
+          List<int>.generate(3 * 256 * 1024 + 13, (index) => index % 251),
+        );
+        final name =
+            'chuan-network-off-${DateTime.now().microsecondsSinceEpoch}.bin';
+        selectedFiles.selection = [
+          SelectedFile(token: 'off-source', name: name, size: bytes.length),
+        ];
+        selectedFiles.data['off-source'] = bytes;
+        await senderQueue.selectFiles();
+        await drainQueue(senderQueue);
+        source.gatePass = source.passes + 2;
+        source.gateEntered = Completer<void>();
+        source.gateRelease = Completer<void>();
+        final job = sent.send(senderQueue.items.single, sender.sessions.single);
+        await source.gateEntered!.future.timeout(const Duration(seconds: 10));
+        expect(job.acknowledgedBytes, 256 * 1024);
+        final disconnect = sender.disconnectAll();
+        source.gateRelease!.complete();
+        await disconnect.timeout(const Duration(seconds: 10));
+        await job.done.timeout(const Duration(seconds: 20));
+        expect(job.phase, NetworkSendPhase.cancelled);
+        expect(job.canResume, isFalse);
+        expect(job.receipt, isNull);
+        await received.close();
+        expect(
+          received.receiveHistory.where(
+            (item) => item.file.outcome == FileRetirementOutcome.completed,
+          ),
+          isEmpty,
+        );
+        expect(
+          File('${destination.path}${Platform.pathSeparator}$name')
+              .existsSync(),
+          isFalse,
+        );
+        expect(_temporaryPaths(destination).difference(existingParts), isEmpty);
+        stdout.writeln('NATIVE_NETWORK_OFF_REPORT name=$name');
+      } finally {
+        if (source.gateRelease case final release?) {
+          if (!release.isCompleted) release.complete();
+        }
+        await Future.wait([sent.close(), received.close()]);
+        await Future.wait([
+          senderQueue.close(),
+          receiverQueue.close(),
+          sender.disconnectAll(),
+          receiver.disconnectAll(),
+        ]);
+        sent.dispose();
+        received.dispose();
+        senderQueue.dispose();
+        receiverQueue.dispose();
+        sender.dispose();
+        receiver.dispose();
+        await relay?.close();
+      }
+    },
+    timeout: const Timeout(Duration(minutes: 2)),
+  );
 }
+
+Set<String> _temporaryPaths(Directory directory) => {
+  for (final entry in directory.listSync(followLinks: false))
+    if (entry is File &&
+        entry.uri.pathSegments.last.startsWith('.chuanchuan-receive-') &&
+        entry.uri.pathSegments.last.endsWith('.part'))
+      entry.path,
+};
