@@ -21,14 +21,14 @@ Agent 配置、OpenSpec 和内部计划已迁至独立私有管理仓，本仓�
 SDK 是必需的构建依赖，标准位置为 `.local/media-sdk/package`。正式 SDK 可按此包布局解压；当前尚未交付正式二进制包或下载地址，本地开发使用已有内部适配包，通过脚本链接到标准位置：
 
 ```powershell
-./tool/configure_media_sdk.ps1 -SdkPath /absolute/path/to/share_hub_media_sdk
+./tool/configure_media_sdk.ps1 -SdkPath /absolute/path/to/share_hub_media_sdk -DevelopmentAdapter
 flutter analyze --no-pub
 flutter test --no-pub
 flutter build windows --debug --no-pub
 ./build/windows/x64/runner/Debug/share_hub.exe
 ```
 
-脚本只建立 SDK 包目录链接并执行 pub get，不复制私有源码，不修改 manifest，不生成另一套 main。已有 SDK 目录或冲突链接不会被覆盖。缺少 SDK 属于依赖未安装，需先准备 SDK；不会退回缺功能版本。已按标准目录解压包时可直接运行 `flutter pub get`。
+`-DevelopmentAdapter` 仅供内部源码适配包；它不代表二进制发行物。脚本只建立 SDK 包目录链接并执行 pub get，不复制私有源码，不修改客户端 manifest，不生成另一套 main。已有 SDK 目录或冲突链接不会被覆盖。缺少 SDK 属于依赖未安装，需先准备 SDK；不会退回缺功能版本。正式包交付后，按[分发格式](docs/sdk-distribution-layout.md)组装并取得发行方独立提供的清单 SHA-256，使用 `-ExpectedManifestSha256` 配置；不要绕过配置校验直接运行 `flutter pub get`。
 
 若 Flutter 不在 PATH，可传 `-FlutterCommand` 指定完整路径。Windows 插件 symlink 权限不足时运行 `tool/prepare_windows_plugins.ps1`，再重试配置；不需改变系统安全策略。SDK 更新后建议清理旧构建产物，再获取依赖。
 
