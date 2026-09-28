@@ -97,6 +97,9 @@ class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
               )),
     listSources: _engine.sources,
     localCaptureActive: () => _preview.occupiesPicture,
+    requiresAccessibilityForControl:
+        (widget.targetPlatform ?? defaultTargetPlatform) ==
+        TargetPlatform.macOS,
   );
   late final _transfers = TransferQueue(_fileAccess);
   late final _networkTransfers = NetworkTransfers(

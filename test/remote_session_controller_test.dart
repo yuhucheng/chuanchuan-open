@@ -119,8 +119,8 @@ class _FakePicture implements SourceSelectableRemotePicture {
 }
 
 class _FakeControlPicture extends _FakePicture implements RemoteControlPicture {
-  _FakeControlPicture({required super.id})
-    : super(operation: SessionOperation.control, sends: false);
+  _FakeControlPicture({required super.id, super.sends = false})
+    : super(operation: SessionOperation.control);
   final _inputRevision = ValueNotifier<int>(0);
   RemoteControlInputScope? readyScope;
   final inputs = <ControlInput>[];
@@ -370,7 +370,10 @@ void main() {
     b.dispose();
   });
 
-  void build({bool Function()? localCaptureOccupied}) {
+  void build({
+    bool Function()? localCaptureOccupied,
+    bool targetRequiresAccessibilityForControl = false,
+  }) {
     remoteA = RemoteSessionController(
       connections: a,
       platform: platformA,
@@ -384,6 +387,7 @@ void main() {
       connections: b,
       platform: platformB,
       factory: factoryB,
+      requiresAccessibilityForControl: targetRequiresAccessibilityForControl,
       listSources: () async => sourceListGate?.future ?? sourcesA,
       localCaptureActive: localCaptureOccupied ?? () => previewActive,
       firstFrameDeadline: const Duration(milliseconds: 150),
@@ -745,6 +749,58 @@ void main() {
     await waitFor(() => !remoteA.occupied);
     expect(remoteA.error, contains('屏幕录制权限已关闭'));
     expect(remoteA.phase, RemotePhase.failed);
+  });
+
+  test(
+    'revoking macOS accessibility stops target control without new input',
+    () async {
+      factoryB = _FakeFactory(
+        declared: MediaCapabilities(
+          protocolVersion: sessionProtocolVersion,
+          operations: {SessionOperation.control},
+          maxVideoSessions: 1,
+        ),
+        controlCapabilities: {
+          ControlCapability.pointer,
+          ControlCapability.wheel,
+          ControlCapability.physicalKey,
+          ControlCapability.textInput,
+          ControlCapability.clipboardText,
+        },
+      );
+      platformB.status = const PermissionStatus(
+        screenRecording: true,
+        accessibility: true,
+      );
+      build(targetRequiresAccessibilityForControl: true);
+      final target = _FakeControlPicture(id: 'incoming-control', sends: true);
+      factoryB.deliver(target);
+      target.emit(MediaEventKind.firstFrame);
+      expect(remoteB.phase, RemotePhase.active);
+
+      platformB.status = const PermissionStatus(screenRecording: true);
+      await waitFor(() => !remoteB.occupied);
+      expect(target.stops, 1);
+      expect(remoteB.phase, RemotePhase.failed);
+      expect(remoteB.error, contains('辅助功能权限'));
+      expect(b.sessions.single.isClosed, isFalse);
+    },
+  );
+
+  test('macOS cast does not require accessibility permission', () async {
+    build(targetRequiresAccessibilityForControl: true);
+    final picture = _FakePicture(
+      id: 'incoming-cast',
+      operation: SessionOperation.cast,
+      sends: true,
+    );
+    factoryB.deliver(picture);
+    picture.emit(MediaEventKind.firstFrame);
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+    expect(remoteB.phase, RemotePhase.active);
+    expect(remoteB.occupied, isTrue);
+    expect(picture.stops, 0);
+    await remoteB.stop();
   });
 
   test('a failed release stays visible and can be retried', () async {

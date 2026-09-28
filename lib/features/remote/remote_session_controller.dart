@@ -27,6 +27,7 @@ class RemoteSessionController extends ChangeNotifier {
     required this.factory,
     required this.listSources,
     this.localCaptureActive,
+    this.requiresAccessibilityForControl = false,
     this.firstFrameDeadline = const Duration(seconds: 15),
     this.permissionPoll = const Duration(seconds: 2),
   }) : _capabilities = factory.capabilities,
@@ -48,6 +49,7 @@ class RemoteSessionController extends ChangeNotifier {
 
   /// True while the local preview capturer is active or not yet released.
   final bool Function()? localCaptureActive;
+  final bool requiresAccessibilityForControl;
   final Duration firstFrameDeadline;
   final Duration permissionPoll;
 
@@ -704,11 +706,17 @@ class RemoteSessionController extends ChangeNotifier {
     }
     _checkingPermission = true;
     try {
-      final allowed = (await platform.permissions()).screenRecording;
-      if (!allowed &&
+      final permissions = await platform.permissions();
+      if (!permissions.screenRecording &&
           identical(_attempt, attempt) &&
           attempt.token == _generation) {
         await stop(reason: '屏幕录制权限已关闭，已停止共享并通知对端。', failed: true);
+      } else if (requiresAccessibilityForControl &&
+          attempt.operation == SessionOperation.control &&
+          !permissions.accessibility &&
+          identical(_attempt, attempt) &&
+          attempt.token == _generation) {
+        await stop(reason: '辅助功能权限已关闭，已停止控制并释放输入。', failed: true);
       }
     } catch (_) {
       if (identical(_attempt, attempt) && attempt.token == _generation) {
