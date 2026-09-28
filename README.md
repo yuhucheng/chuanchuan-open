@@ -16,19 +16,31 @@ Agent 配置、OpenSpec 和内部计划已迁至独立私有管理仓，本仓�
 
 两个业务仓在统一工作区内跟随管理仓当前同名分支，当前在 `release/v0.2.0` 开发，产品 VERSION 暂保留 0.1.0；`main` 保持主线。开发和提交前阅读 [版本计划](docs/version-plan.md) 与 [分支管理规则](docs/development/branch-management.md)，运行 `pwsh -File tool/install_git_hooks.ps1` 启用本地检查。
 
-安装 Flutter 3.47.2 / Dart 3.13.2；Windows 需要 VS 2022 C++ 桌面工具链和 Windows SDK，脚本使用 PowerShell 7；Mac 需要完整 Xcode。
+安装 Flutter 3.47.2 / Dart 3.13.2；Windows 需要 VS 2022 C++ 桌面工具链和 Windows SDK，Mac 需要完整 Xcode。两平台运行 SDK 配置脚本都需要 PowerShell 7（`pwsh`）；macOS 当前不会随 Xcode 或 Flutter 自动取得它。
 
 SDK 是必需的构建依赖，标准位置为 `.local/media-sdk/package`。正式 SDK 可按此包布局解压；当前尚未交付正式二进制包或下载地址，本地开发使用已有内部适配包，通过脚本链接到标准位置：
 
 ```powershell
-./tool/configure_media_sdk.ps1 -SdkPath /absolute/path/to/share_hub_media_sdk -DevelopmentAdapter
+pwsh -File tool/configure_media_sdk.ps1 -SdkPath /absolute/path/to/share_hub_media_sdk -DevelopmentAdapter
 flutter analyze --no-pub
 flutter test --no-pub
 flutter build windows --debug --no-pub
 ./build/windows/x64/runner/Debug/share_hub.exe
 ```
 
-`-DevelopmentAdapter` 仅供内部源码适配包；它不代表二进制发行物。脚本只建立 SDK 包目录链接并执行 pub get，不复制私有源码，不修改客户端 manifest，不生成另一套 main。已有 SDK 目录或冲突链接不会被覆盖。缺少 SDK 属于依赖未安装，需先准备 SDK；不会退回缺功能版本。正式包交付后，按[分发格式](docs/sdk-distribution-layout.md)组装并取得发行方独立提供的清单 SHA-256，使用 `-ExpectedManifestSha256` 配置；不要绕过配置校验直接运行 `flutter pub get`。
+`-DevelopmentAdapter` 仅供内部源码适配包；它不代表二进制发行物。脚本只建立 SDK 包目录链接并执行 pub get，不复制私有源码，不修改客户端 manifest，不生成另一套 main。已有 SDK 目录或冲突链接不会被覆盖。缺少 SDK 属于依赖未安装，需先准备 SDK；不会退回缺功能版本。当前产品 `VERSION` 为 0.1.0、内部 SDK 为 `0.1.0-dev.1`、公共媒体 API 为 `0.4.0`；配置工具对未来原生包要求 ABI 1.0 cdecl。这些版本互不代替，原生 ABI 尚未实现，也无正式 SDK 版本或下载地址。
+
+正式包交付后，先按[分发格式](docs/sdk-distribution-layout.md)从可信发行记录取得薄插件、当前架构原生包与清单并组装目录；独立取得发行方公布的 `sdk-release-manifest.json` SHA-256，验证来源及适用平台签名。然后在仓库根目录执行（将占位路径和摘要替换为实际值）：
+
+```powershell
+pwsh -File tool/configure_media_sdk.ps1 -SdkPath /absolute/path/to/assembled-sdk-package -ExpectedManifestSha256 '发行方独立公布的64位小写SHA-256'
+flutter analyze --no-pub
+flutter test --no-pub
+# Windows: flutter build windows --debug --no-pub
+# macOS:   flutter build macos --debug --no-pub
+```
+
+配置脚本校验清单、版本、当前平台布局与逐文件摘要，成功后运行 `flutter pub get` 并链接到 `.local/media-sdk/package`；它不负责下载、平台签名或应用加载验收。不能从待验包内抄取摘要作为可信来源，也不能用 `-DevelopmentAdapter` 跳过正式包校验。配置失败时保留现有有效包；已有链接指向另一包时需按升级/回退流程处理，脚本不会覆盖。正式包和完整流程仍待真实制品验证，不要绕过配置校验直接运行 `flutter pub get`。
 
 若 Flutter 不在 PATH，可传 `-FlutterCommand` 指定完整路径。Windows 插件 symlink 权限不足时运行 `tool/prepare_windows_plugins.ps1`，再重试配置；不需改变系统安全策略。SDK 更新后建议清理旧构建产物，再获取依赖。
 
