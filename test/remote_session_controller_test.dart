@@ -517,6 +517,68 @@ void main() {
     notices.dispose();
   });
 
+  test('renewal before selected-pair statistics still rotates relay', () async {
+    final notices = ValueNotifier<int>(0);
+    var expiry = DateTime.utc(2026, 9, 29, 10, 0);
+    build(
+      relayCredentialAvailable: () => true,
+      relayCredentialChanges: notices,
+      relayCredentialExpiresAt: () => expiry,
+    );
+    await remoteA.start(
+      SessionOperation.watch,
+      peerKey: a.sessions.single.peerKey,
+    );
+    final picture = factoryA.current..emitPausedOnPause = true;
+    picture.emit(MediaEventKind.transportReady);
+    picture.emit(MediaEventKind.firstFrame);
+    expiry = expiry.add(const Duration(minutes: 5));
+    notices.value++;
+    await Future<void>.delayed(Duration.zero);
+    expect(picture.pauses, 0, reason: 'path is not yet measured');
+
+    picture.emit(
+      MediaEventKind.statistics,
+      transportPath: MediaTransportPath.relay,
+    );
+    await waitFor(() => picture.resumes == 1);
+    expect(picture.pauses, 1);
+    notices.dispose();
+  });
+
+  test('renewal with relay statistics waits for actual first frame', () async {
+    final notices = ValueNotifier<int>(0);
+    var expiry = DateTime.utc(2026, 9, 29, 10, 0);
+    build(
+      relayCredentialAvailable: () => true,
+      relayCredentialChanges: notices,
+      relayCredentialExpiresAt: () => expiry,
+    );
+    await remoteA.start(
+      SessionOperation.watch,
+      peerKey: a.sessions.single.peerKey,
+    );
+    final picture = factoryA.current..emitPausedOnPause = true;
+    picture.emit(MediaEventKind.transportReady);
+    picture.emit(
+      MediaEventKind.statistics,
+      transportPath: MediaTransportPath.relay,
+    );
+    expiry = expiry.add(const Duration(minutes: 5));
+    notices.value++;
+    await Future<void>.delayed(Duration.zero);
+    expect(
+      picture.pauses,
+      0,
+      reason: 'transport readiness is not presentation',
+    );
+
+    picture.emit(MediaEventKind.firstFrame);
+    await waitFor(() => picture.resumes == 1);
+    expect(picture.pauses, 1);
+    notices.dispose();
+  });
+
   test(
     'stopping during relay refresh cannot resume an old operation',
     () async {

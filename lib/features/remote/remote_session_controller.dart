@@ -1167,6 +1167,10 @@ class RemoteSessionController extends ChangeNotifier {
         _notify();
       });
       _notify();
+      // Credential renewal can precede the next measured selected pair. Once
+      // relay is proven, revisit that already-issued lease without requiring
+      // another service notification.
+      scheduleMicrotask(_maybeRotateRelayLease);
       return;
     }
     if (event.mediaRevision > attempt.minimumRevision) {
@@ -1224,6 +1228,10 @@ class RemoteSessionController extends ChangeNotifier {
         break;
     }
     _notify();
+    if (event.kind == MediaEventKind.firstFrame) {
+      // A relay statistic may arrive while presentation is still pending.
+      scheduleMicrotask(_maybeRotateRelayLease);
+    }
   }
 
   void _remoteEnded(_Attempt attempt) {
@@ -1284,6 +1292,10 @@ class RemoteSessionController extends ChangeNotifier {
 
   void _onRelayCredentialChanged() {
     _tryRelayRetry();
+    _maybeRotateRelayLease();
+  }
+
+  void _maybeRotateRelayLease() {
     final attempt = _attempt;
     final expiry = _relayExpiry();
     if (attempt == null ||
