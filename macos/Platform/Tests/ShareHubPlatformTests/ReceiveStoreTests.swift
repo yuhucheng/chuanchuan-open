@@ -634,6 +634,39 @@ final class ReceiveStoreTests: XCTestCase {
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: fixture.root.path), [])
     }
 
+    func testSearchOnlyNonInheritedDirectoryACLStillPermitsPrivateReceive() throws {
+        let fixture = try Fixture()
+        defer { fixture.close() }
+        let command = Process()
+        command.executableURL = URL(fileURLWithPath: "/bin/chmod")
+        command.arguments = ["+a", "everyone allow search", fixture.root.path]
+        try command.run(); command.waitUntilExit()
+        XCTAssertEqual(command.terminationStatus, 0)
+
+        let item = try fixture.begin(name: "private.txt", bytes: Data("abc".utf8))
+        try fixture.append(item, bytes: Data("abc".utf8))
+        let receipt = try fixture.store.commit(token: item.token, scope: item.scope)
+        XCTAssertEqual(receipt.name, "private.txt")
+        let saved = fixture.root.appendingPathComponent(receipt.name)
+        XCTAssertEqual(try Data(contentsOf: saved), Data("abc".utf8))
+        var info = stat()
+        XCTAssertEqual(lstat(saved.path, &info), 0)
+        XCTAssertEqual(info.st_mode & 0o777, 0o600)
+    }
+
+    func testInheritableSearchACLDoesNotReachNewReceiveFiles() throws {
+        let fixture = try Fixture()
+        defer { fixture.close() }
+        let command = Process()
+        command.executableURL = URL(fileURLWithPath: "/bin/chmod")
+        command.arguments = ["+a", "everyone allow search,file_inherit,directory_inherit", fixture.root.path]
+        try command.run(); command.waitUntilExit()
+        XCTAssertEqual(command.terminationStatus, 0)
+
+        expect(.unsupportedStorage) { try fixture.begin(name: "must-not-exist", bytes: Data("abc".utf8)) }
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: fixture.root.path), [])
+    }
+
     private func expect<T>(_ code: ReceiveStoreError, file: StaticString = #filePath, line: UInt = #line, _ body: () throws -> T) {
         XCTAssertThrowsError(try body(), file: file, line: line) { XCTAssertEqual($0 as? ReceiveStoreError, code, file: file, line: line) }
     }

@@ -174,7 +174,10 @@ public final class ReceiveStore {
         guard let url = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first else {
             throw ReceiveStoreError.permissionDenied
         }
-        let directory = try Directory(url: url)
+        // A sandboxed app receives its system Downloads URL through the
+        // container's Data/Downloads link. Resolve only this OS-provided alias;
+        // picker URLs and persisted bookmarks must still reject linked paths.
+        let directory = try Directory(url: url.resolvingSymlinksInPath())
         try directory.createAndOpenChild("串串")
         return try register(directory)
     }
@@ -666,8 +669,9 @@ public final class ReceiveStore {
         return hex(bytes)
     }
 
-    /// Conservative namespace policy: deny-only ACLs are safe, but allow ACLs
-    /// may bypass BSD modes or be inherited by an otherwise 0600 temporary.
+    /// Conservative namespace policy: a directory-only, non-inherited search
+    /// grant cannot list, modify, or inherit into an otherwise 0600 temporary.
+    /// Every other allow ACL may bypass BSD modes or reach a new file.
     /// Inspect retained fds, never rewrite the user's permissions or reopen.
     private static func requireNoAllowACL(_ fd: Int32) throws {
         guard let security = filesec_init() else { throw ReceiveStoreError.unsupportedStorage }
@@ -687,7 +691,22 @@ public final class ReceiveStore {
         while acl_get_entry(acl, selector, &entry) == 0 {
             guard let entry else { throw ReceiveStoreError.unsupportedStorage }
             var tag = ACL_UNDEFINED_TAG
-            guard acl_get_tag_type(entry, &tag) == 0, tag == ACL_EXTENDED_DENY else {
+            guard acl_get_tag_type(entry, &tag) == 0 else { throw ReceiveStoreError.unsupportedStorage }
+            if tag == ACL_EXTENDED_ALLOW {
+                var mask: acl_permset_mask_t = 0
+                var flags: acl_flagset_t?
+                guard info.st_mode & S_IFMT == S_IFDIR,
+                      acl_get_permset_mask_np(entry, &mask) == 0,
+                      mask == acl_permset_mask_t(ACL_SEARCH.rawValue),
+                      acl_get_flagset_np(UnsafeMutableRawPointer(entry), &flags) == 0,
+                      let flags,
+                      acl_get_flag_np(flags, ACL_ENTRY_FILE_INHERIT) == 0,
+                      acl_get_flag_np(flags, ACL_ENTRY_DIRECTORY_INHERIT) == 0,
+                      acl_get_flag_np(flags, ACL_ENTRY_LIMIT_INHERIT) == 0,
+                      acl_get_flag_np(flags, ACL_ENTRY_ONLY_INHERIT) == 0 else {
+                    throw ReceiveStoreError.unsupportedStorage
+                }
+            } else if tag != ACL_EXTENDED_DENY {
                 throw ReceiveStoreError.unsupportedStorage
             }
             selector = ACL_NEXT_ENTRY.rawValue
@@ -811,7 +830,9 @@ public final class ReceiveStore {
                 guard components.count <= 64, components.allSatisfy({ $0 != "." && $0 != ".." && $0.utf8.count <= 255 }) else {
                     throw ReceiveStoreError.directoryChanged
                 }
-                let root = Darwin.open("/", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+                // Sandbox grants search through ancestors of an authorized
+                // folder without granting their directory contents for read.
+                let root = Darwin.open("/", O_SEARCH | O_NOFOLLOW | O_CLOEXEC)
                 guard root >= 0 else { throw ReceiveStore.translate(ReceiveStoreSystemError(number: errno)) }
                 try retainDescriptor(root, name: "/")
                 for component in components { try openChild(component) }
@@ -833,7 +854,7 @@ public final class ReceiveStore {
         }
 
         private func openChild(_ name: String) throws {
-            let child = openat(fd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            let child = openat(fd, name, O_SEARCH | O_NOFOLLOW | O_CLOEXEC)
             guard child >= 0 else {
                 if errno == ELOOP || errno == ENOTDIR || errno == ENOENT { throw ReceiveStoreError.directoryChanged }
                 throw ReceiveStore.translate(ReceiveStoreSystemError(number: errno))
