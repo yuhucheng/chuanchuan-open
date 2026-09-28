@@ -226,6 +226,55 @@ void main() {
     },
   );
 
+  test('service polls outlive the ordinary HTTPS timeout', () async {
+    for (final path in ['/v1/signal/poll', '/v1/meet/poll']) {
+      final accepted = Completer<Socket>();
+      final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      final subscription = server.listen((socket) {
+        if (!accepted.isCompleted) accepted.complete(socket);
+      });
+      final transport = HttpsAuxiliaryTransport(
+        Uri.parse('https://127.0.0.1:${server.port}'),
+        timeout: const Duration(milliseconds: 30),
+      );
+      final cancellation = AuxiliaryCancellation();
+      Socket? stalledSocket;
+      try {
+        var completed = false;
+        final result = transport.post(path, const {}, cancellation);
+        unawaited(
+          result.then<void>(
+            (_) => completed = true,
+            onError: (Object _) => completed = true,
+          ),
+        );
+        final cancelled = expectLater(
+          result,
+          throwsA(
+            isA<AuxiliaryFailure>().having(
+              (error) => error.code,
+              'code',
+              'cancelled',
+            ),
+          ),
+        );
+        stalledSocket = await accepted.future.timeout(
+          const Duration(seconds: 2),
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        expect(completed, isFalse, reason: path);
+        cancellation.cancel();
+        await cancelled;
+      } finally {
+        cancellation.cancel();
+        transport.close();
+        stalledSocket?.destroy();
+        await subscription.cancel();
+        await server.close();
+      }
+    }
+  });
+
   test(
     'server owns challenge expiry when client wall clock is ahead',
     () async {

@@ -106,6 +106,13 @@ final class HttpsAuxiliaryTransport implements AuxiliaryTransport {
     AuxiliaryCancellation cancellation,
   ) async {
     cancellation.throwIfCancelled();
+    // The service may legally hold either poll for up to 30 seconds. Keep
+    // ordinary requests short, but leave network/TLS margin around a poll.
+    final requestTimeout = path == '/v1/signal/poll' || path == '/v1/meet/poll'
+        ? (timeout < const Duration(seconds: 35)
+              ? const Duration(seconds: 35)
+              : timeout)
+        : timeout;
     HttpClientRequest? request;
     final cancelled = Completer<void>();
     void abort() {
@@ -118,7 +125,7 @@ final class HttpsAuxiliaryTransport implements AuxiliaryTransport {
       cancelled.future.then<T>(
         (_) => throw const AuxiliaryFailure('cancelled'),
       ),
-    ]).timeout(timeout);
+    ]).timeout(requestTimeout);
     cancellation.onCancel(abort);
     var abandoned = false;
     try {
