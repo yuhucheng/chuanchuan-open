@@ -98,7 +98,8 @@ final class _SignalOwner {
   }
 }
 
-final class _SelectedSignalWire implements ConnectionWire {
+final class _SelectedSignalWire
+    implements ConnectionWire, DrainableConnectionWire {
   _SelectedSignalWire(this._wire, this._owner);
   final ConnectionWire _wire;
   final _SignalOwner _owner;
@@ -123,6 +124,9 @@ final class _SelectedSignalWire implements ConnectionWire {
 
   @override
   void close() => unawaited(_owner.close());
+
+  @override
+  Future<void> closeAndDrain() => _owner.close();
 }
 
 /// Keeps the selected HTTPS transport alive for an activated meeting session.

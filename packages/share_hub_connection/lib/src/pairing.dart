@@ -456,6 +456,19 @@ class PairingAttempt {
     if (_cancelled) throw const ConnectionFailure('cancelled');
   }
 
+  static Future<void> _closeFailedWire(ConnectionWire wire) async {
+    wire.close();
+    if (wire is! DrainableConnectionWire) return;
+    try {
+      await (wire as DrainableConnectionWire).closeAndDrain().timeout(
+        const Duration(seconds: 2),
+      );
+    } catch (_) {
+      // Local authority is already revoked. The remote attempt has its own
+      // expiry if leaving fails or the selected service cannot be reached.
+    }
+  }
+
   Future<TrustedConnection> connect(
     String address,
     int port,
@@ -503,7 +516,8 @@ class PairingAttempt {
       _check();
       final opened = await openWire();
       if (_cancelled) {
-        opened.close();
+        timeout.cancel();
+        await _closeFailedWire(opened);
         throw const ConnectionFailure('cancelled');
       }
       final wire = _wire = opened;
@@ -626,8 +640,10 @@ class PairingAttempt {
       connection.startMonitoring();
       return connection;
     } catch (error) {
+      timeout.cancel();
       _connection?.close('handshake_failed');
-      _wire?.close();
+      final failedWire = _wire;
+      if (failedWire != null) await _closeFailedWire(failedWire);
       if (_cancelled) throw const ConnectionFailure('cancelled');
       if (error is ConnectionFailure) rethrow;
       if (error is AuxiliaryFailure) throw ConnectionFailure(error.code);

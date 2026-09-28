@@ -17,6 +17,13 @@ abstract interface class ConnectionWire {
   void close();
 }
 
+/// Optional bounded remote cleanup after [ConnectionWire.close] has revoked
+/// local access. A failed pairing may await this before allowing a new attempt
+/// to reuse the remote rendezvous capacity.
+abstract interface class DrainableConnectionWire {
+  Future<void> closeAndDrain();
+}
+
 /// Length-prefixed bounded socket frames. No payload logging or unbounded queue.
 class WireChannel implements ConnectionWire {
   WireChannel(this.socket) {

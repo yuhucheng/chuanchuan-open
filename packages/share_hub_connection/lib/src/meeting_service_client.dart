@@ -273,7 +273,8 @@ final class MeetingListing {
 
 /// Bounded JSON frames over the selected HTTPS origin. The meeting service
 /// can see the unencrypted SRP handshake but not the post-handshake cipher.
-final class MeetingConnectionWire implements ConnectionWire {
+final class MeetingConnectionWire
+    implements ConnectionWire, DrainableConnectionWire {
   MeetingConnectionWire(this._transport, this._token, this._attempt);
   final AuxiliaryTransport _transport;
   final String _token, _attempt;
@@ -392,4 +393,7 @@ final class MeetingConnectionWire implements ConnectionWire {
       // Network loss cannot delay local cancellation indefinitely.
     }
   }
+
+  @override
+  Future<void> closeAndDrain() => closeAndLeave();
 }

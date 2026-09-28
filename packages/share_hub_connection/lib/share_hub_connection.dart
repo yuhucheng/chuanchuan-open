@@ -11,7 +11,7 @@ export 'src/auxiliary_service.dart'
 export 'src/identity.dart' show DeviceIdentity, ConnectionFailure;
 export 'src/meeting_service_client.dart'
     show MeetingServiceClient, MeetingListing, MeetingConnectionWire;
-export 'src/channel.dart' show ConnectionWire;
+export 'src/channel.dart' show ConnectionWire, DrainableConnectionWire;
 export 'src/pairing.dart'
     show PairingHost, PairingAttempt, PairingOffer, offerLifetime;
 export 'src/relay_signal_envelope.dart'

@@ -36,7 +36,98 @@ final class _HoldingWire implements ConnectionWire {
   }
 }
 
+final class _DrainableFailingWire
+    implements ConnectionWire, DrainableConnectionWire {
+  final closed = Completer<void>();
+  final release = Completer<void>();
+  @override
+  bool get isClosed => closed.isCompleted;
+  @override
+  void enableSessionFrames() {}
+  @override
+  Future<Map<String, dynamic>> next() =>
+      Future.error(const ConnectionFailure('authentication_failed'));
+  @override
+  void send(Map<String, dynamic> message) {}
+  @override
+  Future<void> flush() async {}
+  @override
+  void close() {
+    if (!closed.isCompleted) closed.complete();
+  }
+
+  @override
+  Future<void> closeAndDrain() => release.future;
+}
+
 void main() {
+  test('failed meeting handshake waits for bounded remote leave', () async {
+    final identity = await DeviceIdentity.fromSeed(List.filled(32, 72));
+    final wire = _DrainableFailingWire();
+    final attempted = PairingAttempt(
+      identity: identity,
+      clock: () async => 1000000,
+      protocolVersion: 2,
+    ).connectWithWire(() async => wire, '123456');
+    var settled = false;
+    final result = attempted.then<void>(
+      (_) => settled = true,
+      onError: (Object _) => settled = true,
+    );
+    await wire.closed.future;
+    await Future<void>.delayed(Duration.zero);
+    expect(settled, isFalse);
+    wire.release.complete();
+    await expectLater(
+      attempted,
+      throwsA(
+        isA<ConnectionFailure>().having(
+          (failure) => failure.code,
+          'code',
+          'authentication_failed',
+        ),
+      ),
+    );
+    await result;
+  });
+
+  test(
+    'late meeting wire after cancellation also drains remote leave',
+    () async {
+      final identity = await DeviceIdentity.fromSeed(List.filled(32, 73));
+      final wire = _DrainableFailingWire();
+      final opened = Completer<ConnectionWire>();
+      final attempt = PairingAttempt(
+        identity: identity,
+        clock: () async => 1000000,
+        protocolVersion: 2,
+      );
+      final attempted = attempt.connectWithWire(() => opened.future, '123456');
+      var settled = false;
+      final result = attempted.then<void>(
+        (_) => settled = true,
+        onError: (Object _) => settled = true,
+      );
+      attempt.cancel();
+      opened.complete(wire);
+      await wire.closed.future;
+      await Future<void>.delayed(Duration.zero);
+      expect(settled, isFalse);
+      wire.release.complete();
+      await expectLater(
+        attempted,
+        throwsA(
+          isA<ConnectionFailure>().having(
+            (failure) => failure.code,
+            'code',
+            'cancelled',
+          ),
+        ),
+      );
+      await result;
+    },
+  );
+
   test(
     'local TCP and injected meeting wires exhaust one five-attempt offer',
     () async {
