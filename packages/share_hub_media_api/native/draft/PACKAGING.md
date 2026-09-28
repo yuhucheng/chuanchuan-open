@@ -236,6 +236,14 @@ now checks independently pinned archive/manifest bytes and the exact ZIP entry
 inventory before extraction. It does not perform safe extraction, establish source
 trust or authorize installation; every success reports `installable: false`.
 
+The companion [isolated staging extractor](../../../../docs/sdk/archive-preflight.md)
+creates a private, new POSIX directory only after both independent hashes and
+archive inventory pass. It writes files before Mac links, rechecks the open
+archive, verifies the extracted tree, and removes its staging directory on
+failure. It never activates the staged package. Source trust, actual binary
+ABI, signing and installation remain separate gates; its success also reports
+`installable: false`.
+
 The separate [declaration compatibility preflight](../../../../docs/sdk/compatibility-preflight.md)
 compares a pinned manifest with a caller-owned consumer policy. OS/CPU/minimum-OS
 and API/ABI/capability declarations receive distinct diagnostics; runtime/binary
