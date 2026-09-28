@@ -38,6 +38,8 @@ final class _MeetingService implements AuxiliaryTransport {
   bool activated = false;
   Completer<void>? joinGate;
   final joinStarted = Completer<void>();
+  Completer<void>? hostLeaveGate;
+  final hostLeaveStarted = Completer<void>();
 
   @override
   Future<Map<String, Object?>> post(
@@ -85,6 +87,11 @@ final class _MeetingService implements AuxiliaryTransport {
         code = null;
         return {'active': true};
       case '/v1/meet/leave':
+        if (body['token'] == hostToken && hostLeaveGate != null) {
+          if (!hostLeaveStarted.isCompleted) hostLeaveStarted.complete();
+          await hostLeaveGate!.future;
+        }
+        return {'closed': true};
       case '/v1/meet/unpublish':
         return {'closed': true};
       default:
@@ -93,20 +100,84 @@ final class _MeetingService implements AuxiliaryTransport {
   }
 }
 
+final class _DelayedLeaveService implements AuxiliaryTransport {
+  final leaveStarted = Completer<void>();
+  final releaseLeave = Completer<void>();
+  bool transportClosed = false;
+
+  @override
+  Future<Map<String, Object?>> post(
+    String path,
+    Map<String, String> body,
+    AuxiliaryCancellation cancellation,
+  ) async {
+    if (path == '/v1/meet/join') {
+      return {
+        'attempt': _MeetingService.token(16, 3),
+        'token': _MeetingService.token(32, 2),
+      };
+    }
+    if (path == '/v1/meet/leave') {
+      leaveStarted.complete();
+      await releaseLeave.future;
+      if (transportClosed) throw const AuxiliaryFailure('unreachable');
+      return {'closed': true};
+    }
+    throw const AuxiliaryFailure('invalid_request');
+  }
+}
+
 void main() {
+  test(
+    'closing a joined meeting keeps HTTPS alive until leave completes',
+    () async {
+      final identity = await DeviceIdentity.fromSeed(List.filled(32, 66));
+      final service = _DelayedLeaveService();
+      final routes = AuxiliaryRouteController(
+        identity: () async => identity,
+        officialOrigin: 'https://selected.example',
+        store: _Store(),
+        transportFactory: (_) =>
+            (transport: service, close: () => service.transportClosed = true),
+      );
+      final wire = await routes.openMeetingWire(
+        '123456',
+        AuxiliaryCancellation(),
+      );
+      wire.close();
+      await service.leaveStarted.future.timeout(const Duration(seconds: 2));
+      expect(wire.isClosed, isTrue);
+      expect(service.transportClosed, isFalse);
+      service.releaseLeave.complete();
+      for (var i = 0; i < 100 && !service.transportClosed; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+      expect(service.transportClosed, isTrue);
+      routes.stop();
+    },
+  );
+
   test(
     'two new clients connect by six digits through selected origin',
     () async {
       final hostIdentity = await DeviceIdentity.fromSeed(List.filled(32, 61));
       final clientIdentity = await DeviceIdentity.fromSeed(List.filled(32, 62));
       final service = _MeetingService(hostIdentity);
+      var hostTransportClosed = false;
 
       AuxiliaryRouteController route(DeviceIdentity identity) =>
           AuxiliaryRouteController(
             identity: () async => identity,
             officialOrigin: 'https://selected.example',
             store: _Store(),
-            transportFactory: (_) => (transport: service, close: () {}),
+            transportFactory: (_) => (
+              transport: service,
+              close: () {
+                if (identical(identity, hostIdentity)) {
+                  hostTransportClosed = true;
+                }
+              },
+            ),
           );
 
       final hostRoute = route(hostIdentity);
@@ -141,6 +212,25 @@ void main() {
         client.sessions.single.grant!.binding.encodedId,
         host.sessions.single.grant!.binding.encodedId,
       );
+
+      // Closing the active host connection must allow its leave to reach the
+      // service before disposing the HTTPS owner; local authority ends first.
+      service.hostLeaveGate = Completer<void>();
+      final hostConnection = host.sessions.single;
+      hostConnection.close();
+      try {
+        await service.hostLeaveStarted.future.timeout(
+          const Duration(seconds: 2),
+        );
+        expect(hostConnection.isClosed, isTrue);
+        expect(hostTransportClosed, isFalse);
+      } finally {
+        service.hostLeaveGate!.complete();
+      }
+      for (var i = 0; i < 100 && !hostTransportClosed; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+      expect(hostTransportClosed, isTrue);
     },
   );
 

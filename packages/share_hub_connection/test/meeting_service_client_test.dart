@@ -100,7 +100,48 @@ final class _LostPublishTransport implements AuxiliaryTransport {
   }
 }
 
+final class _DelayedLeaveTransport implements AuxiliaryTransport {
+  final leaving = Completer<void>();
+  final release = Completer<void>();
+
+  @override
+  Future<Map<String, Object?>> post(
+    String path,
+    Map<String, String> body,
+    AuxiliaryCancellation cancellation,
+  ) async {
+    if (path != '/v1/meet/leave') {
+      throw const AuxiliaryFailure('invalid_request');
+    }
+    leaving.complete();
+    await release.future;
+    return {'closed': true};
+  }
+}
+
 void main() {
+  test(
+    'meeting wire waits briefly for service leave after local close',
+    () async {
+      final transport = _DelayedLeaveTransport();
+      final wire = MeetingConnectionWire(
+        transport,
+        _MeetingTransport.joinToken,
+        _MeetingTransport.attempt,
+      );
+      final completion = wire.closeAndLeave();
+      await transport.leaving.future;
+      expect(wire.isClosed, isTrue);
+      var completed = false;
+      completion.then((_) => completed = true);
+      await Future<void>.delayed(Duration.zero);
+      expect(completed, isFalse);
+      transport.release.complete();
+      await completion;
+      expect(completed, isTrue);
+    },
+  );
+
   test(
     'lost publish response withdraws the exact offer by holder proof',
     () async {

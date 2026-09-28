@@ -187,9 +187,10 @@ final class MeetingListing {
     if (_closed) return;
     _closed = true;
     _pollCancellation.cancel();
-    for (final item in _wires.entries.toList()) {
-      if (item.key != _activeAttempt) item.value.close();
-    }
+    final leaving = [
+      for (final item in _wires.entries.toList())
+        if (item.key != _activeAttempt) item.value.closeAndLeave(),
+    ];
     if (!_activated) {
       try {
         await _transport.post('/v1/meet/unpublish', {
@@ -197,12 +198,17 @@ final class MeetingListing {
         }, AuxiliaryCancellation());
       } catch (_) {}
     }
+    await Future.wait(leaving);
   }
 
   Future<void> close() async {
     await closeAdmission();
-    _wires[_activeAttempt]?.close();
+    await closeActiveWire();
     _wires.clear();
+  }
+
+  Future<void> closeActiveWire() async {
+    await _wires[_activeAttempt]?.closeAndLeave();
   }
 }
 
@@ -218,6 +224,7 @@ final class MeetingConnectionWire implements ConnectionWire {
   int _sendSequence = 0, _receiveSequence = 0, _queued = 0;
   int _limit = 8192;
   bool _closed = false;
+  Future<void>? _leaving;
   void Function()? onClosed;
 
   @override
@@ -307,14 +314,23 @@ final class MeetingConnectionWire implements ConnectionWire {
     if (_closed) return;
     _closed = true;
     _cancellation.cancel();
-    unawaited(
-      _transport
-          .post('/v1/meet/leave', {
-            'token': _token,
-            'attempt': _attempt,
-          }, AuxiliaryCancellation())
-          .then<void>((_) {}, onError: (Object _) {}),
-    );
+    _leaving = _transport
+        .post('/v1/meet/leave', {
+          'token': _token,
+          'attempt': _attempt,
+        }, AuxiliaryCancellation())
+        .then<void>((_) {}, onError: (Object _) {});
     onClosed?.call();
+  }
+
+  /// Local authority is revoked immediately; the owner keeps the transport
+  /// briefly alive so the service can remove an otherwise long-lived session.
+  Future<void> closeAndLeave() async {
+    close();
+    try {
+      await _leaving?.timeout(const Duration(seconds: 2));
+    } on TimeoutException {
+      // Network loss cannot delay local cancellation indefinitely.
+    }
   }
 }

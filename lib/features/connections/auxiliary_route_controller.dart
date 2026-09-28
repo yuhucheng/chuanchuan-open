@@ -59,9 +59,13 @@ final class _SignalOwner {
   Future<void> close({bool immediate = false}) async {
     if (closed) return;
     closed = true;
-    wire?.close();
+    final closingWire = wire;
+    closingWire?.close();
     cancellation.cancel();
     try {
+      if (closingWire is MeetingConnectionWire) {
+        await closingWire.closeAndLeave();
+      }
       final leaving = channel?.close();
       if (leaving != null) {
         if (immediate) {
@@ -136,7 +140,9 @@ final class MeetingRoute {
     _cleanup();
   }
 
-  void activeWireClosed() => _cleanup();
+  void activeWireClosed() {
+    unawaited(listing.closeActiveWire().whenComplete(_cleanup));
+  }
 
   void _cleanup() {
     if (_closed) return;
