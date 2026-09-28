@@ -111,6 +111,7 @@ final class _MeetingService implements AuxiliaryTransport {
         }
         return {'closed': true};
       case '/v1/meet/unpublish':
+        code = null;
         return {'closed': true};
       default:
         throw const AuxiliaryFailure('invalid_request');
@@ -444,12 +445,16 @@ void main() {
 
   test('switching the selected origin cancels the old meeting retry', () async {
     final identity = await DeviceIdentity.fromSeed(List.filled(32, 77));
-    final service = _MeetingService(identity)..publishFailures = 100;
+    final oldService = _MeetingService(identity)..publishFailures = 100;
+    final newService = _MeetingService(identity);
     final routes = AuxiliaryRouteController(
       identity: () async => identity,
       officialOrigin: 'https://official.example',
       store: _Store(),
-      transportFactory: (_) => (transport: service, close: () {}),
+      transportFactory: (origin) => (
+        transport: origin.host == 'official.example' ? oldService : newService,
+        close: () {},
+      ),
     );
     final host = ConnectionController(
       _Platform(identity),
@@ -462,20 +467,82 @@ void main() {
       host.dispose();
     });
     await host.open();
-    for (var i = 0; i < 100 && service.publishAttempts == 0; i++) {
+    for (var i = 0; i < 100 && oldService.publishAttempts == 0; i++) {
       await Future<void>.delayed(const Duration(milliseconds: 1));
     }
-    expect(service.publishAttempts, 1);
+    expect(oldService.publishAttempts, 1);
+    final oldCode = host.code;
     await routes.select(
       const AuxiliaryRouteChoice(
         AuxiliaryRouteMode.custom,
         'https://lan.example',
       ),
     );
-    await Future<void>.delayed(const Duration(milliseconds: 150));
-    expect(service.publishAttempts, 1);
-    expect(host.code, isNotNull);
+    for (var i = 0; i < 100 && newService.code == null; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect(oldService.publishAttempts, 1);
+    expect(newService.code, isNotNull);
+    expect(host.code, newService.code);
+    expect(host.code, isNot(oldCode));
   });
+
+  test(
+    'switching origin withdraws a published code before republishing',
+    () async {
+      final identity = await DeviceIdentity.fromSeed(List.filled(32, 79));
+      final oldService = _MeetingService(identity);
+      final newService = _MeetingService(identity);
+      final routes = AuxiliaryRouteController(
+        identity: () async => identity,
+        officialOrigin: 'https://official.example',
+        store: _Store(),
+        transportFactory: (origin) => (
+          transport: origin.host == 'official.example'
+              ? oldService
+              : newService,
+          close: () {},
+        ),
+      );
+      final host = ConnectionController(
+        _Platform(identity),
+        auxiliaryRoutes: routes,
+      );
+      addTearDown(() async {
+        await host.disconnectAll();
+        await routes.stop();
+        host.dispose();
+      });
+      await host.open();
+      for (var i = 0; i < 100 && oldService.code == null; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      final oldCode = host.code;
+      expect(oldService.code, oldCode);
+      await routes.select(
+        const AuxiliaryRouteChoice(
+          AuxiliaryRouteMode.custom,
+          'http://invalid.example',
+        ),
+      );
+      expect(host.code, oldCode);
+      expect(oldService.code, oldCode);
+      expect(newService.code, isNull);
+      await routes.select(
+        const AuxiliaryRouteChoice(
+          AuxiliaryRouteMode.custom,
+          'https://lan.example',
+        ),
+      );
+      for (var i = 0; i < 100 && newService.code == null; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(oldService.code, isNull);
+      expect(newService.code, isNotNull);
+      expect(host.code, newService.code);
+      expect(host.code, isNot(oldCode));
+    },
+  );
 
   test(
     'switching the selected origin cancels an in-flight code join',

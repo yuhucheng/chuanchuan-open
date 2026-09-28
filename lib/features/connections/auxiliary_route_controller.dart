@@ -175,6 +175,7 @@ final class AuxiliaryRouteController extends ChangeNotifier {
 
   /// Changes whenever the selected origin or its ownership is replaced.
   int get selectionRevision => _revision;
+  bool get stopped => _stopped;
   final AuxiliaryTransportFactory _transportFactory;
   RelayCredentialOwner? _owner;
   Uri? _selectedUri;

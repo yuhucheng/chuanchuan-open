@@ -96,6 +96,7 @@ class ConnectionController extends ChangeNotifier {
   MeetingRoute? _meetingRoute;
   AuxiliaryCancellation? _meetingCancellation;
   AuxiliaryCancellation? _meetingJoinCancellation;
+  int? _observedRouteRevision;
   Timer? _timer;
   bool _disposed = false;
   bool _disconnecting = false;
@@ -284,6 +285,10 @@ class ConnectionController extends ChangeNotifier {
 
     try {
       await routes.ensureLoaded();
+      if (_observedRouteRevision == null) {
+        _observedRouteRevision = routes.selectionRevision;
+        routes.addListener(_onAuxiliaryRouteChanged);
+      }
       selectionRevision = routes.selectionRevision;
       routes.addListener(cancelOnOriginChange);
       var retry = 0;
@@ -359,6 +364,27 @@ class ConnectionController extends ChangeNotifier {
         _meetingCancellation = null;
       }
     }
+  }
+
+  void _onAuxiliaryRouteChanged() {
+    final routes = auxiliaryRoutes;
+    if (routes == null || _observedRouteRevision == routes.selectionRevision) {
+      return;
+    }
+    _observedRouteRevision = routes.selectionRevision;
+    _meetingCancellation?.cancel();
+    if (_disposed ||
+        _shutdownRequested ||
+        _disconnecting ||
+        routes.stopped ||
+        busy ||
+        !accepting ||
+        code == null) {
+      return;
+    }
+    // _open synchronously revokes the displayed offer before its first await.
+    // A new code is published only after old admission cleanup finishes.
+    unawaited(open());
   }
 
   Future<bool> _meetingOfferValid(
@@ -916,6 +942,7 @@ class ConnectionController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    auxiliaryRoutes?.removeListener(_onAuxiliaryRouteChanged);
     _generation++;
     _attempt?.cancel();
     _meetingJoinCancellation?.cancel();
