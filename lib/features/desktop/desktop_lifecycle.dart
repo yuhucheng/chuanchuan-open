@@ -191,8 +191,8 @@ class DesktopLifecycle extends ChangeNotifier {
     } on TimeoutException {
       _exitLog('TIMEOUT $name');
       rethrow;
-    } catch (error) {
-      _exitLog('fail  $name: $error');
+    } catch (_) {
+      _exitLog('fail  $name: cleanup-error');
       rethrow;
     }
   }

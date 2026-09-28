@@ -34,6 +34,7 @@ void main() {
   Completer<void>? networkCloseGate;
   late Completer<void> networkCloseEntered;
   var failNetworkClose = false;
+  String? networkCloseFailureMessage;
   setUp(() async {
     calls = [];
     states = [];
@@ -44,6 +45,7 @@ void main() {
     networkCloseGate = null;
     networkCloseEntered = Completer<void>();
     failNetworkClose = false;
+    networkCloseFailureMessage = null;
     platform = FakePlatform();
     devices = DeviceController(platform);
     connections = ConnectionController(FakeConnectionPlatform());
@@ -75,6 +77,9 @@ void main() {
         calls.add('network-close');
         if (!networkCloseEntered.isCompleted) networkCloseEntered.complete();
         if (networkCloseGate != null) await networkCloseGate!.future;
+        if (networkCloseFailureMessage case final message?) {
+          throw StateError(message);
+        }
         if (failNetworkClose) throw StateError('network cleanup failed');
       },
       connectionSupported: false,
@@ -145,6 +150,19 @@ void main() {
       expect(states.last['controlActive'], isTrue);
     },
   );
+  test('exit diagnostics never include underlying cleanup exception text', () async {
+    const privateText = 'clipboard=测试内容 credential=fixture-secret';
+    networkCloseFailureMessage = privateText;
+    final lines = <String>[];
+    final previous = debugPrint;
+    debugPrint = (message, {wrapWidth}) => lines.add(message ?? '');
+    addTearDown(() => debugPrint = previous);
+
+    expect(await lifecycle.requestExit(), isFalse);
+    expect(lines.any((line) => line.contains('fail  close-network-transfers')),
+        isTrue);
+    expect(lines.join('\n'), isNot(contains(privateText)));
+  });
   test(
     'exit waits for remote input release and retries failed cleanup',
     () async {
