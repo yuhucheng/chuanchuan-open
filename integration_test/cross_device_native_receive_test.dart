@@ -1,5 +1,5 @@
-// Opt-in Mac receiver for tool/cross_device_file_wire_test.dart on Windows.
-// The pairing handshake and report paths must be in this app's writable sandbox.
+// Opt-in desktop receiver for tool/cross_device_file_wire_test.dart on the
+// other computer. Handshake and report paths must be writable by this app.
 // Pass WIRE_HOST, WIRE_HANDSHAKE and WIRE_REPORT with --dart-define.
 import 'dart:async';
 import 'dart:convert';
@@ -42,10 +42,10 @@ final class _ProbePlatform implements ConnectionPlatform {
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('Windows sends through authenticated TCP to Mac native store', (
+  testWidgets('peer sends through authenticated TCP to native store', (
     tester,
   ) async {
-    expect(Platform.isMacOS, isTrue);
+    expect(Platform.isMacOS || Platform.isWindows, isTrue);
     expect(_host, isNotEmpty);
     expect(_handshakePath, isNotEmpty);
     expect(_reportPath, isNotEmpty);
