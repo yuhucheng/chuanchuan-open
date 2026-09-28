@@ -10,10 +10,11 @@ final class _Platform implements ConnectionPlatform {
   _Platform(this.device, {this.failAdvertisement = false});
   final DeviceIdentity device;
   final bool failAdvertisement;
+  int time = 1000000;
   @override
   Future<DeviceIdentity> identity() async => device;
   @override
-  Future<int> now() async => 1000000;
+  Future<int> now() async => time;
   @override
   Future<String?> advertise(int? port, String? key) async {
     if (port != null && failAdvertisement) {
@@ -44,8 +45,10 @@ final class _MeetingService implements AuxiliaryTransport {
   bool activated = false;
   int publishFailures = 0;
   int publishAttempts = 0;
+  final publishedTtls = <String?>[];
   int pendingFailures = 0;
   int forgottenListings = 0;
+  void Function()? onForget;
   bool publishCollision = false;
   Completer<void>? joinGate;
   final joinStarted = Completer<void>();
@@ -66,6 +69,7 @@ final class _MeetingService implements AuxiliaryTransport {
         return {'deviceId': host.id};
       case '/v1/meet/publish':
         publishAttempts++;
+        publishedTtls.add(body['ttlSeconds']);
         if (publishCollision) {
           throw const AuxiliaryFailure('entry_unavailable');
         }
@@ -87,6 +91,7 @@ final class _MeetingService implements AuxiliaryTransport {
         if (forgottenListings > 0) {
           forgottenListings--;
           code = null;
+          onForget?.call();
           throw const AuxiliaryFailure('entry_unavailable');
         }
         if (pendingFailures > 0) {
@@ -458,6 +463,8 @@ void main() {
     () async {
       final identity = await DeviceIdentity.fromSeed(List.filled(32, 76));
       final service = _MeetingService(identity)..forgottenListings = 1;
+      final platform = _Platform(identity);
+      service.onForget = () => platform.time += 200000000;
       final routes = AuxiliaryRouteController(
         identity: () async => identity,
         officialOrigin: 'https://official.example',
@@ -465,7 +472,7 @@ void main() {
         transportFactory: (_) => (transport: service, close: () {}),
       );
       final host = ConnectionController(
-        _Platform(identity),
+        platform,
         auxiliaryRoutes: routes,
         meetingRetryBackoff: const [Duration(milliseconds: 20)],
       );
@@ -480,6 +487,7 @@ void main() {
         await Future<void>.delayed(const Duration(milliseconds: 10));
       }
       expect(service.publishAttempts, 2);
+      expect(service.publishedTtls, ['300', '100']);
       expect(service.code, originalCode);
       expect(host.code, originalCode);
       expect(host.message, contains('会合入口已恢复'));

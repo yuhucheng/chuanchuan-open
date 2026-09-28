@@ -24,12 +24,25 @@ final class MeetingServiceClient {
     if (!identical(offer, host.offer)) {
       throw const AuxiliaryFailure('cancelled');
     }
+    final now = await host.clock();
+    if (!identical(offer, host.offer) || !offer.reservable(now)) {
+      throw const AuxiliaryFailure('admission_closed');
+    }
+    // Use the original continuous-clock deadline even after a service restart.
+    // The server gets only the remaining seconds, not a fresh five minutes;
+    // endpoint admission still enforces the exact deadline during network lag.
+    final ttlSeconds =
+        (offer.issuedMicros + offerLifetime.inMicroseconds - now) ~/ 1000000;
+    if (ttlSeconds < 1) {
+      throw const AuxiliaryFailure('admission_closed');
+    }
     final service = AuxiliaryServiceClient(transport);
     try {
       final response = await service.publishMeeting(
         host.identity,
         offer.code,
         offerId: offer.id,
+        ttlSeconds: ttlSeconds,
         cancellation: cancellation,
       );
       final token = response['token'];

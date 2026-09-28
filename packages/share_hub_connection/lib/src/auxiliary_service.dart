@@ -253,6 +253,7 @@ final class AuxiliaryServiceClient {
     DeviceIdentity identity,
     String code, {
     required String offerId,
+    required int ttlSeconds,
     required AuxiliaryCancellation cancellation,
   }) async {
     return _prove(
@@ -260,7 +261,11 @@ final class AuxiliaryServiceClient {
       'meet',
       '/v1/meet/publish',
       cancellation,
-      extraFields: {'code': code, 'offerId': offerId},
+      extraFields: {
+        'code': code,
+        'offerId': offerId,
+        'ttlSeconds': ttlSeconds.toString(),
+      },
     );
   }
 

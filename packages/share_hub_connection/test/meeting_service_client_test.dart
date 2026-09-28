@@ -68,6 +68,7 @@ final class _LostPublishTransport implements AuxiliaryTransport {
   _LostPublishTransport(this.identity);
   final DeviceIdentity identity;
   String? publishedOffer;
+  final publishedTtls = <String?>[];
   bool withdrawn = false;
 
   @override
@@ -87,6 +88,7 @@ final class _LostPublishTransport implements AuxiliaryTransport {
         return {'deviceId': identity.id};
       case '/v1/meet/publish':
         publishedOffer = body['offerId'];
+        publishedTtls.add(body['ttlSeconds']);
         throw const AuxiliaryFailure('cancelled');
       case '/v1/meet/unpublish-owned':
         if (body['offerId'] != publishedOffer) {
@@ -162,6 +164,32 @@ void main() {
       );
       expect(transport.publishedOffer, host.offer!.id);
       expect(transport.withdrawn, isTrue);
+    },
+  );
+
+  test(
+    're-publishing one offer carries only its original remaining life',
+    () async {
+      final identity = await DeviceIdentity.fromSeed(List.filled(32, 54));
+      var now = 1000000;
+      final host = PairingHost(
+        identity: identity,
+        clock: () async => now,
+        onConnection: (_) {},
+        protocolVersion: 2,
+      );
+      addTearDown(host.close);
+      await host.open(address: InternetAddress.loopbackIPv4);
+      final transport = _LostPublishTransport(identity);
+      for (final elapsedSeconds in [0, 200]) {
+        now = 1000000 + elapsedSeconds * 1000000;
+        await expectLater(
+          MeetingServiceClient(transport)
+              .publish(host, cancellation: AuxiliaryCancellation()),
+          throwsA(isA<AuxiliaryFailure>()),
+        );
+      }
+      expect(transport.publishedTtls, ['300', '100']);
     },
   );
 
