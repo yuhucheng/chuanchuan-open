@@ -31,6 +31,8 @@ final class _RelayTransport implements AuxiliaryTransport {
   final queue = <String, List<String>>{};
   final nonce = base64Url.encode(List<int>.generate(32, (i) => i + 32));
   Completer<void>? joinGate;
+  Completer<void>? peerGate;
+  final peerRequested = Completer<void>();
   int forwarded = 0;
   bool failSendAck = false;
 
@@ -94,6 +96,8 @@ final class _RelayTransport implements AuxiliaryTransport {
       };
     }
     if (path == '/v1/signal/peer') {
+      if (!peerRequested.isCompleted) peerRequested.complete();
+      if (peerGate case final gate?) await gate.future;
       final sender = joined[body['token']];
       final peer = identities.singleWhere((item) => item.encodedKey != sender);
       return {'publicKey': peer.encodedKey, 'address': '198.51.100.2'};
@@ -225,6 +229,52 @@ void main() {
     transport.joinGate!.complete();
     await expectLater(opening, throwsA(isA<AuxiliaryFailure>()));
     expect(transport.joined, isEmpty);
+  });
+
+  test('cancelled peer lookup discards a late address response', () async {
+    final alice = await DeviceIdentity.fromSeed(List<int>.filled(32, 1));
+    final bob = await DeviceIdentity.fromSeed(List<int>.filled(32, 2));
+    final binding = GrantBinding(
+      id: List<int>.filled(32, 3),
+      initiatorKey: alice.publicKey.bytes,
+      receiverKey: bob.publicKey.bytes,
+    );
+    final grant = GrantEndpoint.fromAuthenticatedPairing(
+      binding: binding,
+      role: GrantRole.initiator,
+      establishedMicros: 0,
+      recoverySecret: List<int>.filled(32, 4),
+      clock: () async => 0,
+      onInvalidated: () {},
+    );
+    final transport = _RelayTransport([alice, bob]);
+    final client = RelayServiceClient(transport);
+    final channel = await client.open(
+      grant,
+      alice,
+      cancellation: AuxiliaryCancellation(),
+    );
+    await client.open(
+      GrantEndpoint.fromAuthenticatedPairing(
+        binding: binding,
+        role: GrantRole.receiver,
+        establishedMicros: 0,
+        recoverySecret: List<int>.filled(32, 4),
+        clock: () async => 0,
+        onInvalidated: () {},
+      ),
+      bob,
+      cancellation: AuxiliaryCancellation(),
+    );
+    await channel.awaitReady();
+    transport.peerGate = Completer<void>();
+    final lookupCancellation = AuxiliaryCancellation();
+    final lookup = channel.peerAddress(requestCancellation: lookupCancellation);
+    await transport.peerRequested.future;
+    lookupCancellation.cancel();
+    transport.peerGate!.complete();
+    await expectLater(lookup, throwsA(isA<AuxiliaryFailure>()));
+    await channel.close();
   });
 
   test('lost send acknowledgement closes both local and server room', () async {
