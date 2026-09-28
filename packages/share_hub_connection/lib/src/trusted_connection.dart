@@ -472,6 +472,7 @@ class TrustedConnection implements SessionTransport {
           'reason': 'revoked',
         });
         await epoch.channel.wire.flush();
+        await epoch.channel.wire.closeGracefully();
       })().timeout(const Duration(milliseconds: 200));
     } catch (_) {
       /* Local revocation does not wait for delivery. */

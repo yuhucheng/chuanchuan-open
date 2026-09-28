@@ -93,6 +93,14 @@ final class _SelectedSignalWire implements ConnectionWire {
   @override
   Future<void> flush() => _wire.flush();
   @override
+  Future<void> closeGracefully() async {
+    try {
+      await _wire.closeGracefully();
+    } finally {
+      await _owner.close();
+    }
+  }
+  @override
   Future<Map<String, dynamic>> next() async {
     try {
       return await _wire.next();

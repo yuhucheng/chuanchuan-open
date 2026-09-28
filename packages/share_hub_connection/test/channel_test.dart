@@ -57,6 +57,21 @@ void main() {
     left.socket.add([0x7f, 0xff, 0xff, 0xff]);
     await expectLater(right.next(), throwsA(isA<ConnectionFailure>()));
   });
+  test('flushed final session frame reaches peer before close', () async {
+    final sender = await CipherChannel.create(left, List.filled(32, 1), [
+      5,
+    ], host: true);
+    final receiver = await CipherChannel.create(right, List.filled(32, 1), [
+      5,
+    ], host: false);
+    await sender.send({'type': 'connection-revoked', 'reason': 'revoked'});
+    await left.flush();
+    await left.closeGracefully();
+    expect(await receiver.next().timeout(const Duration(seconds: 2)), {
+      'type': 'connection-revoked',
+      'reason': 'revoked',
+    });
+  });
   test(
     'concurrent sends remain ordered and snapshot mutable caller data',
     () async {

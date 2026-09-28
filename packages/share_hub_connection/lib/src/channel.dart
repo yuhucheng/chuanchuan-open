@@ -13,6 +13,7 @@ abstract interface class ConnectionWire {
   Future<Map<String, dynamic>> next();
   void send(Map<String, dynamic> message);
   Future<void> flush();
+  Future<void> closeGracefully();
   void close();
 }
 
@@ -103,6 +104,15 @@ class WireChannel implements ConnectionWire {
 
   @override
   Future<void> flush() => socket.flush();
+
+  @override
+  Future<void> closeGracefully() async {
+    if (_closed) return;
+    await socket.close();
+    _ended();
+    _frames.clear();
+    await _subscription.cancel();
+  }
 
   void _ended() {
     if (_closed) return;

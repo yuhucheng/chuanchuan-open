@@ -384,6 +384,12 @@ final class RelayConnectionWire implements ConnectionWire {
   }
 
   @override
+  Future<void> closeGracefully() {
+    close();
+    return Future.value();
+  }
+
+  @override
   void close() {
     if (_closed) return;
     _closed = true;
