@@ -32,6 +32,7 @@ class _DialogConnections extends ConnectionController {
   TrustedConnection? nextResult;
   Completer<TrustedConnection?>? pending;
   String? expectedKey;
+  String? submittedCode;
   int connects = 0, cancels = 0, revision = 0;
   @override
   List<TrustedConnection> get sessions => List.unmodifiable(visible);
@@ -59,6 +60,15 @@ class _DialogConnections extends ConnectionController {
     final result = await (pending?.future ?? Future.value(nextResult));
     if (current != revision) return null;
     busy = false;
+    if (result != null) visible.add(result);
+    notifyListeners();
+    return result;
+  }
+
+  @override
+  Future<TrustedConnection?> connectByCode(String shortCode) async {
+    submittedCode = shortCode;
+    final result = nextResult;
     if (result != null) visible.add(result);
     notifyListeners();
     return result;
@@ -225,6 +235,26 @@ void main() {
     await tester.tap(find.byKey(ValueKey('device-${incoming.peerKey}')));
     await tester.pumpAndSettle();
   }
+
+  testWidgets('request watch accepts only a short code without an address', (
+    tester,
+  ) async {
+    final (connections, remote, _) = await mount(tester);
+    connections.nextResult = outgoing;
+    await tester.tap(find.text('请求观看 · 输入对方短接码'));
+    await tester.pumpAndSettle();
+    final fields = find.descendant(
+      of: find.byType(AlertDialog),
+      matching: find.byType(TextField),
+    );
+    expect(fields, findsNWidgets(3));
+    await tester.enterText(fields.last, '123456');
+    await tester.tap(find.text('连接'));
+    await tester.pumpAndSettle();
+    expect(connections.submittedCode, '123456');
+    expect(connections.connects, 0);
+    expect(remote.starts, [(SessionOperation.watch, outgoing.peerKey)]);
+  });
 
   testWidgets(
     'receiver direction requests a new code and cancel keeps the old connection',

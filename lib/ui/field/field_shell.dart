@@ -249,6 +249,21 @@ class _FieldShellState extends State<FieldShell> {
                               );
                             },
                           ),
+                          if (_connectionSupported &&
+                              widget.remote.offeredOperations.contains(
+                                SessionOperation.watch.name,
+                              ))
+                            Padding(
+                              padding: const EdgeInsets.only(top: 16),
+                              child: FilledButton.icon(
+                                onPressed:
+                                    widget.connections.busy || widget.remote.occupied
+                                    ? null
+                                    : _requestWatchByCode,
+                                icon: const Icon(Icons.visibility_outlined),
+                                label: const Text('请求观看 · 输入对方短接码'),
+                              ),
+                            ),
                           const Text('设备名称不是身份凭证'),
                         ],
                       ),
@@ -262,6 +277,29 @@ class _FieldShellState extends State<FieldShell> {
       ),
     ),
   );
+  Future<void> _requestWatchByCode() async {
+    final connection = await showConnectionDialog(
+      context,
+      widget.connections,
+      nextActionLabel: '观看对方屏幕',
+    );
+    if (!mounted ||
+        connection == null ||
+        connection.isClosed ||
+        connection.grant?.role != GrantRole.initiator ||
+        !widget.connections.sessions.any((s) => identical(s, connection))) {
+      return;
+    }
+    await widget.remote.start(
+      SessionOperation.watch,
+      peerKey: connection.peerKey,
+      label: _directory()
+          .where((device) => device.publicKey == connection.peerKey)
+          .firstOrNull
+          ?.name,
+    );
+  }
+
   Future<void> localActions() => showDialog<void>(
     context: context,
     builder: (context) => AlertDialog(
