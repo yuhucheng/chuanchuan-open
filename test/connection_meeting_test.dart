@@ -7,14 +7,20 @@ import 'package:share_hub_open/features/connections/auxiliary_route_controller.d
 import 'package:share_hub_open/features/connections/connection_controller.dart';
 
 final class _Platform implements ConnectionPlatform {
-  _Platform(this.device);
+  _Platform(this.device, {this.failAdvertisement = false});
   final DeviceIdentity device;
+  final bool failAdvertisement;
   @override
   Future<DeviceIdentity> identity() async => device;
   @override
   Future<int> now() async => 1000000;
   @override
-  Future<String?> advertise(int? port, String? key) async => null;
+  Future<String?> advertise(int? port, String? key) async {
+    if (port != null && failAdvertisement) {
+      throw StateError('local discovery unavailable');
+    }
+    return null;
+  }
 }
 
 final class _Store implements AuxiliaryRouteStore {
@@ -193,7 +199,7 @@ void main() {
   });
 
   test(
-    'two new clients connect by six digits through selected origin',
+    'two new clients connect by six digits when local discovery fails',
     () async {
       final hostIdentity = await DeviceIdentity.fromSeed(List.filled(32, 61));
       final clientIdentity = await DeviceIdentity.fromSeed(List.filled(32, 62));
@@ -218,7 +224,7 @@ void main() {
       final hostRoute = route(hostIdentity);
       final clientRoute = route(clientIdentity);
       final host = ConnectionController(
-        _Platform(hostIdentity),
+        _Platform(hostIdentity, failAdvertisement: true),
         auxiliaryRoutes: hostRoute,
       );
       final client = ConnectionController(
@@ -238,6 +244,8 @@ void main() {
         await Future<void>.delayed(const Duration(milliseconds: 10));
       }
       expect(service.code, host.code);
+      expect(host.accepting, isTrue);
+      expect(host.problem, contains('局域网自动发现不可用'));
       final connection = await client.connectByCode(host.code!);
       expect(connection, isNotNull);
       expect(service.activated, isTrue);

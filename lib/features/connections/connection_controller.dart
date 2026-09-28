@@ -220,7 +220,15 @@ class ConnectionController extends ChangeNotifier {
         if (identical(_host, host)) await _clearAdvertisement();
         return;
       }
-      final hostname = await platform.advertise(host.port, identity.encodedKey);
+      // Local discovery is independent of the selected first-pairing meeting.
+      // A missing mDNS permission must not prevent a code-only WAN connection.
+      String? hostname;
+      var discoveryFailed = false;
+      try {
+        hostname = await platform.advertise(host.port, identity.encodedKey);
+      } catch (_) {
+        discoveryFailed = true;
+      }
       if (_disposed || _shutdownRequested || generation != _generation) {
         await host.stopAccepting();
         if (identical(_host, host)) await _clearAdvertisement();
@@ -228,6 +236,13 @@ class ConnectionController extends ChangeNotifier {
       }
       code = host.offer!.code;
       address = hostname == null ? null : '$hostname:${host.port}';
+      if (discoveryFailed) {
+        _notice = ConnectionNotice.problem(
+          auxiliaryRoutes == null
+              ? '局域网自动发现不可用，请检查本地网络权限。'
+              : '局域网自动发现不可用；短接码仍可尝试通过所选辅助服务会合。',
+        );
+      }
       if (auxiliaryRoutes != null) {
         unawaited(
           _startTracked<void>(() => _publishMeeting(host, host.offer!)),
