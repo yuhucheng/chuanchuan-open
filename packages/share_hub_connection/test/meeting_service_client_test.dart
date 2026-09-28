@@ -14,6 +14,7 @@ final class _MeetingTransport implements AuxiliaryTransport {
   final toHost = <Map<String, Object?>>[];
   final toJoiner = <Map<String, Object?>>[];
   bool active = false;
+  bool closed = false;
 
   static String base64Token(int count, int value) =>
       base64Url.encode(List<int>.filled(count, value));
@@ -45,6 +46,7 @@ final class _MeetingTransport implements AuxiliaryTransport {
       case '/v1/meet/poll':
         final source = body['token'] == hostToken ? toHost : toJoiner;
         if (source.isNotEmpty) return source.removeAt(0);
+        if (closed) throw const AuxiliaryFailure('entry_unavailable');
         await Future<void>.delayed(const Duration(milliseconds: 5));
         cancellation.throwIfCancelled();
         return {'pending': true};
@@ -52,6 +54,8 @@ final class _MeetingTransport implements AuxiliaryTransport {
         active = true;
         return {'active': true};
       case '/v1/meet/leave':
+        closed = true;
+        return {'closed': true};
       case '/v1/meet/unpublish':
         return {'closed': true};
       default:
@@ -157,5 +161,89 @@ void main() {
     expect(accepted, hasLength(1));
     expect(client.grant!.binding.policy.type, 'short-code');
     expect(client.peerKey, hostIdentity.encodedKey);
+    accepted.single.close();
+    await client.whenClosed.timeout(const Duration(seconds: 2));
+    expect(client.isClosed, isTrue);
+  });
+
+  test(
+    'misrouted code cannot authenticate a different receiving host',
+    () async {
+      final intended = await DeviceIdentity.fromSeed(List.filled(32, 54));
+      final other = await DeviceIdentity.fromSeed(List.filled(32, 55));
+      final initiator = await DeviceIdentity.fromSeed(List.filled(32, 56));
+      final intendedHost = PairingHost(
+        identity: intended,
+        clock: () async => 1000000,
+        onConnection: (_) {},
+        protocolVersion: 2,
+      );
+      final otherConnections = <TrustedConnection>[];
+      final wrongHost = PairingHost(
+        identity: other,
+        clock: () async => 1000000,
+        onConnection: otherConnections.add,
+        protocolVersion: 2,
+      );
+      addTearDown(intendedHost.close);
+      addTearDown(wrongHost.close);
+      await intendedHost.open(address: InternetAddress.loopbackIPv4);
+      await wrongHost.open(address: InternetAddress.loopbackIPv4);
+      while (wrongHost.offer!.code == intendedHost.offer!.code) {
+        await wrongHost.refreshOffer();
+      }
+      final transport = _MeetingTransport(intendedHost.offer!.code);
+      final listing = MeetingListing(
+        transport,
+        wrongHost,
+        _MeetingTransport.hostToken,
+        AuxiliaryCancellation(),
+      );
+      addTearDown(listing.close);
+      final serving = listing.serve();
+      await expectLater(
+        PairingAttempt(
+          identity: initiator,
+          clock: () async => 1000000,
+          protocolVersion: 2,
+        ).connectWithWire(
+          () => MeetingServiceClient(transport).join(
+            intendedHost.offer!.code,
+            cancellation: AuxiliaryCancellation(),
+          ),
+          intendedHost.offer!.code,
+        ),
+        throwsA(isA<ConnectionFailure>()),
+      );
+      await listing.close();
+      await serving;
+      expect(transport.active, isFalse);
+      expect(otherConnections, isEmpty);
+    },
+  );
+
+  test('meeting wire rejects replayed receive sequence and closes', () async {
+    final transport = _MeetingTransport('123456');
+    final wire = MeetingConnectionWire(
+      transport,
+      _MeetingTransport.joinToken,
+      _MeetingTransport.attempt,
+    );
+    transport.toJoiner.addAll([
+      {'sequence': 0, 'frame': '{"v":2,"type":"hello"}'},
+      {'sequence': 0, 'frame': '{"v":2,"type":"replay"}'},
+    ]);
+    expect((await wire.next())['type'], 'hello');
+    await expectLater(
+      wire.next(),
+      throwsA(
+        isA<ConnectionFailure>().having(
+          (error) => error.code,
+          'code',
+          'invalid_message',
+        ),
+      ),
+    );
+    expect(wire.isClosed, isTrue);
   });
 }

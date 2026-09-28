@@ -8,7 +8,153 @@ import 'package:share_hub_connection/share_hub_connection.dart';
 import 'package:share_hub_session_api/share_hub_session_api.dart';
 import 'package:test/test.dart';
 
+final class _HoldingWire implements ConnectionWire {
+  final _pending = Completer<Map<String, dynamic>>();
+  bool _closed = false;
+  bool _reading = false;
+  @override
+  bool get isClosed => _closed;
+  @override
+  void enableSessionFrames() {}
+  @override
+  Future<Map<String, dynamic>> next() {
+    _reading = true;
+    return _pending.future;
+  }
+
+  @override
+  void send(Map<String, dynamic> message) => throw StateError('not used');
+  @override
+  Future<void> flush() async {}
+  @override
+  void close() {
+    if (_closed) return;
+    _closed = true;
+    if (_reading && !_pending.isCompleted) {
+      _pending.completeError(const ConnectionFailure('disconnected'));
+    }
+  }
+}
+
 void main() {
+  test(
+    'local TCP and injected meeting wires exhaust one five-attempt offer',
+    () async {
+      const now = 1000000;
+      final hostIdentity = await DeviceIdentity.fromSeed(List.filled(32, 61));
+      final clientIdentity = await DeviceIdentity.fromSeed(List.filled(32, 62));
+      final accepted = <TrustedConnection>[];
+      final host = PairingHost(
+        identity: hostIdentity,
+        clock: () async => now,
+        onConnection: accepted.add,
+        protocolVersion: 2,
+      );
+      addTearDown(host.close);
+      await host.open(address: InternetAddress.loopbackIPv4);
+      final bridge = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(bridge.close);
+      final hostResults = <Future<TrustedConnection?>>[];
+      bridge.listen(
+        (socket) => hostResults.add(host.acceptWire(WireChannel(socket))),
+      );
+      final code = host.offer!.code;
+      final wrong = code == '000000' ? '111111' : '000000';
+      PairingAttempt attempt() => PairingAttempt(
+        identity: clientIdentity,
+        clock: () async => now,
+        protocolVersion: 2,
+      );
+
+      await expectLater(
+        attempt().connect('127.0.0.1', host.port!, wrong),
+        throwsA(isA<ConnectionFailure>()),
+      );
+      for (var i = 0; i < 4; i++) {
+        await expectLater(
+          attempt().connectWithWire(
+            () async =>
+                WireChannel(await Socket.connect('127.0.0.1', bridge.port)),
+            wrong,
+          ),
+          throwsA(isA<ConnectionFailure>()),
+        );
+        expect(await hostResults.last, isNull);
+      }
+      expect(host.offer!.reservable(now), isFalse);
+      await expectLater(
+        attempt().connect('127.0.0.1', host.port!, code),
+        throwsA(isA<ConnectionFailure>()),
+      );
+      expect(accepted, isEmpty);
+    },
+  );
+
+  test(
+    'four pending local or meeting wires are the same host capacity',
+    () async {
+      final identity = await DeviceIdentity.fromSeed(List.filled(32, 63));
+      final host = PairingHost(
+        identity: identity,
+        clock: () async => 1000000,
+        onConnection: (_) {},
+        protocolVersion: 2,
+      );
+      addTearDown(host.close);
+      await host.open(address: InternetAddress.loopbackIPv4);
+      final wires = List.generate(4, (_) => _HoldingWire());
+      final pending = [for (final wire in wires) host.acceptWire(wire)];
+      final overflow = _HoldingWire();
+      expect(await host.acceptWire(overflow), isNull);
+      expect(overflow.isClosed, isTrue);
+      for (final wire in wires) {
+        wire.close();
+      }
+      expect(await Future.wait(pending), everyElement(isNull));
+      expect(host.offer!.reservable(1000000), isTrue);
+    },
+  );
+  test(
+    'rotating a host offer rejects the old code over an injected wire',
+    () async {
+      final hostIdentity = await DeviceIdentity.fromSeed(List.filled(32, 64));
+      final clientIdentity = await DeviceIdentity.fromSeed(List.filled(32, 65));
+      final accepted = <TrustedConnection>[];
+      final host = PairingHost(
+        identity: hostIdentity,
+        clock: () async => 1000000,
+        onConnection: accepted.add,
+        protocolVersion: 2,
+      );
+      addTearDown(host.close);
+      await host.open(address: InternetAddress.loopbackIPv4);
+      final bridge = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(bridge.close);
+      bridge.listen((socket) => host.acceptWire(WireChannel(socket)));
+      final oldCode = host.offer!.code;
+      do {
+        await host.refreshOffer();
+      } while (host.offer!.code == oldCode);
+      PairingAttempt attempt() => PairingAttempt(
+        identity: clientIdentity,
+        clock: () async => 1000000,
+        protocolVersion: 2,
+      );
+      Future<ConnectionWire> openWire() async =>
+          WireChannel(await Socket.connect('127.0.0.1', bridge.port));
+      await expectLater(
+        attempt().connectWithWire(openWire, oldCode),
+        throwsA(isA<ConnectionFailure>()),
+      );
+      expect(accepted, isEmpty);
+      final client = await attempt().connectWithWire(
+        openWire,
+        host.offer!.code,
+      );
+      addTearDown(client.close);
+      expect(accepted, hasLength(1));
+    },
+  );
   test(
     'first pairing reuses the same grant handshake on an injected wire',
     () async {
