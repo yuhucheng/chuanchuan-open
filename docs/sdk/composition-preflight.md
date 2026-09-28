@@ -33,9 +33,13 @@ The preflight also requires the draft bridge layout: the Flutter entrypoint,
 target platform hook and both public API snapshot `pubspec.yaml` files; native
 build metadata, a public header and a platform binary path; and referenced
 license/validation files in both roots. Snapshot identity fields must be present
-and well-formed. These are structural checks against the verified inventory,
-not proof that the files contain working code or that their self-reported
-provenance matches an independently trusted source.
+and well-formed. The SDK and both snapshot `pubspec.yaml` files must state the
+name and version declared in the outer manifest, and each snapshot version must
+appear in that API's exact `testedVersions`. This reads only simple top-level
+identity scalars; pub resolves the complete dependencies later. These checks
+compare bytes and declarations inside the same pinned package. They do not prove
+that the files contain working code or that their self-reported provenance
+matches an independently trusted source.
 
 The checked-in examples remain non-installable. Passing synthetic tests do not
 prove a working SDK: this component does not authenticate the source, extract a

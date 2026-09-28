@@ -32,11 +32,13 @@ class CompositionTests(unittest.TestCase):
         (self.native_root / "include/share_hub_media.h").write_text("// fixture")
         (self.native_root / "metadata/build.json").write_text("{}")
         (self.root / "lib/share_hub_media_sdk.dart").write_text("// fixture")
-        (self.root / "pubspec.yaml").write_text("name: share_hub_media_sdk\n")
+        (self.root / "pubspec.yaml").write_text(
+            "name: share_hub_media_sdk\nversion: 0.1.0-candidate.1\n")
         (self.root / "windows/CMakeLists.txt").write_text("# fixture")
         (self.root / "macos/Package.swift").write_text("// fixture")
         for name in ("share_hub_media_api", "share_hub_session_api"):
-            (self.root / f"public_api/{name}/pubspec.yaml").write_text(f"name: {name}\n")
+            (self.root / f"public_api/{name}/pubspec.yaml").write_text(
+                f"name: {name}\nversion: 0.1.0\n")
         for package in (self.root, self.native_root):
             (package / "licenses/LICENSE.sdk.txt").write_text("fixture license")
             (package / "licenses/THIRD_PARTY_NOTICES.txt").write_text("fixture notice")
@@ -248,6 +250,36 @@ class CompositionTests(unittest.TestCase):
                                        "licenses/THIRD_PARTY_NOTICES.txt"]
         self.outer["validationFile"] = "metadata/other.json"
         self.rejects("invalid_package_references")
+
+    def test_pubspec_identity_matches_outer_and_snapshot_declarations(self):
+        sdk = self.root / "pubspec.yaml"
+        sdk.write_text("name: share_hub_media_sdk\nversion: 0.1.0-candidate.2\n")
+        self.rejects("pubspec_manifest_mismatch")
+        sdk.write_text("name: share_hub_media_sdk\nversion: 0.1.0-candidate.1\n")
+        snapshot = self.root / "public_api/share_hub_media_api/pubspec.yaml"
+        snapshot.write_text("name: share_hub_media_api\nversion: 0.1.1\n")
+        self.rejects("pubspec_manifest_mismatch")
+        snapshot.write_text("name: share_hub_media_api\nversion: 0.1.0\n")
+        self.outer["publicSnapshots"][0]["version"] = "0.1.1"
+        self.rejects("pubspec_manifest_mismatch")
+        self.outer["publicSnapshots"][0]["version"] = "0.1.0"
+        self.outer["apiCompatibility"][0]["testedVersions"] = []
+        self.native["apiCompatibility"][0]["testedVersions"] = []
+        self.rejects("pubspec_manifest_mismatch")
+
+    def test_pubspec_identity_rejects_missing_duplicate_or_complex_scalars(self):
+        snapshot = self.root / "public_api/share_hub_media_api/pubspec.yaml"
+        for raw in (
+            "name: share_hub_media_api\n",
+            "name: share_hub_media_api\nversion: 0.1.0\nversion: 0.1.0\n",
+            "name: share_hub_media_api\nversion: 0.1.0\nname : other\n",
+            "name: share_hub_media_api\nversion: 0.1.0\n'name': other\n",
+            "name: share_hub_media_api\nversion: *version\n",
+            "name: share_hub_media_api\nversion: 0.1.0\n" + "#" * 65536,
+        ):
+            with self.subTest(raw=raw[:70]):
+                snapshot.write_text(raw)
+                self.rejects("invalid_pubspec_identity")
 
     def test_cli_uses_trusted_outer_hash(self):
         digest = self.write()

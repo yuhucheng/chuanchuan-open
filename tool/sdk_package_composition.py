@@ -13,9 +13,10 @@ import re
 import stat
 import sys
 
-from sdk_package_inventory import (HASH, InventoryError, MANIFEST, manifest_bytes,
-                                   open_at, parse_manifest, portable_path,
-                                   unique_object, invalid_constant, verify_inventory)
+from sdk_package_inventory import (HASH, InventoryError, MANIFEST, checked_regular,
+                                   manifest_bytes, open_at, parse_manifest,
+                                   portable_path, unique_object, invalid_constant,
+                                   verify_inventory)
 from sdk_package_compatibility import (CompatibilityError, APIS, draft_abi,
                                        names, os_version, version)
 
@@ -28,6 +29,7 @@ class CompositionError(Exception):
 
 ARTIFACT_ID = re.compile(r"[a-z0-9][a-z0-9.-]{0,127}\Z")
 PUBLIC_APIS = {"share_hub_media_api", "share_hub_session_api"}
+MAX_PUBSPEC_BYTES = 65536
 
 
 def _check_candidate_declarations(manifest, entries):
@@ -172,6 +174,66 @@ def _read_manifest(root_fd):
     return raw, manifest, files
 
 
+def _pubspec_identity(root_fd, relative):
+    """Read only the two simple top-level scalars needed for identity checks.
+
+    A distributable package must not require YAML aliases, tags or generated
+    values to state its name/version. Full dependency parsing remains pub's job.
+    """
+    try:
+        fd = open_at(root_fd, relative)
+        try:
+            info = checked_regular(fd)
+            if info.st_size > MAX_PUBSPEC_BYTES:
+                raise CompositionError("invalid_pubspec_identity")
+            raw = os.read(fd, MAX_PUBSPEC_BYTES + 1)
+            if len(raw) > MAX_PUBSPEC_BYTES or len(raw) != info.st_size:
+                raise CompositionError("invalid_pubspec_identity")
+        finally:
+            os.close(fd)
+        lines = raw.decode("utf-8").splitlines()
+    except (OSError, UnicodeError, InventoryError) as error:
+        raise CompositionError("invalid_pubspec_identity") from error
+    found = {}
+    for line in lines:
+        if line and not line[0].isspace() and not line.startswith("#") and \
+                line not in ("---", "...") and \
+                re.match(r"[A-Za-z_][A-Za-z0-9_-]*:", line) is None:
+            raise CompositionError("invalid_pubspec_identity")
+        match = re.fullmatch(r"(name|version):[ \t]*([^#\r\n]*?)[ \t]*(?:#.*)?", line)
+        if match is None:
+            continue
+        key, value = match.groups()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        if key in found or not value or len(value) > 128:
+            raise CompositionError("invalid_pubspec_identity")
+        found[key] = value
+    if set(found) != {"name", "version"}:
+        raise CompositionError("invalid_pubspec_identity")
+    if not re.fullmatch(r"[a-z][a-z0-9_]*", found["name"]):
+        raise CompositionError("invalid_pubspec_identity")
+    try:
+        version(found["version"])
+    except CompatibilityError as error:
+        raise CompositionError("invalid_pubspec_identity") from error
+    return found
+
+
+def _check_pubspec_identities(root_fd, outer):
+    identity = _pubspec_identity(root_fd, "pubspec.yaml")
+    if identity != {"name": "share_hub_media_sdk", "version": outer["sdkVersion"]}:
+        raise CompositionError("pubspec_manifest_mismatch")
+    tested = {entry["package"]: entry["testedVersions"]
+              for entry in outer["apiCompatibility"]}
+    for snapshot in outer["publicSnapshots"]:
+        identity = _pubspec_identity(root_fd, snapshot["directory"] + "/pubspec.yaml")
+        if identity != {"name": snapshot["package"], "version": snapshot["version"]} or \
+                snapshot["version"] not in tested[snapshot["package"]]:
+            raise CompositionError("pubspec_manifest_mismatch")
+
+
 def _native_directory(target):
     if not isinstance(target, dict):
         raise CompositionError("invalid_package_target")
@@ -250,6 +312,14 @@ def verify_composition(package_root, expected_manifest_sha256):
     _check_candidate_declarations(outer, outer_files)
     _check_candidate_declarations(native, native_files)
     _check_layout(outer, native, outer_files, native_files)
+    try:
+        root_fd = os.open(root_path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as error:
+        raise CompositionError("invalid_package_root") from error
+    try:
+        _check_pubspec_identities(root_fd, outer)
+    finally:
+        os.close(root_fd)
 
     # Verify the native tree independently, then ensure the outer tree still
     # matches the pinned identity. This is observation, not an atomic install.
