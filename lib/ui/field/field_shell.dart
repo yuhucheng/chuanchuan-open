@@ -257,7 +257,8 @@ class _FieldShellState extends State<FieldShell> {
                               padding: const EdgeInsets.only(top: 16),
                               child: FilledButton.icon(
                                 onPressed:
-                                    widget.connections.busy || widget.remote.occupied
+                                    widget.connections.busy ||
+                                        widget.remote.occupied
                                     ? null
                                     : _requestWatchByCode,
                                 icon: const Icon(Icons.visibility_outlined),
@@ -304,14 +305,11 @@ class _FieldShellState extends State<FieldShell> {
     context: context,
     builder: (context) => AlertDialog(
       title: const Text('本机与连接'),
-      content: SizedBox(
-        width: 480,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (_connectionSupported)
-                AnimatedBuilder(
+      content: _connectionSupported
+          ? SizedBox(
+              width: 480,
+              child: SingleChildScrollView(
+                child: AnimatedBuilder(
                   animation: Listenable.merge([
                     widget.connections,
                     widget.devices,
@@ -326,15 +324,18 @@ class _FieldShellState extends State<FieldShell> {
                         '已验证设备',
                   ),
                 ),
-              const SizedBox(height: 24),
-              const Divider(),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  '本机工具',
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
               ),
+            )
+          : null,
+      actions: [
+        SizedBox(
+          width: 480,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Divider(),
+              Text('本机工具', style: Theme.of(context).textTheme.titleLarge),
               const SizedBox(height: 12),
               Wrap(
                 spacing: 12,
@@ -361,14 +362,15 @@ class _FieldShellState extends State<FieldShell> {
                   ),
                 ],
               ),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('关闭'),
+                ),
+              ),
             ],
           ),
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('关闭'),
         ),
       ],
     ),

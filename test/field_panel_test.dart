@@ -171,6 +171,12 @@ void main() {
         ),
         findsOneWidget,
       );
+      final previewButton = tester.getRect(find.text('屏幕预览'));
+      final filesButton = tester.getRect(find.text('文件准备'));
+      expect(previewButton.top, greaterThanOrEqualTo(0));
+      expect(previewButton.bottom, lessThanOrEqualTo(640));
+      expect(filesButton.top, greaterThanOrEqualTo(0));
+      expect(filesButton.bottom, lessThanOrEqualTo(640));
       expect(
         find.descendant(
           of: find.byType(AlertDialog),
