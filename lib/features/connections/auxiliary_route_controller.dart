@@ -139,6 +139,7 @@ final class MeetingRoute {
   final AuxiliaryCancellation cancellation;
   final void Function() closeTransport, onClosed;
   bool _closed = false;
+  Future<void>? _closing;
 
   bool get admissionPending => listing.admissionPending;
   bool get activated => listing.activated;
@@ -152,8 +153,22 @@ final class MeetingRoute {
     }
   }
 
-  Future<void> close() async {
-    if (_closed) return;
+  Future<void> close() {
+    final pending = _closing;
+    if (pending != null) return pending;
+    final completion = Completer<void>();
+    _closing = completion.future;
+    unawaited(
+      _close().then(
+        (_) => completion.complete(),
+        onError: (Object error, StackTrace stack) =>
+            completion.completeError(error, stack),
+      ),
+    );
+    return completion.future;
+  }
+
+  Future<void> _close() async {
     try {
       await listing.close();
     } finally {
@@ -162,7 +177,7 @@ final class MeetingRoute {
   }
 
   void activeWireClosed() {
-    unawaited(listing.closeActiveWire().whenComplete(_cleanup));
+    unawaited(close());
   }
 
   void _cleanup() {

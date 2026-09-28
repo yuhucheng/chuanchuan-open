@@ -41,6 +41,7 @@ final class _MeetingService implements AuxiliaryTransport {
   final hostToken = token(32, 1);
   final joinToken = token(32, 2);
   final attempt = token(16, 3);
+  final extraAttempt = token(16, 5);
   final toHost = <Map<String, Object?>>[];
   final toJoiner = <Map<String, Object?>>[];
   String? code;
@@ -58,6 +59,8 @@ final class _MeetingService implements AuxiliaryTransport {
   final joinStarted = Completer<void>();
   Completer<void>? hostLeaveGate;
   final hostLeaveStarted = Completer<void>();
+  Completer<void>? extraPollGate;
+  final extraPollStarted = Completer<void>();
 
   @override
   Future<Map<String, Object?>> post(
@@ -107,7 +110,9 @@ final class _MeetingService implements AuxiliaryTransport {
         }
         if (activated) throw const AuxiliaryFailure('entry_unavailable');
         return {
-          'attempts': code == null ? <String>[] : [attempt],
+          'attempts': code == null
+              ? <String>[]
+              : [attempt, if (extraPollGate != null) extraAttempt],
         };
       case '/v1/meet/send':
         final target = body['token'] == hostToken ? toJoiner : toHost;
@@ -117,6 +122,13 @@ final class _MeetingService implements AuxiliaryTransport {
         });
         return {'accepted': true};
       case '/v1/meet/poll':
+        if (body['attempt'] == extraAttempt &&
+            body['token'] == hostToken &&
+            extraPollGate != null) {
+          if (!extraPollStarted.isCompleted) extraPollStarted.complete();
+          await extraPollGate!.future;
+          cancellation.throwIfCancelled();
+        }
         final source = body['token'] == hostToken ? toHost : toJoiner;
         if (source.isNotEmpty) return source.removeAt(0);
         await Future<void>.delayed(const Duration(milliseconds: 5));
@@ -302,7 +314,8 @@ void main() {
     () async {
       final hostIdentity = await DeviceIdentity.fromSeed(List.filled(32, 61));
       final clientIdentity = await DeviceIdentity.fromSeed(List.filled(32, 62));
-      final service = _MeetingService(hostIdentity);
+      final service = _MeetingService(hostIdentity)
+        ..extraPollGate = Completer<void>();
       var hostTransportClosed = false;
 
       AuxiliaryRouteController route(DeviceIdentity identity) =>
@@ -354,9 +367,10 @@ void main() {
         client.sessions.single.grant!.binding.encodedId,
         host.sessions.single.grant!.binding.encodedId,
       );
+      await service.extraPollStarted.future.timeout(const Duration(seconds: 2));
 
-      // Closing the active host connection must allow its leave to reach the
-      // service before disposing the HTTPS owner; local authority ends first.
+      // A second admission may still be unwinding when the established wire
+      // closes. The HTTPS owner must drain both before disposing transport.
       service.hostLeaveGate = Completer<void>();
       final hostConnection = host.sessions.single;
       hostConnection.close();
@@ -369,6 +383,9 @@ void main() {
       } finally {
         service.hostLeaveGate!.complete();
       }
+      await Future<void>.delayed(Duration.zero);
+      expect(hostTransportClosed, isFalse);
+      service.extraPollGate!.complete();
       for (var i = 0; i < 100 && !hostTransportClosed; i++) {
         await Future<void>.delayed(const Duration(milliseconds: 1));
       }
