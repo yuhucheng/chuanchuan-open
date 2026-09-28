@@ -72,6 +72,12 @@ abstract interface class AuxiliaryTransport {
   );
 }
 
+// The meeting service bounds the decoded frame at 128 KiB. A JSON response
+// may use six ASCII bytes for one control byte; leave a small fixed envelope
+// allowance without imposing a second, lower frame limit on the client.
+const meetingSessionFrameMaxBytes = 131072;
+const _meetingPollResponseMaxBytes = 6 * meetingSessionFrameMaxBytes + 1024;
+
 /// Desktop HTTPS transport. TLS verification uses the platform trust store.
 final class HttpsAuxiliaryTransport implements AuxiliaryTransport {
   factory HttpsAuxiliaryTransport(
@@ -148,7 +154,9 @@ final class HttpsAuxiliaryTransport implements AuxiliaryTransport {
       opened.add(payload);
       final response = await waitFor(opened.close());
       cancellation.throwIfCancelled();
-      final responseLimit = path == '/v1/signal/poll' || path == '/v1/meet/poll'
+      final responseLimit = path == '/v1/meet/poll'
+          ? _meetingPollResponseMaxBytes
+          : path == '/v1/signal/poll'
           ? 210000
           : 4096;
       final bytes = await waitFor(

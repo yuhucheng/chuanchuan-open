@@ -291,7 +291,7 @@ final class MeetingConnectionWire
   bool get isClosed => _closed;
 
   @override
-  void enableSessionFrames() => _limit = 131072;
+  void enableSessionFrames() => _limit = meetingSessionFrameMaxBytes;
 
   @override
   void send(Map<String, dynamic> message) {
