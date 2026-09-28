@@ -231,6 +231,11 @@ local link graph on POSIX hosts. It is not a full schema/compatibility/signature
 validator or installer, and every success still reports `installable: false`.
 Windows host traversal and remaining package gates are not implemented by it.
 
+The [read-only ZIP archive preflight](../../../../docs/sdk/archive-preflight.md)
+now checks independently pinned archive/manifest bytes and the exact ZIP entry
+inventory before extraction. It does not perform safe extraction, establish source
+trust or authorize installation; every success reports `installable: false`.
+
 The separate [declaration compatibility preflight](../../../../docs/sdk/compatibility-preflight.md)
 compares a pinned manifest with a caller-owned consumer policy. OS/CPU/minimum-OS
 and API/ABI/capability declarations receive distinct diagnostics; runtime/binary
