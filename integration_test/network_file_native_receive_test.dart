@@ -224,4 +224,103 @@ void main() {
     },
     timeout: const Timeout(Duration(minutes: 2)),
   );
+
+  testWidgets(
+    'changed source after TCP loss never publishes native receive file',
+    (tester) async {
+      expect(Platform.isWindows || Platform.isMacOS, isTrue);
+      final senderPlatform = _LiveClockPlatform();
+      final receiverPlatform = _LiveClockPlatform();
+      final receiverIdentity = await DeviceIdentity.fromSeed(
+        List<int>.filled(32, 104),
+      );
+      senderPlatform.seed.complete(
+        await DeviceIdentity.fromSeed(List<int>.filled(32, 103)),
+      );
+      receiverPlatform.seed.complete(receiverIdentity);
+      final sender = ConnectionController(senderPlatform);
+      final receiver = ConnectionController(receiverPlatform);
+      final selectedFiles = TestFileAccess();
+      final senderQueue = TransferQueue(selectedFiles);
+      final receiverQueue = TransferQueue(TestFileAccess());
+      final source = _CutAfterFirstAckSource(selectedFiles.data);
+      final sent = NetworkTransfers(
+        connections: sender,
+        queue: senderQueue,
+        source: source,
+        receive: MemoryReceiveAccess(),
+      );
+      final received = NetworkTransfers(
+        connections: receiver,
+        queue: receiverQueue,
+        source: MemorySourceAccess({}),
+        receive: MethodChannelReceiveAccess(),
+      );
+      ConnectionRelay? relay;
+      try {
+        await receiver.open();
+        relay = await ConnectionRelay.open(
+          receiverPlatform.advertisements.whereType<int>().last,
+        );
+        await sender.connect(
+          '127.0.0.1',
+          relay.port,
+          receiver.code!,
+          expectedPeerKey: receiverIdentity.encodedKey,
+        );
+        final bytes = Uint8List.fromList(
+          List<int>.generate(3 * 256 * 1024 + 13, (index) => index % 251),
+        );
+        final name =
+            'chuan-network-changed-${DateTime.now().microsecondsSinceEpoch}.bin';
+        selectedFiles.selection = [
+          SelectedFile(token: 'changed-source', name: name, size: bytes.length),
+        ];
+        selectedFiles.data['changed-source'] = bytes;
+        await senderQueue.selectFiles();
+        await drainQueue(senderQueue);
+        source.gatePass = source.passes + 2;
+        source.gateEntered = Completer<void>();
+        source.gateRelease = Completer<void>();
+        final job = sent.send(senderQueue.items.single, sender.sessions.single);
+        await source.gateEntered!.future.timeout(const Duration(seconds: 10));
+        expect(job.acknowledgedBytes, 256 * 1024);
+        final suspended = [sender.sessions.single, receiver.sessions.single]
+            .map(
+              (session) => session.phaseChanges.firstWhere(
+                (phase) => phase == ConnectionPhase.suspended,
+              ),
+            )
+            .toList();
+        relay.cut();
+        await Future.wait(suspended).timeout(const Duration(seconds: 5));
+        selectedFiles.data['changed-source'] = Uint8List(bytes.length);
+        source.gateRelease!.complete();
+        await job.done.timeout(const Duration(seconds: 20));
+        expect(job.phase, NetworkSendPhase.failed);
+        expect(job.error, contains('文件内容已变化'));
+        expect(job.receipt, isNull);
+        stdout.writeln('NATIVE_NETWORK_SOURCE_CHANGE_REPORT name=$name');
+      } finally {
+        if (source.gateRelease case final release?) {
+          if (!release.isCompleted) release.complete();
+        }
+        await Future.wait([sent.close(), received.close()]);
+        await Future.wait([
+          senderQueue.close(),
+          receiverQueue.close(),
+          sender.disconnectAll(),
+          receiver.disconnectAll(),
+        ]);
+        sent.dispose();
+        received.dispose();
+        senderQueue.dispose();
+        receiverQueue.dispose();
+        sender.dispose();
+        receiver.dispose();
+        await relay?.close();
+      }
+    },
+    timeout: const Timeout(Duration(minutes: 2)),
+  );
 }
