@@ -114,11 +114,20 @@ class ConnectionRecovery {
     final cancellation = _relayCancellation = AuxiliaryCancellation();
     ConnectionWire? wire;
     TrustedConnection? recovered;
+    Timer? receiverDeadline;
     try {
+      if (receiver) {
+        receiverDeadline = Timer(attemptTimeout, () {
+          cancellation.cancel();
+          wire?.close();
+        });
+      }
       await verifyIdentity();
       await _checkTime();
+      cancellation.throwIfCancelled();
       if (receiver) {
         wire = await opener(previous, cancellation);
+        cancellation.throwIfCancelled();
         await _checkTime();
         recovered = await previous.acceptRecoveryWire(wire, () {
           _current();
@@ -146,6 +155,7 @@ class ConnectionRecovery {
       wire?.close();
       return false;
     } finally {
+      receiverDeadline?.cancel();
       if (!_relayActive) cancellation.cancel();
       await _attempt?.settled;
       _attempt = null;

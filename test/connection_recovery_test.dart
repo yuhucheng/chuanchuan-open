@@ -93,6 +93,35 @@ class RecoveryProxy {
   }
 }
 
+final class SilentRecoveryWire implements ConnectionWire {
+  final _pending = Completer<Map<String, dynamic>>();
+  bool _closed = false;
+  bool _reading = false;
+
+  @override
+  bool get isClosed => _closed;
+  @override
+  void enableSessionFrames() {}
+  @override
+  Future<Map<String, dynamic>> next() {
+    _reading = true;
+    return _pending.future;
+  }
+
+  @override
+  void send(Map<String, dynamic> message) => throw StateError('not used');
+  @override
+  Future<void> flush() async {}
+  @override
+  void close() {
+    if (_closed) return;
+    _closed = true;
+    if (_reading && !_pending.isCompleted) {
+      _pending.completeError(const ConnectionFailure('disconnected'));
+    }
+  }
+}
+
 Future<void> until(bool Function() predicate) async {
   final limit = Stopwatch()..start();
   while (!predicate()) {
@@ -249,6 +278,37 @@ void main() {
       },
     );
   }
+
+  test('receiver times out a silent relay attempt and retries within original grant', () async {
+    await lose();
+    await proxy.close();
+    final wires = <SilentRecoveryWire>[];
+    final expiry = oldB.grant!.expiresMicros;
+    final recovery = ConnectionRecovery(
+      previous: oldB,
+      route: null,
+      clock: pb.now,
+      verifyIdentity: () async {},
+      onRecovered: (_) => false,
+      onFailed: () {},
+      window: const Duration(milliseconds: 500),
+      backoff: const [Duration(milliseconds: 10)],
+      attemptTimeout: const Duration(milliseconds: 60),
+      openRelay: (_, _) async {
+        final wire = SilentRecoveryWire();
+        wires.add(wire);
+        return wire;
+      },
+    );
+    final running = recovery.run();
+    await until(() => wires.length >= 2);
+    expect(wires.first.isClosed, isTrue);
+    expect(oldB.grant!.phase, GrantPhase.suspended);
+    expect(oldB.grant!.expiresMicros, expiry);
+    recovery.cancel(revoke: false);
+    await running;
+    expect(wires.every((wire) => wire.isClosed), isTrue);
+  });
 
   test(
     'closing admission prevents recovery; reopening cannot revive old grants',
