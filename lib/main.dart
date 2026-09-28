@@ -9,9 +9,12 @@ import 'ui/client_app.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  // Supply the official HTTPS origin at build time. A persisted custom LAN
-  // choice never falls back to this origin when it is invalid or unreachable.
-  const origin = String.fromEnvironment('CHUANCHUAN_AUX_ORIGIN');
+  // The official origin is part of the normal client build. A build-time value
+  // may select a test deployment; a custom LAN choice never falls back here.
+  const origin = String.fromEnvironment(
+    'CHUANCHUAN_AUX_ORIGIN',
+    defaultValue: 'https://chuanchuan.xyz:8443',
+  );
   final routes = AuxiliaryRouteController(
     identity: MethodChannelConnectionPlatform().identity,
     officialOrigin: origin,
