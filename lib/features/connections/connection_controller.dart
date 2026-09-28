@@ -543,10 +543,7 @@ class ConnectionController extends ChangeNotifier {
     try {
       // An admission cleanup error still has to wait for every socket already
       // closed by disconnectAll before the shared barrier is released.
-      await Future.wait<void>([
-        stopAccepting(),
-        ..._transportClosures,
-      ]);
+      await Future.wait<void>([stopAccepting(), ..._transportClosures]);
     } finally {
       _disconnecting = false;
       _disconnectPending = null;
@@ -584,21 +581,37 @@ class ConnectionController extends ChangeNotifier {
     // Cancellation can finish before a pending bind/connect returns its socket.
     // Await those owners too, so their late resources are closed before exit.
     completion.complete(
-      Future.wait<dynamic>([
-            disconnect,
-            ..._pendingStarts,
-            ..._pendingRecoveries,
-          ])
-          .then<void>((_) async {
-            while (_transportClosures.isNotEmpty) {
-              await Future.wait(_transportClosures.toList());
-            }
-          })
-          .whenComplete(() {
-            _shutdownPending = null;
-          }),
+      _finishShutdown(disconnect).whenComplete(() {
+        _shutdownPending = null;
+      }),
     );
     return completion.future;
+  }
+
+  Future<void> _finishShutdown(Future<void> disconnect) async {
+    Object? failure;
+    StackTrace? failureStack;
+    try {
+      await Future.wait<dynamic>([
+        disconnect,
+        ..._pendingStarts,
+        ..._pendingRecoveries,
+      ]);
+    } catch (error, stack) {
+      failure = error;
+      failureStack = stack;
+    }
+    // A failed owner can still have created a socket before it finished. Its
+    // transport close must settle before process cleanup reports the failure.
+    while (_transportClosures.isNotEmpty) {
+      try {
+        await Future.wait(_transportClosures.toList());
+      } catch (error, stack) {
+        failure ??= error;
+        failureStack ??= stack;
+      }
+    }
+    if (failure != null) Error.throwWithStackTrace(failure, failureStack!);
   }
 
   Future<TrustedConnection?> connect(
