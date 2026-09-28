@@ -241,5 +241,6 @@ formal packages.
 
 The [embedded-native composition preflight](../../../../docs/sdk/composition-preflight.md)
 now checks matching outer/native identities, target directories, pinned nested
-manifest bytes and both file inventories on POSIX. It remains read-only and does
-not replace full schema, signature, real-binary or installation validation.
+manifest bytes, both file inventories, draft candidate declarations and required
+bridge/native layout on POSIX. It remains read-only and does not replace the
+final release schema, signature, real-binary or installation validation.

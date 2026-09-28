@@ -16,6 +16,8 @@ import sys
 from sdk_package_inventory import (HASH, InventoryError, MANIFEST, manifest_bytes,
                                    open_at, parse_manifest, portable_path,
                                    unique_object, invalid_constant, verify_inventory)
+from sdk_package_compatibility import (CompatibilityError, APIS, draft_abi,
+                                       names, os_version, version)
 
 
 class CompositionError(Exception):
@@ -26,6 +28,76 @@ class CompositionError(Exception):
 
 ARTIFACT_ID = re.compile(r"[a-z0-9][a-z0-9.-]{0,127}\Z")
 PUBLIC_APIS = {"share_hub_media_api", "share_hub_session_api"}
+
+
+def _check_candidate_declarations(manifest, entries):
+    """Validate the review-draft field shape after comparing nested identity.
+
+    This validates claims, not the binary, source trust, signature or runtime.
+    Stable/release schema is deliberately left for a separately reviewed ABI.
+    """
+    common = {"schema", "exampleOnly", "inventoryComplete", "artifactId",
+              "kind", "sdkVersion", "productTarget", "channel", "target",
+              "apiCompatibility", "nativeAbi", "capabilities", "signing",
+              "licenseFiles", "validationFile", "publicSnapshots", "files"}
+    expected = common | ({"nativePayload"} if manifest.get("kind") == "flutter" else set())
+    if set(manifest) != expected or manifest.get("exampleOnly") is not False or \
+            manifest.get("inventoryComplete") is not True or \
+            manifest.get("channel") != "internal-candidate" or \
+            not isinstance(manifest.get("artifactId"), str) or \
+            not ARTIFACT_ID.fullmatch(manifest["artifactId"]):
+        raise CompositionError("invalid_candidate_manifest")
+    try:
+        version(manifest["sdkVersion"])
+        version(manifest["productTarget"])
+        draft_abi(manifest["nativeAbi"])
+        names(manifest["capabilities"], "invalid_capabilities")
+    except (CompatibilityError, KeyError) as error:
+        raise CompositionError("invalid_candidate_declarations") from error
+    target = manifest["target"]
+    if not isinstance(target, dict) or set(target) != {
+            "os", "architectures", "minimumOs", "runtimeDependencies",
+            "runtimeInspectionComplete"}:
+        raise CompositionError("invalid_package_target")
+    _native_directory(target)
+    try:
+        os_version(target["minimumOs"])
+    except CompatibilityError as error:
+        raise CompositionError("invalid_package_target") from error
+    dependencies = target["runtimeDependencies"]
+    if type(target["runtimeInspectionComplete"]) is not bool or \
+            not isinstance(dependencies, list) or len(dependencies) > 64 or \
+            any(not isinstance(item, str) or not item or len(item) > 512
+                for item in dependencies) or len(set(dependencies)) != len(dependencies):
+        raise CompositionError("invalid_runtime_declarations")
+    api_entries = manifest["apiCompatibility"]
+    if not isinstance(api_entries, list) or len(api_entries) != len(APIS):
+        raise CompositionError("invalid_api_declarations")
+    seen = set()
+    for entry in api_entries:
+        if not isinstance(entry, dict) or set(entry) != {
+                "package", "minInclusive", "maxExclusive", "testedVersions"} or \
+                not isinstance(entry["package"], str) or \
+                entry["package"] not in APIS or entry["package"] in seen:
+            raise CompositionError("invalid_api_declarations")
+        seen.add(entry["package"])
+        try:
+            lower, upper = version(entry["minInclusive"]), version(entry["maxExclusive"])
+            tested = entry["testedVersions"]
+            if lower >= upper or not isinstance(tested, list) or len(tested) > 128 or \
+                    len(set(tested)) != len(tested) or \
+                    any(not lower <= version(item) < upper for item in tested):
+                raise CompositionError("invalid_api_declarations")
+        except (CompatibilityError, TypeError) as error:
+            raise CompositionError("invalid_api_declarations") from error
+    signing = manifest["signing"]
+    if not isinstance(signing, dict) or set(signing) != {"status", "reportPath"} or \
+            not isinstance(signing["status"], str) or \
+            not 1 <= len(signing["status"]) <= 64 or \
+            (signing["reportPath"] is not None and
+             (not isinstance(signing["reportPath"], str) or
+              entries.get(signing["reportPath"], {}).get("type") != "file")):
+        raise CompositionError("invalid_signing_reference")
 
 
 def _require_file(entries, path):
@@ -175,6 +247,8 @@ def verify_composition(package_root, expected_manifest_sha256):
                 {key: value for key, value in entry.items() if key != "path"}:
             raise CompositionError("nested_inventory_mismatch")
 
+    _check_candidate_declarations(outer, outer_files)
+    _check_candidate_declarations(native, native_files)
     _check_layout(outer, native, outer_files, native_files)
 
     # Verify the native tree independently, then ensure the outer tree still
@@ -184,7 +258,7 @@ def verify_composition(package_root, expected_manifest_sha256):
     return {"compositionVerified": True, "layoutVerified": True,
             "nestedManifestSha256": payload["manifestSha256"],
             "installable": False,
-            "notValidated": ["source trust", "safe archive extraction", "full manifest schema",
+            "notValidated": ["source trust", "safe archive extraction", "final release manifest schema",
                              "API/ABI compatibility", "binary architecture/runtime",
                              "signatures/licenses", "native behavior", "installation"]}
 

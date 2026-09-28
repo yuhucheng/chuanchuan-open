@@ -45,10 +45,17 @@ class CompositionTests(unittest.TestCase):
             "schema": SCHEMA, "exampleOnly": False, "inventoryComplete": True,
             "sdkVersion": "0.1.0-candidate.1", "productTarget": "0.1.0",
             "channel": "internal-candidate",
-            "target": {"os": "windows", "architectures": ["x86_64"]},
-            "apiCompatibility": [], "nativeAbi": {"family": "sharehub-media-c",
-                                               "stability": "draft", "draftRevision": 2},
+            "target": {"os": "windows", "architectures": ["x86_64"],
+                       "minimumOs": "10.0", "runtimeDependencies": [],
+                       "runtimeInspectionComplete": False},
+            "apiCompatibility": [
+                {"package": name, "minInclusive": "0.1.0", "maxExclusive": "0.2.0",
+                 "testedVersions": ["0.1.0"]} for name in sorted(("share_hub_media_api", "share_hub_session_api"))
+            ],
+            "nativeAbi": {"family": "sharehub-media-c", "stability": "draft",
+                          "draftRevision": 2, "requiredFeatures": []},
             "capabilities": [],
+            "signing": {"status": "unverified", "reportPath": None},
             "licenseFiles": ["licenses/LICENSE.sdk.txt", "licenses/THIRD_PARTY_NOTICES.txt"],
             "validationFile": "metadata/validation.json",
         }
@@ -104,6 +111,27 @@ class CompositionTests(unittest.TestCase):
         self.assertEqual(result["nestedManifestSha256"], self.outer["nativePayload"]["manifestSha256"])
         self.assertIn("source trust", result["notValidated"])
 
+    def test_candidate_declarations_reject_incomplete_or_inconsistent_claims(self):
+        cases = (
+            ("candidate channel", lambda m: m.update(channel="release"),
+             "invalid_candidate_manifest"),
+            ("missing target inspection", lambda m: m["target"].pop("runtimeInspectionComplete"),
+             "invalid_package_target"),
+            ("invalid API range", lambda m: m["apiCompatibility"][0].update(maxExclusive="0.1.0"),
+             "invalid_api_declarations"),
+            ("missing signing claim", lambda m: m.pop("signing"),
+             "invalid_candidate_manifest"),
+        )
+        baseline_native = copy.deepcopy(self.native)
+        baseline_outer = copy.deepcopy(self.outer)
+        for label, mutate, expected in cases:
+            with self.subTest(label=label):
+                self.native = copy.deepcopy(baseline_native)
+                self.outer = copy.deepcopy(baseline_outer)
+                mutate(self.native)
+                mutate(self.outer)
+                self.rejects(expected)
+
     def test_macos_universal_and_windows_arm64_have_distinct_native_roots(self):
         for os_name, arches, label in (
             ("macos", ["arm64", "x86_64"], "macos-universal"),
@@ -114,7 +142,9 @@ class CompositionTests(unittest.TestCase):
                 self.native_root.rename(next_root)
                 self.native_root = next_root
                 for manifest in (self.native, self.outer):
-                    manifest["target"] = {"os": os_name, "architectures": arches}
+                    manifest["target"] = dict(manifest["target"], os=os_name,
+                                               architectures=arches,
+                                               minimumOs="13.0" if os_name == "macos" else "10.0")
                 self.outer["nativePayload"]["directory"] = f"native/{label}"
                 self.assertTrue(verify_composition(self.root, self.write())["compositionVerified"])
 
@@ -191,7 +221,9 @@ class CompositionTests(unittest.TestCase):
         self.native_root.rename(self.root / "native/macos-universal")
         self.native_root = self.root / "native/macos-universal"
         for manifest in (self.native, self.outer):
-            manifest["target"] = {"os": "macos", "architectures": ["arm64", "x86_64"]}
+            manifest["target"] = dict(manifest["target"], os="macos",
+                                      architectures=["arm64", "x86_64"],
+                                      minimumOs="13.0")
         self.outer["nativePayload"]["directory"] = "native/macos-universal"
         for path in (self.native_root / "frameworks/core",
                      self.root / "macos/Package.swift"):

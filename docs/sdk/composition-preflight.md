@@ -23,6 +23,12 @@ and the native tree is independently verified. It checks the proposed
 `windows-x64`, `windows-arm64` and `macos-universal` directories. A native-only
 root is rejected by this Flutter-package preflight.
 
+Both manifests must also have the draft candidate's declared field shape.
+The preflight checks versions, ABI revision and features, target/minimum OS,
+runtime inspection claims, both public API ranges, and signing report references.
+These checks reject inconsistent declarations; they do not verify that a binary
+actually has the claimed architecture, dependencies, ABI, or signature.
+
 The preflight also requires the draft bridge layout: the Flutter entrypoint,
 target platform hook and both public API snapshot `pubspec.yaml` files; native
 build metadata, a public header and a platform binary path; and referenced
@@ -33,7 +39,7 @@ provenance matches an independently trusted source.
 
 The checked-in examples remain non-installable. Passing synthetic tests do not
 prove a working SDK: this component does not authenticate the source, extract a
-ZIP safely, validate every manifest field, inspect binary slices or runtime
+ZIP safely, validate the final release manifest schema, inspect binary slices or runtime
 dependencies, verify signatures/licenses, load native code, or configure the
 client. It uses the POSIX descriptor-relative inventory backend and is not a
 Windows installer verifier. Staging must remain private and unchanged across
