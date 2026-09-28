@@ -36,6 +36,17 @@ class ConnectionPanel extends StatelessWidget {
               ),
             ),
             const Text('5 分钟内有效，仅可成功使用一次。'),
+            Semantics(
+              liveRegion: true,
+              child: Text(switch (controller.meetingPublication) {
+                MeetingPublication.none => '短接码已不可用。',
+                MeetingPublication.localOnly => '跨网输码未启用；仍可使用可达地址直连。',
+                MeetingPublication.publishing => '跨网会合正在准备，请等到显示就绪后再让对方输码。',
+                MeetingPublication.ready => '跨网会合已就绪，可让对方直接输入短接码。',
+                MeetingPublication.retrying => '跨网会合暂不可用，正在重试；可达地址直连仍可使用。',
+                MeetingPublication.failed => '跨网会合不可用，请检查所选辅助服务；可达地址直连仍可使用。',
+              }),
+            ),
             if (controller.address != null)
               SelectableText('连接地址：${controller.address}'),
             const SizedBox(height: 12),

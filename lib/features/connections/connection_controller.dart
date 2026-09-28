@@ -44,6 +44,10 @@ class MethodChannelConnectionPlatform implements ConnectionPlatform {
 /// translated user-facing text as application state.
 enum ConnectionNoticeKind { status, problem }
 
+/// The displayed code is immediately usable on the local TCP listener. WAN
+/// use starts only after the selected service confirms its short-lived entry.
+enum MeetingPublication { none, localOnly, publishing, ready, retrying, failed }
+
 class ConnectionNotice {
   const ConnectionNotice.status(this.message)
     : kind = ConnectionNoticeKind.status;
@@ -109,6 +113,7 @@ class ConnectionController extends ChangeNotifier {
   bool get connecting => _connecting;
   String? code;
   String? address;
+  MeetingPublication meetingPublication = MeetingPublication.none;
   ConnectionNotice? _notice;
   ConnectionNotice? get notice => _notice;
   String? get message => notice?.message;
@@ -176,6 +181,7 @@ class ConnectionController extends ChangeNotifier {
     _notice = null;
     code = null;
     address = null;
+    meetingPublication = MeetingPublication.none;
     _emit();
     try {
       final identity = await _loadIdentity();
@@ -211,6 +217,7 @@ class ConnectionController extends ChangeNotifier {
                 }
                 if (!_track(connection)) return;
                 code = null;
+                meetingPublication = MeetingPublication.none;
                 final meeting = _meetingRoute;
                 if (meeting != null) unawaited(meeting.closeAdmission());
                 _notice = ConnectionNotice.status(
@@ -247,6 +254,9 @@ class ConnectionController extends ChangeNotifier {
       }
       code = host.offer!.code;
       address = hostname == null ? null : '$hostname:${host.port}';
+      meetingPublication = auxiliaryRoutes == null
+          ? MeetingPublication.localOnly
+          : MeetingPublication.publishing;
       if (discoveryFailed) {
         _notice = ConnectionNotice.problem(
           auxiliaryRoutes == null
@@ -267,6 +277,7 @@ class ConnectionController extends ChangeNotifier {
       await opening?.stopAccepting();
       if (generation == _generation) await _clearAdvertisement();
       if (!_disposed && generation == _generation) {
+        meetingPublication = MeetingPublication.none;
         _notice = const ConnectionNotice.problem('接入启动失败，请检查钥匙串及本地网络权限。');
       }
     } finally {
@@ -307,12 +318,13 @@ class ConnectionController extends ChangeNotifier {
             return;
           }
           _meetingRoute = route;
+          meetingPublication = MeetingPublication.ready;
           if (hadFailure) {
             _notice = const ConnectionNotice.status(
               '所选辅助服务会合入口已恢复，当前短接码可用于跨网连接。',
             );
-            _emit();
           }
+          _emit();
           await route.serve();
           if (!route.activated && identical(_meetingRoute, route)) {
             _meetingRoute = null;
@@ -348,6 +360,9 @@ class ConnectionController extends ChangeNotifier {
                         'server_error',
                       }.contains(error.code))) &&
               meetingRetryBackoff.isNotEmpty;
+          meetingPublication = retryable
+              ? MeetingPublication.retrying
+              : MeetingPublication.failed;
           _notice = ConnectionNotice.problem(
             retryable
                 ? '本地接入已开启，但所选辅助服务暂不可用；当前短接码仍有效，正在重试跨网会合。'
@@ -446,6 +461,7 @@ class ConnectionController extends ChangeNotifier {
       }
       if (code != null && (offer == null || !offer.reservable(now))) {
         code = null;
+        meetingPublication = MeetingPublication.none;
         _notice = const ConnectionNotice.problem('短接码已失效或尝试次数已用完，请重新生成。');
         _meetingCancellation?.cancel();
         final meeting = _meetingRoute;
@@ -487,6 +503,7 @@ class ConnectionController extends ChangeNotifier {
     _meetingRoute = null;
     code = null;
     address = null;
+    meetingPublication = MeetingPublication.none;
     // stopAccepting revokes the local offer and closes pending sockets before
     // its Future yields. Do not wait for HTTPS unpublish while old TCP remains
     // eligible to finish a pairing.

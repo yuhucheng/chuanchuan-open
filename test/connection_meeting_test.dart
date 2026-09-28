@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:share_hub_connection/share_hub_connection.dart';
 import 'package:share_hub_open/features/connections/auxiliary_route_controller.dart';
 import 'package:share_hub_open/features/connections/connection_controller.dart';
+import 'package:share_hub_open/features/connections/connection_panel.dart';
 
 final class _Platform implements ConnectionPlatform {
   _Platform(this.device, {this.failAdvertisement = false});
@@ -45,6 +47,8 @@ final class _MeetingService implements AuxiliaryTransport {
   bool activated = false;
   int publishFailures = 0;
   int publishAttempts = 0;
+  Completer<void>? publishGate;
+  final publishStarted = Completer<void>();
   final publishedTtls = <String?>[];
   int pendingFailures = 0;
   int forgottenListings = 0;
@@ -69,6 +73,9 @@ final class _MeetingService implements AuxiliaryTransport {
         return {'deviceId': host.id};
       case '/v1/meet/publish':
         publishAttempts++;
+        if (!publishStarted.isCompleted) publishStarted.complete();
+        await publishGate?.future;
+        cancellation.throwIfCancelled();
         publishedTtls.add(body['ttlSeconds']);
         if (publishCollision) {
           throw const AuxiliaryFailure('entry_unavailable');
@@ -162,6 +169,68 @@ final class _DelayedLeaveService implements AuxiliaryTransport {
 }
 
 void main() {
+  testWidgets('connection panel distinguishes local code from WAN readiness', (
+    tester,
+  ) async {
+    final identity = await DeviceIdentity.fromSeed(List.filled(32, 69));
+    final controller = ConnectionController(_Platform(identity))
+      ..code = '123456'
+      ..meetingPublication = MeetingPublication.publishing;
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: ConnectionPanel(controller: controller)),
+      ),
+    );
+    expect(find.textContaining('跨网会合正在准备'), findsOneWidget);
+    controller.meetingPublication = MeetingPublication.ready;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: ConnectionPanel(controller: controller)),
+      ),
+    );
+    expect(find.textContaining('跨网会合已就绪'), findsOneWidget);
+  });
+
+  test('displayed local code reports WAN publication truthfully', () async {
+    final identity = await DeviceIdentity.fromSeed(List.filled(32, 68));
+    final service = _MeetingService(identity)..publishGate = Completer<void>();
+    final route = AuxiliaryRouteController(
+      identity: () async => identity,
+      officialOrigin: 'https://selected.example',
+      store: _Store(),
+      transportFactory: (_) => (transport: service, close: () {}),
+    );
+    final host = ConnectionController(
+      _Platform(identity),
+      auxiliaryRoutes: route,
+    );
+    addTearDown(() async {
+      await host.disconnectAll();
+      await route.stop();
+      host.dispose();
+    });
+    await host.open();
+    await service.publishStarted.future;
+    expect(host.code, isNotNull);
+    expect(host.meetingPublication, MeetingPublication.publishing);
+    final ready = Completer<void>();
+    void onPublicationChanged() {
+      if (host.meetingPublication == MeetingPublication.ready &&
+          !ready.isCompleted) {
+        ready.complete();
+      }
+    }
+    host.addListener(onPublicationChanged);
+    addTearDown(() => host.removeListener(onPublicationChanged));
+    service.publishGate!.complete();
+    await ready.future.timeout(const Duration(seconds: 2));
+    expect(host.meetingPublication, MeetingPublication.ready);
+    await host.stopAccepting();
+    expect(host.meetingPublication, MeetingPublication.none);
+    expect(host.code, isNull);
+  });
+
   test(
     'closing a joined meeting keeps HTTPS alive until leave completes',
     () async {
@@ -423,10 +492,12 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 1));
     }
     expect(service.publishAttempts, 1);
+    expect(host.meetingPublication, MeetingPublication.retrying);
     await host.stopAccepting();
     await Future<void>.delayed(const Duration(milliseconds: 150));
     expect(service.publishAttempts, 1);
     expect(host.code, isNull);
+    expect(host.meetingPublication, MeetingPublication.none);
   });
 
   test('meeting poll failure retries while the same offer is valid', () async {
@@ -522,6 +593,7 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 80));
       expect(service.publishAttempts, 1);
       expect(host.message, contains('会合失败'));
+      expect(host.meetingPublication, MeetingPublication.failed);
     },
   );
 
