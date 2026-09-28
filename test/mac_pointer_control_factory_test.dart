@@ -46,4 +46,22 @@ void main() {
       });
     },
   );
+
+  test('macOS product composition includes bounded text clipboard sync', () {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final factory = createMacControlFactory();
+    expect(factory.capabilities.operations, {
+      SessionOperation.watch,
+      SessionOperation.cast,
+      SessionOperation.control,
+    });
+    expect(factory.controlCapabilities, {
+      ControlCapability.pointer,
+      ControlCapability.wheel,
+      ControlCapability.physicalKey,
+      ControlCapability.textInput,
+      ControlCapability.clipboardText,
+    });
+  });
 }

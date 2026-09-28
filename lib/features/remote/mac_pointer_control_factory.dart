@@ -1,17 +1,21 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:share_hub_media_api/share_hub_media_api.dart';
 import 'package:share_hub_media_sdk/share_hub_media_sdk.dart' as sdk;
 
 import 'mac_control_geometry_resolver.dart';
 import 'remote_media.dart';
+import 'windows_control_clipboard_pair.dart';
 
-/// Explicit macOS input composition for platform acceptance work.
-/// The macOS product default remains watch/cast until its clipboard execution
-/// path and real control effects pass platform testing.
+/// Capability-limited macOS input composition, also used by the product.
 RtcRemotePictureFactory createMacPointerControlFactory({
+  MethodChannel channel = const MethodChannel('dev.sharehub.client/platform'),
   bool keyboardText = false,
+  bool clipboardText = false,
+  ValueListenable<bool>? clipboardSetting,
+  sdk.RelayIceLease? Function()? currentRelayLease,
 }) {
   if (defaultTargetPlatform != TargetPlatform.macOS) {
     throw UnsupportedError('macOS control factory requires macOS');
@@ -21,6 +25,7 @@ RtcRemotePictureFactory createMacPointerControlFactory({
     ControlCapability.wheel,
     if (keyboardText) ControlCapability.physicalKey,
     if (keyboardText) ControlCapability.textInput,
+    if (clipboardText) ControlCapability.clipboardText,
   };
   return RtcRemotePictureFactory(
     sdk.RtcRemoteMediaFactory(
@@ -30,13 +35,62 @@ RtcRemotePictureFactory createMacPointerControlFactory({
         SessionOperation.control,
       },
       controlCapabilities: capabilities,
+      currentRelayLease: currentRelayLease,
       createControlSession: (picture, context) async {
+        late final sdk.RtcControlOperation operation;
+        // The Dart pair owns the shared protocol; this channel selects the
+        // macOS lease-backed AppKit clipboard implementation.
+        final clipboard =
+            context.start.capabilities.contains(ControlCapability.clipboardText)
+            ? WindowsControlClipboardPair(
+                context: context,
+                enabled: clipboardSetting?.value ?? true,
+                channel: channel,
+                send: (message) => operation.sendClipboard(message),
+                onFailure: (_) {
+                  unawaited(operation.stop().catchError((Object _) {}));
+                },
+              )
+            : null;
+        void bindClipboardSetting() {
+          final setting = clipboardSetting;
+          final pair = clipboard;
+          if (setting == null || pair == null) return;
+          void changed() {
+            unawaited(
+              pair.setEnabled(setting.value).catchError((Object _) {
+                if (!operation.stopped) {
+                  unawaited(operation.stop().catchError((Object _) {}));
+                }
+              }),
+            );
+          }
+
+          setting.addListener(changed);
+          unawaited(
+            operation.done.whenComplete(() => setting.removeListener(changed)),
+          );
+          changed();
+        }
+
         if (context.localIsController) {
-          return sdk.RtcControlOperation(
+          operation = sdk.RtcControlOperation(
             context: context,
             picture: picture,
-            onControllerStage: (_) async {},
+            onControllerStage: (stage) async {
+              if (stage is ControlGeometryPublished &&
+                  clipboard?.pictureReady == true) {
+                await clipboard!.invalidatePicture();
+              }
+              if (stage is ControlInputReady) {
+                await clipboard?.markPictureReady();
+              }
+            },
+            onClipboardMessage: clipboard?.receive,
+            stopClipboard: clipboard?.stop,
           );
+          bindClipboardSetting();
+          return operation;
         }
         final native = sdk.MacDeferredControlInput(
           currentSource: () => picture.localSource,
@@ -55,10 +109,16 @@ RtcRemotePictureFactory createMacPointerControlFactory({
           readCurrentScreen: picture.resources.readControlScreenGeometry,
         );
         var geometryRevision = 0;
-        final operation = sdk.RtcControlOperation(
+        operation = sdk.RtcControlOperation(
           context: context,
           picture: picture,
           input: input,
+          onClipboardMessage: clipboard?.receive,
+          stopClipboard: clipboard?.stop,
+          onTargetInputReady: clipboard == null
+              ? null
+              : (_) => clipboard.markPictureReady(),
+          onTargetPictureInvalidated: clipboard?.invalidatePicture,
           resolveTargetGeometry: (currentPicture) async {
             final source = currentPicture.localSource;
             final presented = currentPicture.resources.peerPresentation;
@@ -90,8 +150,23 @@ RtcRemotePictureFactory createMacPointerControlFactory({
           );
         });
         unawaited(operation.done.whenComplete(() => changes.cancel()));
+        bindClipboardSetting();
         return operation;
       },
     ),
   );
 }
+
+/// Normal macOS client composition with native pointer, keyboard, text and
+/// the user's current pure-text clipboard preference.
+RtcRemotePictureFactory createMacControlFactory({
+  MethodChannel channel = const MethodChannel('dev.sharehub.client/platform'),
+  ValueListenable<bool>? clipboardSetting,
+  sdk.RelayIceLease? Function()? currentRelayLease,
+}) => createMacPointerControlFactory(
+  channel: channel,
+  keyboardText: true,
+  clipboardText: true,
+  clipboardSetting: clipboardSetting,
+  currentRelayLease: currentRelayLease,
+);

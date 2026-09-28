@@ -17,6 +17,7 @@ import '../features/preview/preview_engine.dart';
 import '../features/remote/remote_media.dart';
 import '../features/remote/remote_session_controller.dart';
 import '../features/remote/control_clipboard_preference.dart';
+import '../features/remote/mac_pointer_control_factory.dart';
 import '../features/remote/windows_pointer_control_factory.dart';
 import '../features/transfers/file_access.dart';
 import '../features/transfers/transfer_queue.dart';
@@ -102,6 +103,14 @@ class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
         (widget.targetPlatform ?? defaultTargetPlatform) ==
             TargetPlatform.windows) {
       return createWindowsControlFactory(
+        clipboardSetting: _clipboardPreference,
+        currentRelayLease: widget.currentRelayLease,
+      );
+    }
+    if (defaultTargetPlatform == TargetPlatform.macOS &&
+        (widget.targetPlatform ?? defaultTargetPlatform) ==
+            TargetPlatform.macOS) {
+      return createMacControlFactory(
         clipboardSetting: _clipboardPreference,
         currentRelayLease: widget.currentRelayLease,
       );

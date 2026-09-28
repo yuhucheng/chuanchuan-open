@@ -5,28 +5,45 @@ struct ControlClipboardReadSnapshot: Equatable {
     let text: String?
 }
 
+enum ControlClipboardWriteStatus: Equatable {
+    case written, conflict, unknown
+}
+
+struct ControlClipboardWriteResult: Equatable {
+    let status: ControlClipboardWriteStatus
+    let sequence: Int64?
+}
+
 enum ControlClipboardReadError: Error {
-    case busy, invalidScope, staleScope, expired, clipboardUnavailable
+    case busy, invalidScope, staleScope, expired, invalidText, clipboardUnavailable
 }
 
 /// One process-local control lease. All calls run on the AppKit main thread.
-/// This side only observes plain text; no operation writes or clears the OS pasteboard.
+/// A conditional write checks the same exact scope and change sequence as reads.
 final class ControlClipboardReadStore {
     typealias Clock = () -> UInt64
     typealias Sequence = () -> Int?
     typealias Reader = () throws -> String?
+    typealias Writer = (String) throws -> Bool
 
     init(clock: @escaping Clock = { ConnectionSecurity.continuousMicros },
          sequence: @escaping Sequence = { NSPasteboard.general.changeCount },
-         readText: @escaping Reader = { NSPasteboard.general.string(forType: .string) }) {
+         readText: @escaping Reader = { NSPasteboard.general.string(forType: .string) },
+         writeText: @escaping Writer = { text in
+             let pasteboard = NSPasteboard.general
+             pasteboard.clearContents()
+             return pasteboard.setString(text, forType: .string)
+         }) {
         self.clock = clock
         self.sequence = sequence
         self.readText = readText
+        self.writeText = writeText
     }
 
     private let clock: Clock
     private let sequence: Sequence
     private let readText: Reader
+    private let writeText: Writer
     private var nextLease: Int64 = 1
     private var lease: Int64 = 0
     private var deadlineMicros: UInt64 = 0
@@ -96,6 +113,38 @@ final class ControlClipboardReadStore {
                     controllerRevision: controllerRevision, targetRevision: targetRevision)
         observedSequence = after
         return ControlClipboardReadSnapshot(sequence: after, text: text)
+    }
+
+    func write(lease: Int64, epoch: Int64, controllerRevision: Int64,
+               targetRevision: Int64, expectedSequence: Int64,
+               text: String) throws -> ControlClipboardWriteResult {
+        try require(lease: lease, epoch: epoch,
+                    controllerRevision: controllerRevision, targetRevision: targetRevision)
+        guard expectedSequence > 0, expectedSequence <= Int64(UInt32.max),
+              text.utf8.count <= 32768, !text.contains("\0") else {
+            throw ControlClipboardReadError.invalidText
+        }
+        guard let current = currentSequence(), current >= observedSequence else {
+            shutdown()
+            return ControlClipboardWriteResult(status: .unknown, sequence: nil)
+        }
+        guard current == expectedSequence else {
+            return ControlClipboardWriteResult(status: .conflict, sequence: nil)
+        }
+        // AppKit calls from this runner are serial on the main thread. Another
+        // process may still write concurrently; report the observed OS order.
+        let didWrite: Bool
+        do { didWrite = try writeText(text) }
+        catch {
+            shutdown()
+            return ControlClipboardWriteResult(status: .unknown, sequence: nil)
+        }
+        guard didWrite, let written = currentSequence(), written > current else {
+            shutdown()
+            return ControlClipboardWriteResult(status: .unknown, sequence: nil)
+        }
+        observedSequence = written
+        return ControlClipboardWriteResult(status: .written, sequence: written)
     }
 
     /// Returns a notification bit only. The authenticated owner rechecks its

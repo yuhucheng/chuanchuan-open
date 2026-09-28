@@ -212,6 +212,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler, NSDraggingDestination {
     case ControlClipboardReadError.invalidScope: code = "invalid_scope"
     case ControlClipboardReadError.staleScope: code = "stale_scope"
     case ControlClipboardReadError.expired: code = "expired"
+    case ControlClipboardReadError.invalidText: code = "invalid_text"
     default: code = "clipboard_unavailable"
     }
     return FlutterError(code: code, message: "剪贴板作用域不可用。", details: nil)
@@ -260,6 +261,26 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler, NSDraggingDestination {
         let snapshot = try clipboardRead.read(lease: lease, epoch: epoch,
                                                controllerRevision: controller, targetRevision: target)
         result(["sequence": snapshot.sequence, "text": snapshot.text as Any? ?? NSNull()])
+      case "control.clipboard.write":
+        guard args.count == 6,
+              let lease = clipboardInteger(args["lease"]),
+              let epoch = clipboardInteger(args["epoch"]),
+              let controller = clipboardInteger(args["controllerRevision"]),
+              let target = clipboardInteger(args["targetRevision"]),
+              let expected = clipboardInteger(args["expectedSequence"]),
+              let text = args["text"] as? String else {
+          result(FlutterError(code: "invalid_arguments", message: "剪贴板写入字段无效。", details: nil)); return
+        }
+        let outcome = try clipboardRead.write(lease: lease, epoch: epoch,
+                                              controllerRevision: controller, targetRevision: target,
+                                              expectedSequence: expected, text: text)
+        let status: String
+        switch outcome.status {
+        case .written: status = "written"
+        case .conflict: status = "conflict"
+        case .unknown: status = "unknown"
+        }
+        result(["status": status, "sequence": outcome.sequence as Any? ?? NSNull()])
       case "control.clipboard.close":
         guard args.count == 1, let lease = clipboardInteger(args["lease"]) else {
           result(FlutterError(code: "invalid_arguments", message: "租约无效。", details: nil)); return
