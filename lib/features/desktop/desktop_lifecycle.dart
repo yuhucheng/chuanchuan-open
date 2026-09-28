@@ -29,7 +29,7 @@ class DesktopLifecycle extends ChangeNotifier {
   /// Must synchronously reject new remote operations before returning its
   /// cleanup future. Completion means all remote media resources are released.
   final Future<void> Function() stopRemote;
-  final void Function()? stopAuxiliary;
+  final Future<void> Function()? stopAuxiliary;
   final TransferQueue transfers;
   final bool connectionSupported;
   final MethodChannel channel;
@@ -126,7 +126,9 @@ class DesktopLifecycle extends ChangeNotifier {
         // Capture a synchronous callback failure without skipping revocation.
         final remote = Future<void>.sync(stopRemote);
         final disconnect = Future<void>.sync(connections.shutdown);
-        final auxiliary = Future<void>.sync(() => stopAuxiliary?.call());
+        final auxiliary = stopAuxiliary == null
+            ? Future<void>.value()
+            : Future<void>.sync(stopAuxiliary!);
         return Future.wait<void>([
           remote,
           disconnect,

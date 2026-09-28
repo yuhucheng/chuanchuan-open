@@ -28,7 +28,7 @@ void main() {
   late List<String> calls;
   late List<String> cleanupOrder;
   late Future<void> Function() stopRemote;
-  late void Function()? stopAuxiliary;
+  late Future<void> Function()? stopAuxiliary;
   late int remoteStops;
   setUp(() async {
     calls = [];
@@ -64,7 +64,7 @@ void main() {
         cleanupOrder.add('remote');
         return stopRemote();
       },
-      stopAuxiliary: () => stopAuxiliary?.call(),
+      stopAuxiliary: () => stopAuxiliary?.call() ?? Future<void>.value(),
       transfers: transfers,
       connectionSupported: false,
       channel: channel,
@@ -240,12 +240,24 @@ void main() {
       stopAuxiliary = () {
         stops++;
         cleanupOrder.add('auxiliary');
+        return Future<void>.value();
       };
       expect(await lifecycle.requestExit(), isTrue);
       expect(cleanupOrder, ['remote', 'disconnect', 'auxiliary']);
       expect(stops, 1);
     },
   );
+  test('quit waits for auxiliary network cleanup before final exit', () async {
+    final released = Completer<void>();
+    stopAuxiliary = () => released.future;
+    final exiting = lifecycle.requestExit();
+    await Future<void>.delayed(Duration.zero);
+    expect(calls, isNot(contains('prepareExit')));
+    expect(lifecycle.exited, isFalse);
+    released.complete();
+    expect(await exiting, isTrue);
+    expect(calls, contains('prepareExit'));
+  });
   test('auxiliary cleanup error cannot skip connection revocation', () async {
     stopAuxiliary = () => throw StateError('auxiliary cleanup');
     expect(await lifecycle.requestExit(), isFalse);

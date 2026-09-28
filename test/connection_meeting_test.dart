@@ -153,9 +153,44 @@ void main() {
         await Future<void>.delayed(const Duration(milliseconds: 1));
       }
       expect(service.transportClosed, isTrue);
-      routes.stop();
+      await routes.stop();
     },
   );
+
+  test('process stop waits for the selected meeting leave', () async {
+    final identity = await DeviceIdentity.fromSeed(List.filled(32, 67));
+    final service = _DelayedLeaveService();
+    var transports = 0;
+    final routes = AuxiliaryRouteController(
+      identity: () async => identity,
+      officialOrigin: 'https://selected.example',
+      store: _Store(),
+      transportFactory: (_) {
+        final index = ++transports;
+        return (
+          transport: service,
+          close: () {
+            if (index == 2) service.transportClosed = true;
+          },
+        );
+      },
+    );
+    final wire = await routes.openMeetingWire(
+      '123456',
+      AuxiliaryCancellation(),
+    );
+    var finished = false;
+    final stopping = routes.stop().then((_) => finished = true);
+    await service.leaveStarted.future.timeout(const Duration(seconds: 2));
+    expect(wire.isClosed, isTrue);
+    expect(service.transportClosed, isFalse);
+    expect(finished, isFalse);
+    service.releaseLeave.complete();
+    await stopping;
+    expect(service.transportClosed, isTrue);
+    expect(finished, isTrue);
+    await routes.stop();
+  });
 
   test(
     'two new clients connect by six digits through selected origin',
@@ -193,8 +228,8 @@ void main() {
       addTearDown(() async {
         await client.disconnectAll();
         await host.disconnectAll();
-        clientRoute.stop();
-        hostRoute.stop();
+        await clientRoute.stop();
+        await hostRoute.stop();
         client.dispose();
         host.dispose();
       });
@@ -252,7 +287,7 @@ void main() {
       );
       addTearDown(() async {
         await client.disconnectAll();
-        routes.stop();
+        await routes.stop();
         client.dispose();
       });
       final pending = client.connectByCode('123456');

@@ -44,7 +44,7 @@ class ShareHubApp extends StatefulWidget {
   final void Function(bool)? setAuxiliaryNeeded;
   final bool Function()? relayCredentialAvailable;
   final Listenable? relayCredentialChanges;
-  final void Function()? stopAuxiliary;
+  final Future<void> Function()? stopAuxiliary;
   final TargetPlatform? targetPlatform;
   final String appTitle;
 
@@ -136,7 +136,7 @@ class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
     _connections.dispose();
     _preview.dispose();
     _remote.dispose();
-    widget.stopAuxiliary?.call();
+    unawaited(widget.stopAuxiliary?.call() ?? Future<void>.value());
     _transfers.dispose();
     super.dispose();
   }

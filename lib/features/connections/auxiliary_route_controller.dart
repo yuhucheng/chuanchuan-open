@@ -130,14 +130,20 @@ final class MeetingRoute {
   Future<void> serve() => listing.serve();
 
   Future<void> closeAdmission() async {
-    await listing.closeAdmission();
-    if (!listing.activated) _cleanup();
+    try {
+      await listing.closeAdmission();
+    } finally {
+      if (!listing.activated) _cleanup();
+    }
   }
 
   Future<void> close() async {
     if (_closed) return;
-    await listing.close();
-    _cleanup();
+    try {
+      await listing.close();
+    } finally {
+      _cleanup();
+    }
   }
 
   void activeWireClosed() {
@@ -173,6 +179,7 @@ final class AuxiliaryRouteController extends ChangeNotifier {
   final _meetingRoutes = <MeetingRoute>{};
   bool _needed = false, _stopped = false, _loaded = false;
   Future<void>? _loading;
+  Future<void>? _stopping;
   int _revision = 0;
   Future<void> _writeQueue = Future.value();
   AuxiliaryRouteChoice choice = const AuxiliaryRouteChoice(
@@ -443,19 +450,20 @@ final class AuxiliaryRouteController extends ChangeNotifier {
     _owner?.setNeeded(needed);
   }
 
-  void stop() {
-    if (_stopped) return;
+  Future<void> stop() {
+    final pending = _stopping;
+    if (pending != null) return pending;
+    if (_stopped) return Future.value();
     _stopped = true;
     ++_revision;
-    for (final owner in _signalOwners.toList()) {
-      unawaited(owner.close(immediate: true));
-    }
-    for (final route in _meetingRoutes.toList()) {
-      unawaited(route.close());
-    }
+    final closings = <Future<void>>[
+      for (final owner in _signalOwners.toList()) owner.close(immediate: true),
+      for (final route in _meetingRoutes.toList()) route.close(),
+    ];
     _owner?.removeListener(notifyListeners);
     _owner?.stop();
     _owner = null;
     notifyListeners();
+    return _stopping = Future.wait(closings).then<void>((_) {});
   }
 }
