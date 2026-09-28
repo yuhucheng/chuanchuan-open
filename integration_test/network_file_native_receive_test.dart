@@ -10,6 +10,7 @@ import 'package:share_hub_open/features/connections/connection_controller.dart';
 import 'package:share_hub_open/features/transfers/file_access.dart';
 import 'package:share_hub_open/features/transfers/network_transfers.dart';
 import 'package:share_hub_open/features/transfers/receive_access.dart';
+import 'package:share_hub_open/features/transfers/source_access.dart';
 import 'package:share_hub_open/features/transfers/transfer_queue.dart';
 
 import '../test/connection_controller_test.dart' show FakeConnectionPlatform;
@@ -23,11 +24,33 @@ class _LiveClockPlatform extends FakeConnectionPlatform {
   Future<int> now() => MethodChannelConnectionPlatform().now();
 }
 
+class _CutAfterFirstAckSource extends MemorySourceAccess {
+  _CutAfterFirstAckSource(super.bytes);
+
+  int? gatePass;
+  Completer<void>? gateEntered;
+  Completer<void>? gateRelease;
+
+  @override
+  Future<Uint8List> readPass(
+    SourceReadPass pass,
+    int offset,
+    int length,
+  ) async {
+    if (passes == gatePass && offset >= 256 * 1024) {
+      gatePass = null;
+      gateEntered!.complete();
+      await gateRelease!.future;
+    }
+    return super.readPass(pass, offset, length);
+  }
+}
+
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
   testWidgets(
-    'authenticated TCP transfer commits through native receive store',
+    'authenticated TCP transfer commits and resumes through native store',
     (tester) async {
       expect(Platform.isWindows || Platform.isMacOS, isTrue);
       final senderPlatform = _LiveClockPlatform();
@@ -44,7 +67,7 @@ void main() {
       final selectedFiles = TestFileAccess();
       final senderQueue = TransferQueue(selectedFiles);
       final receiverQueue = TransferQueue(TestFileAccess());
-      final source = MemorySourceAccess(selectedFiles.data);
+      final source = _CutAfterFirstAckSource(selectedFiles.data);
       final sourceOnReceiver = MemorySourceAccess({});
       final sent = NetworkTransfers(
         connections: sender,
@@ -112,7 +135,77 @@ void main() {
           'NATIVE_NETWORK_RECEIVE_REPORT name=$name '
           'size=${bytes.length} sha256=${sha256.convert(bytes)}',
         );
+
+        final resumedBytes = Uint8List.fromList(
+          List<int>.generate(3 * 256 * 1024 + 13, (index) => index % 251),
+        );
+        final resumedName =
+            'chuan-network-resumed-${DateTime.now().microsecondsSinceEpoch}.bin';
+        selectedFiles.selection = [
+          SelectedFile(
+            token: 'resumed-source',
+            name: resumedName,
+            size: resumedBytes.length,
+          ),
+        ];
+        selectedFiles.data['resumed-source'] = resumedBytes;
+        await senderQueue.selectFiles();
+        await drainQueue(senderQueue);
+        source.gatePass = source.passes + 2;
+        source.gateEntered = Completer<void>();
+        source.gateRelease = Completer<void>();
+        final resumedJob = sent.send(
+          senderQueue.items.last,
+          sender.sessions.single,
+        );
+        await source.gateEntered!.future.timeout(const Duration(seconds: 10));
+        expect(resumedJob.acknowledgedBytes, 256 * 1024);
+        final suspended = [sender.sessions.single, receiver.sessions.single]
+            .map(
+              (session) => session.phaseChanges.firstWhere(
+                (phase) => phase == ConnectionPhase.suspended,
+              ),
+            )
+            .toList();
+        relay.cut();
+        await Future.wait(suspended).timeout(const Duration(seconds: 5));
+        source.gateRelease!.complete();
+        await resumedJob.done.timeout(const Duration(seconds: 20));
+        expect(resumedJob.phase, NetworkSendPhase.completed);
+        expect(resumedJob.receipt?.size, resumedBytes.length);
+        expect(
+          resumedJob.receipt?.sha256,
+          sha256.convert(resumedBytes).toString(),
+        );
+        expect(resumedJob.receipt?.actualName, resumedName);
+        final resumedHistoryReady = Completer<void>();
+        void checkResumedHistory() {
+          if (received.receiveHistory.length == 2 &&
+              !resumedHistoryReady.isCompleted) {
+            resumedHistoryReady.complete();
+          }
+        }
+
+        received.addListener(checkResumedHistory);
+        try {
+          checkResumedHistory();
+          await resumedHistoryReady.future.timeout(const Duration(seconds: 5));
+        } finally {
+          received.removeListener(checkResumedHistory);
+        }
+        expect(
+          received.receiveHistory.last.file.sha256,
+          sha256.convert(resumedBytes).toString(),
+        );
+        expect(received.receiveHistory.last.file.actualName, resumedName);
+        stdout.writeln(
+          'NATIVE_NETWORK_RESUME_REPORT name=$resumedName '
+          'size=${resumedBytes.length} sha256=${sha256.convert(resumedBytes)}',
+        );
       } finally {
+        if (source.gateRelease case final release?) {
+          if (!release.isCompleted) release.complete();
+        }
         await Future.wait([sent.close(), received.close()]);
         await Future.wait([
           senderQueue.close(),
