@@ -242,6 +242,10 @@ int main(int argc, char** argv) {
     ascii_unicode_chars = static_cast<unsigned>(received.size());
   }
   UINT diagnostic_inserted = 0;
+  UINT f24_down_inserted = 0;
+  UINT f24_up_inserted = 0;
+  bool f24_async_down = false;
+  bool f24_async_after_up = false;
   UINT physical_ascii_inserted = 0;
   unsigned physical_ascii_chars = 0;
   LASTINPUTINFO last_input{};
@@ -249,12 +253,17 @@ int main(int argc, char** argv) {
   const bool last_input_known = GetLastInputInfo(&last_input) != 0;
   const DWORD after_tick = GetTickCount();
   if (!matched && GetForegroundWindow() == window) {
-    INPUT diagnostic[2]{};
-    diagnostic[0].type = INPUT_KEYBOARD;
-    diagnostic[0].ki.wVk = VK_F24;
-    diagnostic[1] = diagnostic[0];
-    diagnostic[1].ki.dwFlags = KEYEVENTF_KEYUP;
-    diagnostic_inserted = SendInput(2, diagnostic, sizeof(INPUT));
+    INPUT diagnostic{};
+    diagnostic.type = INPUT_KEYBOARD;
+    diagnostic.ki.wVk = VK_F24;
+    f24_down_inserted = SendInput(1, &diagnostic, sizeof(INPUT));
+    Pump();
+    f24_async_down = (GetAsyncKeyState(VK_F24) & 0x8000) != 0;
+    diagnostic.ki.dwFlags = KEYEVENTF_KEYUP;
+    f24_up_inserted = SendInput(1, &diagnostic, sizeof(INPUT));
+    Pump();
+    f24_async_after_up = (GetAsyncKeyState(VK_F24) & 0x8000) != 0;
+    diagnostic_inserted = f24_down_inserted + f24_up_inserted;
     const auto diagnostic_deadline = GetTickCount64() + 300;
     while (GetTickCount64() < diagnostic_deadline) { Pump(); Sleep(5); }
     received.clear();
@@ -283,6 +292,10 @@ int main(int argc, char** argv) {
               << packet_keydowns << " packet keydowns; foreground="
               << still_foreground << " focus=" << still_focused
               << " diagnosticInserted=" << diagnostic_inserted
+              << " f24DownInserted=" << f24_down_inserted
+              << " f24AsyncDown=" << f24_async_down
+              << " f24UpInserted=" << f24_up_inserted
+              << " f24AsyncAfterUp=" << f24_async_after_up
               << " physicalAsciiInserted=" << physical_ascii_inserted
               << " physicalAsciiChars=" << physical_ascii_chars
               << " physicalKeydowns=" << physical_keydowns
