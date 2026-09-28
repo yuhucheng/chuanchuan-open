@@ -142,6 +142,29 @@ class RemoteSessionController extends ChangeNotifier {
   /// A live picture occupies the single picture budget for the whole process.
   bool get occupied => _attempt != null;
 
+  /// The field may display the same renderer only after this peer's receiving
+  /// session has presented a frame. This does not acquire another media slot or
+  /// retain a frame after pause, disconnect, revoke, or stop.
+  RemotePicture? thumbnailFor(String peerKey) {
+    final attempt = _attempt;
+    final picture = attempt?.picture;
+    if (_disposed ||
+        _stopping ||
+        attempt == null ||
+        attempt.cancelled ||
+        !attempt.connection.isConnected ||
+        attempt.connection.grant?.phase != GrantPhase.active ||
+        attempt.peerKey != peerKey ||
+        !attempt.firstFrame ||
+        _phase != RemotePhase.active ||
+        picture == null ||
+        picture.stopped ||
+        picture.sends) {
+      return null;
+    }
+    return picture;
+  }
+
   Future<bool> sendControlPointerMove(double x, double y) => _sendControlInput(
     (scope, sequence) => ControlPointerMove(
       sequence: sequence,

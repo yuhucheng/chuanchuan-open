@@ -183,6 +183,16 @@ class _FieldShellState extends State<FieldShell> {
     );
   }
 
+  Widget? _remoteThumbnail(DirectoryDevice entry) {
+    if (!entry.verified ||
+        !entry.connected ||
+        !entry.online ||
+        entry.publicKey == null) {
+      return null;
+    }
+    return widget.remote.thumbnailFor(entry.publicKey!)?.view;
+  }
+
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: Listenable.merge([
@@ -306,6 +316,7 @@ class _FieldShellState extends State<FieldShell> {
                             query: search.text,
                             onLocal: localActions,
                             onDevice: deviceActions,
+                            thumbnail: _remoteThumbnail,
                             fileDropRegion: _fileDropRegion,
                             fileProgress: (entry) =>
                                 widget.networkTransfers != null &&

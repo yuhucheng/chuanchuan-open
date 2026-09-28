@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:share_hub_open/features/devices/device_directory.dart';
@@ -7,6 +8,69 @@ import 'package:share_hub_open/ui/field/appearance.dart';
 import 'package:share_hub_open/ui/field/device_field.dart';
 
 void main() {
+  testWidgets('hover and focus reuse only a current authorized picture', (
+    tester,
+  ) async {
+    const device = DirectoryDevice(
+      identityId: 'peer-key',
+      publicKey: 'peer-key',
+      name: '远端电脑',
+      platform: 'macos',
+      trust: DeviceTrust.verified,
+      reachability: DeviceReachability.reachable,
+      connected: true,
+    );
+    var visible = true;
+    var previewReads = 0;
+    var actions = 0;
+    late StateSetter refresh;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) {
+              refresh = setState;
+              return DeviceField(
+                entries: const [device],
+                localName: '本机',
+                allowConnections: true,
+                onLocal: () {},
+                onDevice: (_) async => actions++,
+                thumbnail: (_) {
+                  previewReads++;
+                  return visible
+                      ? const SizedBox(key: ValueKey('reused-picture'))
+                      : null;
+                },
+              );
+            },
+          ),
+        ),
+      ),
+    );
+    expect(previewReads, 0);
+    final node = find.byKey(const ValueKey('device-peer-key'));
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer();
+    await mouse.moveTo(tester.getCenter(node));
+    await tester.pump();
+    expect(find.byKey(const ValueKey('reused-picture')), findsOneWidget);
+    expect(actions, 0);
+    refresh(() => visible = false);
+    await tester.pump();
+    expect(find.byKey(const ValueKey('reused-picture')), findsNothing);
+    await mouse.moveTo(const Offset(1, 1));
+    await tester.pump();
+    refresh(() => visible = true);
+    await tester.pump();
+    expect(find.byKey(const ValueKey('reused-picture')), findsNothing);
+    tester.widget<OutlinedButton>(node).focusNode!.requestFocus();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('reused-picture')), findsOneWidget);
+    expect(actions, 0);
+    await mouse.removePointer();
+  });
+
   for (final scale in [1.0, 2.0]) {
     testWidgets(
       'long duplicate devices keep full distinctions at ${scale * 100} percent',

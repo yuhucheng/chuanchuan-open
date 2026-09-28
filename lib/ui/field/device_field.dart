@@ -19,6 +19,7 @@ class DeviceField extends StatefulWidget {
     this.query = '',
     this.fileProgress,
     this.fileDropRegion,
+    this.thumbnail,
   });
   final List<DirectoryDevice> entries;
   final String localName, query;
@@ -27,6 +28,10 @@ class DeviceField extends StatefulWidget {
   final Future<void> Function(DirectoryDevice) onDevice;
   final Widget? Function(DirectoryDevice)? fileProgress;
   final Widget Function(DirectoryDevice?, Widget)? fileDropRegion;
+
+  /// Reuses an already authorized live view; called only for a hovered or
+  /// focused node. Discovery and hover never request a media session.
+  final Widget? Function(DirectoryDevice)? thumbnail;
   @override
   State<DeviceField> createState() => _DeviceFieldState();
 }
@@ -35,6 +40,7 @@ class _DeviceFieldState extends State<DeviceField> {
   final _known = <String, DirectoryDevice>{};
   final _focus = <String, FocusNode>{};
   final _aggregateFocus = FocusNode(debugLabel: 'aggregate');
+  String? _hovered;
   bool _expanded = false;
   Widget _drop(DirectoryDevice? device, Widget child) =>
       widget.fileDropRegion?.call(device, child) ?? child;
@@ -53,10 +59,13 @@ class _DeviceFieldState extends State<DeviceField> {
   void _remember() {
     for (final entry in widget.entries) {
       _known[entry.identityId] = entry;
-      _focus.putIfAbsent(
-        entry.identityId,
-        () => FocusNode(debugLabel: entry.identityId),
-      );
+      _focus.putIfAbsent(entry.identityId, () {
+        final node = FocusNode(debugLabel: entry.identityId);
+        node.addListener(() {
+          if (mounted) setState(() {});
+        });
+        return node;
+      });
     }
   }
 
@@ -145,6 +154,13 @@ class _DeviceFieldState extends State<DeviceField> {
                 icon: Icons.devices,
                 focus: _focus[entry.identityId],
                 extra: widget.fileProgress?.call(entry),
+                identityId: entry.identityId,
+                preview:
+                    (_hovered == entry.identityId ||
+                            _focus[entry.identityId]?.hasFocus == true) &&
+                        online.contains(entry.identityId)
+                    ? widget.thumbnail?.call(entry)
+                    : null,
                 onPressed: online.contains(entry.identityId)
                     ? () async {
                         await widget.onDevice(entry);
@@ -248,57 +264,79 @@ class _DeviceFieldState extends State<DeviceField> {
     FocusNode? focus,
     bool local = false,
     Widget? extra,
-  }) => RawGestureDetector(
-    gestures: onPressed == null
-        ? const {}
-        : {
-            LongPressGestureRecognizer:
-                GestureRecognizerFactoryWithHandlers<
-                  LongPressGestureRecognizer
-                >(
-                  () => LongPressGestureRecognizer(
-                    duration: FieldTokens.holdDuration,
-                  ),
-                  (recognizer) => recognizer.onLongPress = onPressed,
-                ),
+    String? identityId,
+    Widget? preview,
+  }) => MouseRegion(
+    onEnter: identityId == null
+        ? null
+        : (_) => setState(() => _hovered = identityId),
+    onExit: identityId == null
+        ? null
+        : (_) {
+            if (_hovered == identityId) setState(() => _hovered = null);
           },
-    child: OutlinedButton(
-      key: key,
-      focusNode: focus,
-      onPressed: onPressed,
-      style: OutlinedButton.styleFrom(
-        padding: const EdgeInsets.all(16),
-        backgroundColor: Theme.of(context).colorScheme.surface,
-        side: BorderSide(
-          color: local
-              ? Theme.of(context).colorScheme.secondary
-              : Theme.of(context).colorScheme.outline,
-          width: local ? 2 : 1,
-        ),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(FieldTokens.nodeRadius),
-        ),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(icon, size: 32),
-          const SizedBox(height: 12),
-          Text(
-            name,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            textAlign: TextAlign.center,
+    child: RawGestureDetector(
+      gestures: onPressed == null
+          ? const {}
+          : {
+              LongPressGestureRecognizer:
+                  GestureRecognizerFactoryWithHandlers<
+                    LongPressGestureRecognizer
+                  >(
+                    () => LongPressGestureRecognizer(
+                      duration: FieldTokens.holdDuration,
+                    ),
+                    (recognizer) => recognizer.onLongPress = onPressed,
+                  ),
+            },
+      child: OutlinedButton(
+        key: key,
+        focusNode: focus,
+        onPressed: onPressed,
+        style: OutlinedButton.styleFrom(
+          padding: const EdgeInsets.all(16),
+          backgroundColor: Theme.of(context).colorScheme.surface,
+          side: BorderSide(
+            color: local
+                ? Theme.of(context).colorScheme.secondary
+                : Theme.of(context).colorScheme.outline,
+            width: local ? 2 : 1,
           ),
-          const SizedBox(height: 8),
-          Text(
-            detail,
-            textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.bodySmall,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(FieldTokens.nodeRadius),
           ),
-          ?extra,
-        ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 32),
+            const SizedBox(height: 12),
+            Text(
+              name,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              detail,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            if (preview != null) ...[
+              const SizedBox(height: 12),
+              Semantics(
+                label: '当前授权画面缩略图',
+                child: SizedBox(
+                  height: 120,
+                  child: IgnorePointer(child: preview),
+                ),
+              ),
+            ],
+            ?extra,
+          ],
+        ),
       ),
     ),
   );

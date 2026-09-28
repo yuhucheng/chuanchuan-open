@@ -1139,6 +1139,52 @@ void main() {
     expect(remoteA.error, contains('未呈现'));
   });
 
+  test(
+    'thumbnail only exposes the current presented receiving session',
+    () async {
+      build();
+      final peerKey = a.sessions.single.peerKey;
+      expect(remoteA.thumbnailFor(peerKey), isNull);
+      await remoteA.start(SessionOperation.watch, peerKey: peerKey);
+      final picture = factoryA.current;
+      expect(remoteA.thumbnailFor(peerKey), isNull);
+      picture.emit(MediaEventKind.firstFrame);
+      expect(remoteA.thumbnailFor(peerKey), same(picture));
+      expect(remoteA.thumbnailFor('another-identity'), isNull);
+      picture.emit(MediaEventKind.paused);
+      expect(remoteA.thumbnailFor(peerKey), isNull);
+      await remoteA.resume();
+      expect(remoteA.thumbnailFor(peerKey), isNull);
+      picture.emit(MediaEventKind.firstFrame);
+      expect(remoteA.thumbnailFor(peerKey), same(picture));
+      await remoteA.stop();
+      expect(remoteA.thumbnailFor(peerKey), isNull);
+    },
+  );
+
+  testWidgets('unmounting the field view does not end its media owner', (
+    tester,
+  ) async {
+    build();
+    final peerKey = a.sessions.single.peerKey;
+    await tester.runAsync(
+      () => remoteA.start(SessionOperation.watch, peerKey: peerKey),
+    );
+    final picture = factoryA.current;
+    picture.emit(MediaEventKind.firstFrame);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: RemotePicturePanel(controller: remoteA)),
+      ),
+    );
+    expect(find.byKey(const ValueKey('remote-view')), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+    expect(remoteA.thumbnailFor(peerKey), same(picture));
+    expect(picture.stops, 0);
+    await tester.runAsync(() => remoteA.stop());
+    expect(remoteA.thumbnailFor(peerKey), isNull);
+  });
+
   test('the watched endpoint may select its own source', () async {
     build();
     final incoming = _FakePicture(
