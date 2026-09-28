@@ -20,6 +20,49 @@ import 'package:share_hub_open/features/connections/connection_panel.dart';
 
 void main() {
   testWidgets(
+    'closing local context returns keyboard focus to its field node',
+    (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => DeviceField(
+                entries: const [],
+                localName: '本机',
+                allowConnections: false,
+                onLocal: () => showDialog<void>(
+                  context: context,
+                  builder: (dialogContext) => AlertDialog(
+                    title: const Text('本机与连接'),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(dialogContext),
+                        child: const Text('关闭'),
+                      ),
+                    ],
+                  ),
+                ),
+                onDevice: (_) async {},
+              ),
+            ),
+          ),
+        ),
+      );
+      final local = find.byKey(const ValueKey('local-device'));
+      final focus = tester.widget<OutlinedButton>(local).focusNode!;
+      focus.requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(find.text('本机与连接'), findsOneWidget);
+      await tester.tap(find.text('关闭'));
+      await tester.pumpAndSettle();
+      expect(focus.hasFocus, isTrue);
+      expect(find.byType(AlertDialog), findsNothing);
+    },
+  );
+
+  testWidgets(
     'arrival ordering, focused Enter action, aggregation and search remain in field',
     (tester) async {
       tester.view.physicalSize = const Size(1180, 1000);
@@ -109,11 +152,7 @@ void main() {
             child: DeviceField(
               entries: [
                 DirectoryDevice.fromDiscovered(
-                  const NearbyDevice(
-                    'long',
-                    '办公室里名称非常长的中文电脑设备用于布局验收',
-                    'macos',
-                  ),
+                  const NearbyDevice('long', '办公室里名称非常长的中文电脑设备用于布局验收', 'macos'),
                 ),
               ],
               localName: '本机名称也很长但依然应保持可读和可操作',

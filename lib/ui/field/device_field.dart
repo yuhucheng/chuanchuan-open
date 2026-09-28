@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -22,7 +23,7 @@ class DeviceField extends StatefulWidget {
   final List<DirectoryDevice> entries;
   final String localName, query;
   final bool allowConnections;
-  final VoidCallback onLocal;
+  final FutureOr<void> Function() onLocal;
   final Future<void> Function(DirectoryDevice) onDevice;
 
   /// Presentation only: the caller may borrow an existing authorized picture.
@@ -35,6 +36,7 @@ class DeviceField extends StatefulWidget {
 class _DeviceFieldState extends State<DeviceField> {
   final _known = <String, DirectoryDevice>{};
   final _focus = <String, FocusNode>{};
+  final _localFocus = FocusNode(debugLabel: 'local-device');
   final _aggregateFocus = FocusNode(debugLabel: 'aggregate');
   bool _expanded = false;
   String? _hovered, _focused;
@@ -65,6 +67,7 @@ class _DeviceFieldState extends State<DeviceField> {
     for (final node in _focus.values) {
       node.dispose();
     }
+    _localFocus.dispose();
     _aggregateFocus.dispose();
     super.dispose();
   }
@@ -128,7 +131,11 @@ class _DeviceFieldState extends State<DeviceField> {
             name: widget.localName,
             detail: widget.allowConnections ? '你 · 允许连接已开启' : '你 · 允许连接已关闭',
             icon: Icons.laptop_mac,
-            onPressed: widget.onLocal,
+            focus: _localFocus,
+            onPressed: () async {
+              await widget.onLocal();
+              if (mounted) _localFocus.requestFocus();
+            },
             local: true,
           ),
           for (final entry in visible)
