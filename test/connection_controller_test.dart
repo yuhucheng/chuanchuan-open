@@ -40,6 +40,47 @@ class FakeConnectionPlatform implements ConnectionPlatform {
 }
 
 void main() {
+  test('concurrent global disconnects share one revocation barrier', () async {
+    final platform = FakeConnectionPlatform();
+    final controller = ConnectionController(platform);
+    addTearDown(() async {
+      if (platform.withdrawalResult case final pending?
+          when !pending.isCompleted) {
+        pending.complete();
+      }
+      await controller.shutdown();
+      controller.dispose();
+    });
+    platform.seed.complete(await DeviceIdentity.fromSeed(List.filled(32, 93)));
+    await controller.open();
+    expect(controller.code, isNotNull);
+    final withdrawalsBefore = platform.advertisements
+        .where((value) => value == null)
+        .length;
+    platform.withdrawalStarted = Completer<void>();
+    platform.withdrawalResult = Completer<void>();
+
+    final first = controller.disconnectAll();
+    expect(controller.code, isNull);
+    expect(controller.accepting, isFalse);
+    final second = controller.disconnectAll();
+    expect(second, same(first));
+    await platform.withdrawalStarted!.future.timeout(
+      const Duration(seconds: 2),
+    );
+    await controller.open();
+    expect(controller.code, isNull);
+    expect(
+      platform.advertisements.where((value) => value == null).length,
+      withdrawalsBefore + 1,
+    );
+
+    platform.withdrawalResult!.complete();
+    await Future.wait([first, second]);
+    await controller.open();
+    expect(controller.code, matches(RegExp(r'^\d{6}$')));
+  });
+
   test(
     'per-device disconnect revokes an active grant before socket cleanup',
     () async {

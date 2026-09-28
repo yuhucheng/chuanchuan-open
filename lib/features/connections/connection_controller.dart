@@ -106,6 +106,7 @@ class ConnectionController extends ChangeNotifier {
   bool _disconnecting = false;
   bool _shutdownRequested = false;
   final _pendingStarts = <Future<dynamic>>{};
+  Future<void>? _disconnectPending;
   Future<void>? _shutdownPending;
   int _generation = 0;
   bool busy = false;
@@ -515,7 +516,10 @@ class ConnectionController extends ChangeNotifier {
   }
 
   /// Admission and in-flight handshakes are invalidated before awaiting I/O.
-  Future<void> disconnectAll() async {
+  Future<void> disconnectAll() {
+    if (_disconnectPending case final pending?) return pending;
+    final completion = Completer<void>();
+    _disconnectPending = completion.future;
     _disconnecting = true;
     grants.revokeAll();
     _cancelRecoveries();
@@ -524,11 +528,17 @@ class ConnectionController extends ChangeNotifier {
     for (final session in _sessions.toList()) {
       _close(session, 'revoked');
     }
+    completion.complete(_finishDisconnectAll());
+    return completion.future;
+  }
+
+  Future<void> _finishDisconnectAll() async {
     try {
       await stopAccepting();
       await Future.wait(_transportClosures.toList());
     } finally {
       _disconnecting = false;
+      _disconnectPending = null;
     }
   }
 
