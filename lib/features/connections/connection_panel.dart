@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:share_hub_connection/share_hub_connection.dart';
-import 'package:share_hub_media_api/share_hub_media_api.dart' show GrantRole;
+import 'package:share_hub_media_api/share_hub_media_api.dart'
+    show GrantPolicy, GrantRole;
 
 import '../../platform/client_platform.dart';
 import 'connection_controller.dart';
+import 'grant_duration.dart';
 import 'grant_status_text.dart';
 
 class ConnectionPanel extends StatelessWidget {
@@ -23,7 +25,9 @@ class ConnectionPanel extends StatelessWidget {
             style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 8),
-          const Text('让另一台设备输入本机短接码。连接成功后有效 8 小时，可随时断开。'),
+          Text(
+            '让另一台设备输入本机短接码。连接成功后有效 ${formatGrantDuration(GrantPolicy.shortCode.lifetime)}，可随时断开。',
+          ),
           const SizedBox(height: 16),
           if (controller.code != null) ...[
             Semantics(
@@ -339,8 +343,8 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
               ],
               Text(
                 widget.nextActionLabel == null
-                    ? '验证后建立 8 小时连接。连接本身不采集任何画面，观看或投屏需要单独发起。'
-                    : '验证后建立 8 小时连接，并继续${widget.nextActionLabel}。',
+                    ? '验证后建立 ${formatGrantDuration(GrantPolicy.shortCode.lifetime)}连接。连接本身不采集任何画面，观看或投屏需要单独发起。'
+                    : '验证后建立 ${formatGrantDuration(GrantPolicy.shortCode.lifetime)}连接，并继续${widget.nextActionLabel}。',
               ),
               if (widget.device?.publicKey != null &&
                   widget.controller.auxiliaryRoutes != null)
