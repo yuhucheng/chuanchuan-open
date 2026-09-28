@@ -18,6 +18,10 @@ final class _MeetingTransport implements AuxiliaryTransport {
   int? activatedLifetimeSeconds;
   bool closed = false;
   bool cancelOnJoin = false;
+  bool rejectHostPoll = false;
+  int hostPolls = 0;
+  int pendingPolls = 0;
+  final repeatedPending = Completer<void>();
 
   static String base64Token(int count, int value) =>
       base64Url.encode(List<int>.filled(count, value));
@@ -37,6 +41,10 @@ final class _MeetingTransport implements AuxiliaryTransport {
         if (cancelOnJoin) cancellation.cancel();
         return {'attempt': attempt, 'token': joinToken};
       case '/v1/meet/pending':
+        pendingPolls++;
+        if (pendingPolls >= 3 && !repeatedPending.isCompleted) {
+          repeatedPending.complete();
+        }
         return {
           'attempts': [attempt],
         };
@@ -48,6 +56,10 @@ final class _MeetingTransport implements AuxiliaryTransport {
         });
         return {'accepted': true};
       case '/v1/meet/poll':
+        if (rejectHostPoll && body['token'] == hostToken) {
+          hostPolls++;
+          throw const AuxiliaryFailure('entry_unavailable');
+        }
         final source = body['token'] == hostToken ? toHost : toJoiner;
         if (source.isNotEmpty) return source.removeAt(0);
         if (closed) throw const AuxiliaryFailure('entry_unavailable');
@@ -254,6 +266,38 @@ void main() {
     expect(closed, isTrue);
     expect(transport.closed, isTrue);
   });
+
+  test(
+    'stale pending attempt cannot repeatedly spend the host offer',
+    () async {
+      final identity = await DeviceIdentity.fromSeed(List.filled(32, 58));
+      final host = PairingHost(
+        identity: identity,
+        clock: () async => 1000000,
+        onConnection: (_) {},
+        protocolVersion: 2,
+      );
+      addTearDown(host.close);
+      await host.open(address: InternetAddress.loopbackIPv4);
+      final transport = _MeetingTransport(host.offer!.code)
+        ..rejectHostPoll = true;
+      final listing = MeetingListing(
+        transport,
+        host,
+        _MeetingTransport.hostToken,
+        AuxiliaryCancellation(),
+      );
+      addTearDown(listing.close);
+      final serving = listing.serve();
+      await transport.repeatedPending.future.timeout(
+        const Duration(seconds: 3),
+      );
+      expect(transport.hostPolls, 1);
+      expect(host.offer!.reservable(1000000), isTrue);
+      await listing.close();
+      await serving;
+    },
+  );
 
   test('meeting wire carries the real v2 PAKE and grant activation', () async {
     final hostIdentity = await DeviceIdentity.fromSeed(List.filled(32, 51));

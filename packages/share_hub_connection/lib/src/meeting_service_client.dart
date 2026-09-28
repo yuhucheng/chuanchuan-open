@@ -125,6 +125,9 @@ final class MeetingListing {
   final void Function(MeetingConnectionWire)? onActivated;
   final _pollCancellation = AuxiliaryCancellation();
   final _wires = <String, MeetingConnectionWire>{};
+  // A failed attempt can remain in a stale pending response until its leave
+  // reaches the service. Never spend the local offer budget on that ID again.
+  final _seenAttempts = <String>{};
   final _admissions = <Future<void>>{};
   Future<void>? _closingAdmission;
   Future<void>? _closing;
@@ -152,12 +155,13 @@ final class MeetingListing {
         throw const AuxiliaryFailure('invalid_response');
       }
       for (final value in attempts) {
-        if (value is! String || _wires.containsKey(value)) continue;
+        if (value is! String || _seenAttempts.contains(value)) continue;
         try {
           decodeBytes(value, 16);
         } on ConnectionFailure {
           throw const AuxiliaryFailure('invalid_response');
         }
+        _seenAttempts.add(value);
         final wire = MeetingConnectionWire(_transport, _token, value);
         _wires[value] = wire;
         _startAdmission(value, wire);
