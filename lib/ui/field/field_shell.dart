@@ -433,6 +433,7 @@ class _FieldShellState extends State<FieldShell> {
               .firstOrNull;
           if (live == null) return const SizedBox.shrink();
           final canInitiate =
+              _connectionSupported &&
               widget.connections.outgoingFor(live.publicKey ?? '') != null;
           return AlertDialog(
             title: Text(live.name),
@@ -456,7 +457,9 @@ class _FieldShellState extends State<FieldShell> {
                   Text('会话操作', style: Theme.of(context).textTheme.titleMedium),
                   const SizedBox(height: 12),
                   const Text('时延未测。'),
-                  if (live.connected && widget.networkTransfers != null)
+                  if (_connectionSupported &&
+                      live.connected &&
+                      widget.networkTransfers != null)
                     FilledButton.tonalIcon(
                       onPressed: () => Navigator.pop(context, 'files'),
                       icon: const Icon(Icons.file_present_outlined),
@@ -464,7 +467,7 @@ class _FieldShellState extends State<FieldShell> {
                     ),
                   if (widget.remote.offeredOperations.isEmpty)
                     const Text('本构建未提供远端画面操作能力。'),
-                  if (live.connected && !canInitiate)
+                  if (_connectionSupported && live.connected && !canInitiate)
                     const Text('当前连接由对方发起。若要发起远端操作，请让对方开启「允许连接」，再输入对方的短接码。'),
                   if (canInitiate) ...[
                     const Text('对端是否支持由会话本身确认；被拒绝会明确显示失败原因。'),
@@ -565,7 +568,7 @@ class _FieldShellState extends State<FieldShell> {
                       child: const Text('刷新设备'),
                     ),
                   ],
-                  if (live.connected) ...[
+                  if (_connectionSupported && live.connected) ...[
                     const SizedBox(height: 28),
                     const Divider(),
                     Text('危险区', style: Theme.of(context).textTheme.titleMedium),
@@ -602,7 +605,7 @@ class _FieldShellState extends State<FieldShell> {
         },
       ),
     );
-    if (action == null || !mounted) return;
+    if (action == null || !mounted || !_connectionSupported) return;
     if (action == 'files') {
       await openPanel(
         '文件传送',

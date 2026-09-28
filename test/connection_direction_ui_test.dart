@@ -84,12 +84,26 @@ class _NoopLink implements RemotePictureLink {
 }
 
 class _NoopMedia implements RemotePictureFactory {
+  _NoopMedia({this.offerControl = false});
+  final bool offerControl;
   @override
-  Set<ControlCapability> get controlCapabilities => const {};
+  Set<ControlCapability> get controlCapabilities => offerControl
+      ? const {
+          ControlCapability.pointer,
+          ControlCapability.wheel,
+          ControlCapability.physicalKey,
+          ControlCapability.textInput,
+          ControlCapability.clipboardText,
+        }
+      : const {};
   @override
   MediaCapabilities get capabilities => MediaCapabilities(
     protocolVersion: sessionProtocolVersion,
-    operations: {SessionOperation.watch, SessionOperation.cast},
+    operations: {
+      SessionOperation.watch,
+      SessionOperation.cast,
+      if (offerControl) SessionOperation.control,
+    },
     maxVideoSessions: 1,
   );
   @override
@@ -103,13 +117,16 @@ class _NoopMedia implements RemotePictureFactory {
 }
 
 class _RecordingRemote extends RemoteSessionController {
-  _RecordingRemote(ConnectionController connections, FakePlatform platform)
-    : super(
-        connections: connections,
-        platform: platform,
-        factory: _NoopMedia(),
-        listSources: () async => [],
-      );
+  _RecordingRemote(
+    ConnectionController connections,
+    FakePlatform platform, {
+    bool offerControl = false,
+  }) : super(
+         connections: connections,
+         platform: platform,
+         factory: _NoopMedia(offerControl: offerControl),
+         listSources: () async => [],
+       );
   final starts = <(SessionOperation, String)>[];
   @override
   Future<void> start(
@@ -159,6 +176,9 @@ void main() {
   Future<(_DialogConnections, _RecordingRemote, FakePlatform)> mount(
     WidgetTester tester, {
     bool endpoint = true,
+    bool initialOutgoing = false,
+    bool offerControl = false,
+    TargetPlatform targetPlatform = TargetPlatform.macOS,
   }) async {
     tester.view.physicalSize = const Size(1100, 950);
     tester.view.devicePixelRatio = 1;
@@ -167,6 +187,7 @@ void main() {
     final platform = FakePlatform()
       ..status = const PermissionStatus(screenRecording: true);
     final connections = _DialogConnections(incoming);
+    if (initialOutgoing) connections.visible.add(outgoing);
     final devices = DeviceController(platform);
     await devices.initialize();
     devices.discovery = DiscoverySnapshot(
@@ -185,7 +206,11 @@ void main() {
     final engine = FakePreviewEngine();
     final preview = PreviewController(platform, engine);
     final transfers = TransferQueue(TestFileAccess());
-    final remote = _RecordingRemote(connections, platform);
+    final remote = _RecordingRemote(
+      connections,
+      platform,
+      offerControl: offerControl,
+    );
     final appearance = Appearance();
     final desktop = DesktopLifecycle(
       devices: devices,
@@ -204,7 +229,7 @@ void main() {
           transfers: transfers,
           desktop: desktop,
           appearance: appearance,
-          targetPlatform: TargetPlatform.macOS,
+          targetPlatform: targetPlatform,
         ),
       ),
     );
@@ -229,6 +254,40 @@ void main() {
     await tester.tap(find.byKey(ValueKey('device-${incoming.peerKey}')));
     await tester.pumpAndSettle();
   }
+
+  testWidgets('Android never offers control from a stale desktop grant', (
+    tester,
+  ) async {
+    final (_, remote, _) = await mount(
+      tester,
+      initialOutgoing: true,
+      offerControl: true,
+      targetPlatform: TargetPlatform.android,
+    );
+    await openDevice(tester);
+    expect(find.text('本平台尚未支持连接。'), findsOneWidget);
+    expect(find.text('控制该设备'), findsNothing);
+    expect(find.text('连接并控制'), findsNothing);
+    expect(find.text('观看该设备屏幕'), findsNothing);
+    expect(remote.starts, isEmpty);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('desktop still starts direct control from an outgoing grant', (
+    tester,
+  ) async {
+    final (_, remote, _) = await mount(
+      tester,
+      initialOutgoing: true,
+      offerControl: true,
+    );
+    await openDevice(tester);
+    await tester.ensureVisible(find.text('控制该设备'));
+    await tester.tap(find.text('控制该设备'));
+    await tester.pumpAndSettle();
+    expect(remote.starts, [(SessionOperation.control, incoming.peerKey)]);
+    await tester.pumpWidget(const SizedBox());
+  });
 
   testWidgets(
     'receiver direction requests a new code and cancel keeps the old connection',
