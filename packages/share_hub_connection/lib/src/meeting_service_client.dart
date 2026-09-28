@@ -306,12 +306,34 @@ final class MeetingConnectionWire
     _queued++;
     _sendTail = _sendTail
         .then((_) async {
-          final result = await _transport.post('/v1/meet/send', {
+          final body = {
             'token': _token,
             'attempt': _attempt,
             'sequence': sequence.toString(),
             'frame': frame,
-          }, _cancellation);
+          };
+          Map<String, Object?> result;
+          try {
+            result = await _transport.post(
+              '/v1/meet/send',
+              body,
+              _cancellation,
+            );
+          } on AuxiliaryFailure catch (error) {
+            // The service may already have queued this sequence when its HTTP
+            // reply is lost. Replay the identical frame once; it is accepted
+            // idempotently, never delivered twice. Cancellation never retries.
+            if (_closed ||
+                _cancellation.isCancelled ||
+                (error.code != 'timeout' && error.code != 'unreachable')) {
+              rethrow;
+            }
+            result = await _transport.post(
+              '/v1/meet/send',
+              body,
+              _cancellation,
+            );
+          }
           if (result.length != 1 || result['accepted'] != true) {
             throw const AuxiliaryFailure('invalid_response');
           }

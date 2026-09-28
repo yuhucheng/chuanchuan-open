@@ -19,6 +19,8 @@ final class _MeetingTransport implements AuxiliaryTransport {
   bool closed = false;
   bool cancelOnJoin = false;
   bool rejectHostPoll = false;
+  bool loseFirstSendReply = false;
+  final seenSends = <String>{};
   Completer<void>? leaveRelease;
   final leaveEntered = Completer<void>();
   int hostPolls = 0;
@@ -52,10 +54,18 @@ final class _MeetingTransport implements AuxiliaryTransport {
         };
       case '/v1/meet/send':
         final target = body['token'] == hostToken ? toJoiner : toHost;
-        target.add({
-          'sequence': int.parse(body['sequence']!),
-          'frame': body['frame']!,
-        });
+        final identity =
+            '${body['token']}:${body['sequence']}:${body['frame']}';
+        if (seenSends.add(identity)) {
+          target.add({
+            'sequence': int.parse(body['sequence']!),
+            'frame': body['frame']!,
+          });
+          if (loseFirstSendReply) {
+            loseFirstSendReply = false;
+            throw const AuxiliaryFailure('timeout');
+          }
+        }
         return {'accepted': true};
       case '/v1/meet/poll':
         if (rejectHostPoll && body['token'] == hostToken) {
@@ -143,6 +153,25 @@ final class _DelayedLeaveTransport implements AuxiliaryTransport {
 }
 
 void main() {
+  test(
+    'lost meeting send acknowledgement retries without a second frame',
+    () async {
+      final transport = _MeetingTransport('123456')..loseFirstSendReply = true;
+      final wire = MeetingConnectionWire(
+        transport,
+        _MeetingTransport.joinToken,
+        _MeetingTransport.attempt,
+      );
+      addTearDown(wire.closeAndLeave);
+      wire.send({'type': 'hello'});
+      await wire.flush();
+      expect(wire.isClosed, isFalse);
+      expect(transport.toHost, hasLength(1));
+      expect(transport.toHost.single['sequence'], 0);
+      expect(transport.seenSends, hasLength(1));
+    },
+  );
+
   test('cancel after accepted meeting join releases the attempt', () async {
     final transport = _MeetingTransport('123456')..cancelOnJoin = true;
     await expectLater(
