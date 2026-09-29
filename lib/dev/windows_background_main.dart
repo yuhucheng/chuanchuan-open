@@ -5,11 +5,9 @@
 //
 // Differences from the macOS matrix are recorded in the report, not smoothed
 // over:
-//   * No capture is started, so there is no frame delta. Windows resolves
-//     createPreviewEngine() to WebRtcPreviewEngine, whose runtime statistics are
-//     served by mac-only native bridge `dev.sharehub.client/preview`; there is
-//     no Windows counterpart, so "still capturing while hidden" is NOT measured
-//     here rather than being implied.
+//   * No capture is started, so there is no frame delta. Windows now uses the
+//     SDK native preview core, but this host-only matrix does not query capture
+//     progress. It provides no "still capturing while hidden" evidence.
 //   * There is no LaunchServices/Dock equivalent to wake the process from
 //     outside. "reopen" below uses the same in-app ShowMainWindow() path and is
 //     therefore labelled programmatic, never an external wake-up observation.
