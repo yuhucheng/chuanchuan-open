@@ -535,7 +535,8 @@ class RemoteSessionController extends ChangeNotifier {
         _shuttingDown ||
         attempt == null ||
         picture == null ||
-        sourceBusy) {
+        sourceBusy ||
+        _phase != RemotePhase.active) {
       return;
     }
     try {
@@ -556,7 +557,8 @@ class RemoteSessionController extends ChangeNotifier {
         _shuttingDown ||
         attempt == null ||
         picture == null ||
-        sourceBusy) {
+        sourceBusy ||
+        _phase != RemotePhase.paused) {
       return;
     }
     try {

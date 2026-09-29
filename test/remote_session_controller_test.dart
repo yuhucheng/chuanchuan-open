@@ -1820,6 +1820,37 @@ void main() {
   );
 
   test(
+    'repeated playback actions preserve the current presented frame',
+    () async {
+      build();
+      await remoteA.start(
+        SessionOperation.watch,
+        peerKey: a.sessions.single.peerKey,
+      );
+      final picture = factoryA.current..emitPausedOnPause = true;
+      picture.emit(MediaEventKind.firstFrame);
+      expect(remoteA.phase, RemotePhase.active);
+
+      await remoteA.resume();
+      expect(picture.resumes, 0);
+      expect(remoteA.phase, RemotePhase.active);
+      expect(remoteA.thumbnailFor(a.sessions.single.peerKey), same(picture));
+
+      await remoteA.pause();
+      await remoteA.pause();
+      expect(picture.pauses, 1);
+      expect(remoteA.phase, RemotePhase.paused);
+
+      await remoteA.resume();
+      await remoteA.resume();
+      expect(picture.resumes, 1);
+      expect(remoteA.phase, RemotePhase.waitingFirstFrame);
+      picture.emit(MediaEventKind.firstFrame);
+      expect(remoteA.phase, RemotePhase.active);
+    },
+  );
+
+  test(
     'cancelling mid-start stops the late session and isolates its callbacks',
     () async {
       build();
