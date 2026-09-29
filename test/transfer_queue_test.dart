@@ -75,6 +75,39 @@ void main() {
     expect(access.finished, ['empty']);
   });
 
+  test(
+    'native drop uses the normal preparation queue without a picker',
+    () async {
+      const dropped = SelectedFile(token: 'drop', name: 'dropped.txt', size: 3);
+      access.data['drop'] = Uint8List.fromList([1, 2, 3]);
+      await queue.addDroppedFiles([dropped]);
+      await drainQueue(queue);
+      expect(access.picks, 0);
+      expect(queue.items.single.state, PreparationState.ready);
+      expect(queue.items.single.sha256, sha256.convert([1, 2, 3]).toString());
+    },
+  );
+
+  test('over-limit native drop releases every new token', () async {
+    final dropped = List.generate(
+      65,
+      (index) => SelectedFile(token: 'drop-$index', name: '$index', size: 0),
+    );
+    await queue.addDroppedFiles(dropped);
+    expect(queue.items, isEmpty);
+    expect(access.releases, hasLength(65));
+    expect(access.reads, isEmpty);
+  });
+
+  test('native drop arriving after queue close releases its tokens', () async {
+    await queue.close();
+    await queue.addDroppedFiles([
+      const SelectedFile(token: 'late-drop', name: 'late', size: 0),
+    ]);
+    expect(queue.items, isEmpty);
+    expect(access.releases, ['late-drop']);
+  });
+
   test('queued cancellation skips reading; in-flight cancellation discards late bytes', () async {
     access.selection = [
       const SelectedFile(token: 'one', name: 'one', size: 3),

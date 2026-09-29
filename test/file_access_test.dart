@@ -7,9 +7,65 @@ void main() {
   final messenger =
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
   const channel = MethodChannel('dev.sharehub.client/platform');
+  const dropChannel = MethodChannel('dev.sharehub.client/files/drop');
   tearDown(() {
     messenger.setMockMethodCallHandler(channel, null);
+    MethodChannelFileAccess().setDropHandler(null);
   });
+
+  test(
+    'native drop passes only tokens and acknowledges queue ownership',
+    () async {
+      final access = MethodChannelFileAccess();
+      List<SelectedFile>? received;
+      access.setDropHandler((files) async {
+        received = files;
+      });
+      const codec = StandardMethodCodec();
+      final response = await messenger.handlePlatformMessage(
+        dropChannel.name,
+        codec.encodeMethodCall(
+          const MethodCall('files.dropped', [
+            {'token': 'native-token', 'name': 'file.txt', 'size': 3},
+          ]),
+        ),
+        null,
+      );
+      expect(codec.decodeEnvelope(response!), true);
+      expect(received?.single.token, 'native-token');
+      expect(received?.single.name, 'file.txt');
+    },
+  );
+
+  test(
+    'native drop error is reported and malformed payload is refused',
+    () async {
+      final access = MethodChannelFileAccess();
+      String? error;
+      access.setDropHandler(
+        (_) async {},
+        onError: (message) => error = message,
+      );
+      const codec = StandardMethodCodec();
+      final shown = await messenger.handlePlatformMessage(
+        dropChannel.name,
+        codec.encodeMethodCall(const MethodCall('files.dropError', '拒绝')),
+        null,
+      );
+      expect(codec.decodeEnvelope(shown!), true);
+      expect(error, '拒绝');
+      final malformed = await messenger.handlePlatformMessage(
+        dropChannel.name,
+        codec.encodeMethodCall(
+          const MethodCall('files.dropped', [
+            {'path': r'C:\unauthorized.txt'},
+          ]),
+        ),
+        null,
+      );
+    expect(() => codec.decodeEnvelope(malformed!), throwsA(isA<PlatformException>()));
+    },
+  );
 
   test(
     'picker and chunk calls use tokens, typed bytes, and 64-bit offsets',

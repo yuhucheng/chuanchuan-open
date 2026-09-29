@@ -99,6 +99,14 @@ class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    if (defaultTargetPlatform == TargetPlatform.windows) {
+      if (_fileAccess case MethodChannelFileAccess access) {
+        access.setDropHandler(
+          _transfers.addDroppedFiles,
+          onError: _transfers.reportDropError,
+        );
+      }
+    }
     WidgetsBinding.instance.addObserver(this);
     _connections.addListener(_connectionChanged);
     _connectionChanged();
@@ -130,6 +138,11 @@ class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
       : AppExitResponse.cancel;
   @override
   void dispose() {
+    if (defaultTargetPlatform == TargetPlatform.windows) {
+      if (_fileAccess case MethodChannelFileAccess access) {
+        access.setDropHandler(null);
+      }
+    }
     WidgetsBinding.instance.removeObserver(this);
     _connections.removeListener(_connectionChanged);
     widget.setAuxiliaryNeeded?.call(false);

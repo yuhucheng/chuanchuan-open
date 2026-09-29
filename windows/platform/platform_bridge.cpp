@@ -10,6 +10,7 @@
 #include <flutter/event_channel.h>
 #include <flutter/event_stream_handler_functions.h>
 #include <flutter/method_channel.h>
+#include <flutter/method_result_functions.h>
 #include <flutter/standard_method_codec.h>
 #include <climits>
 #include <optional>
@@ -79,6 +80,7 @@ struct PlatformBridge::Impl {
   SelectedFileStore files;
   ComPtr<IFileOpenDialog> picker;
   std::unique_ptr<flutter::MethodChannel<Value>> methods;
+  std::unique_ptr<flutter::MethodChannel<Value>> drop_methods;
   std::unique_ptr<flutter::EventChannel<Value>> events;
   std::unique_ptr<flutter::EventSink<Value>> sink;
 };
@@ -147,8 +149,12 @@ PlatformBridge::PlatformBridge(flutter::BinaryMessenger* messenger, HWND window,
     : impl_(std::make_shared<Impl>(window, std::move(registry_key))) {
   const auto* codec = &flutter::StandardMethodCodec::GetInstance();
   impl_->methods = std::make_unique<flutter::MethodChannel<Value>>(messenger, "dev.sharehub.client/platform", codec);
+  impl_->drop_methods = std::make_unique<flutter::MethodChannel<Value>>(messenger, "dev.sharehub.client/files/drop", codec);
   impl_->events = std::make_unique<flutter::EventChannel<Value>>(messenger, "dev.sharehub.client/discovery", codec);
   impl_->timer = SetTimer(window, kTimer, 1000, nullptr);
+  // Only the native window may turn a shell drop into file capabilities.
+  // Dart and network callers still have no method that accepts a path.
+  DragAcceptFiles(window, TRUE);
   impl_->discovery.on_change = [this](const DiscoverySnapshot& snapshot) {
     if (impl_->sink && !impl_->closed) impl_->sink->Success(SnapshotValue(snapshot));
   };
@@ -279,6 +285,62 @@ PlatformBridge::PlatformBridge(flutter::BinaryMessenger* messenger, HWND window,
 PlatformBridge::~PlatformBridge() { Close(); }
 bool PlatformBridge::HandleMessage(UINT message, WPARAM wparam) {
   if (impl_->closed) return false;
+  if (message == WM_DROPFILES) {
+    const auto drop = reinterpret_cast<HDROP>(wparam);
+    struct DropGuard {
+      HDROP drop;
+      ~DropGuard() { DragFinish(drop); }
+    } guard{drop};
+    auto report = [this](SelectedFileError reason) {
+      impl_->drop_methods->InvokeMethod("files.dropError", std::make_unique<Value>(std::string(FileMessage(reason))));
+    };
+    const UINT count = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
+    if (count == 0) return true;
+    if (count > SelectedFileStore::kMaximumFiles - impl_->files.count()) {
+      report(SelectedFileError::limit);
+      return true;
+    }
+    std::vector<std::wstring> paths;
+    paths.reserve(count);
+    for (UINT index = 0; index < count; ++index) {
+      const UINT length = DragQueryFileW(drop, index, nullptr, 0);
+      if (length == 0) {
+        report(SelectedFileError::unavailable);
+        return true;
+      }
+      std::wstring path(length + 1, L'\0');
+      if (DragQueryFileW(drop, index, path.data(), length + 1) != length) {
+        report(SelectedFileError::unavailable);
+        return true;
+      }
+      path.resize(length);
+      paths.push_back(std::move(path));
+    }
+    try {
+      List files;
+      std::vector<std::string> tokens;
+      for (const auto& file : impl_->files.AddPickerPaths(paths)) {
+        tokens.push_back(file.token);
+        files.emplace_back(Map{{Value("token"), Value(file.token)},
+                               {Value("name"), Value(file.name)},
+                               {Value("size"), Value(file.size)}});
+      }
+      const auto state = impl_;
+      const auto release = [state, tokens]() {
+        for (const auto& token : tokens) state->files.Release(token);
+      };
+      impl_->drop_methods->InvokeMethod("files.dropped", std::make_unique<Value>(files),
+          std::make_unique<flutter::MethodResultFunctions<Value>>(
+              [release](const Value* result) {
+                if (!result || !std::get_if<bool>(result) || !std::get<bool>(*result)) release();
+              },
+              [release](const std::string&, const std::string&, const Value*) { release(); },
+              [release]() { release(); }));
+    } catch (const SelectedFileException& error) {
+      report(error.reason());
+    }
+    return true;
+  }
   if (message == NativeDiscovery::kMessage) { impl_->discovery.Pump(); return true; }
   if (message == WM_TIMER && wparam == impl_->timer) { impl_->discovery.Pump(); impl_->discovery.Tick(); return true; }
   return false;
@@ -290,6 +352,7 @@ void PlatformBridge::CancelFilePicker() {
 void PlatformBridge::Close() {
   if (impl_->closed) return;
   impl_->closed = true;
+  DragAcceptFiles(impl_->window, FALSE);
   if (impl_->picker) impl_->picker->Close(HRESULT_FROM_WIN32(ERROR_CANCELLED));
   impl_->files.Shutdown();
   if (impl_->timer) { KillTimer(impl_->window, impl_->timer); impl_->timer = 0; }

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:share_hub_connection/share_hub_connection.dart';
 
@@ -51,6 +53,35 @@ class FieldShell extends StatefulWidget {
 class _FieldShellState extends State<FieldShell> {
   final search = TextEditingController();
   final name = TextEditingController();
+  int _seenDroppedBatches = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _seenDroppedBatches = widget.transfers.droppedBatches;
+    widget.transfers.addListener(_onTransfersChanged);
+  }
+
+  @override
+  void didUpdateWidget(FieldShell oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.transfers != widget.transfers) {
+      oldWidget.transfers.removeListener(_onTransfersChanged);
+      _seenDroppedBatches = widget.transfers.droppedBatches;
+      widget.transfers.addListener(_onTransfersChanged);
+    }
+  }
+
+  void _onTransfersChanged() {
+    if (widget.transfers.droppedBatches == _seenDroppedBatches) return;
+    _seenDroppedBatches = widget.transfers.droppedBatches;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !(ModalRoute.of(context)?.isCurrent ?? false)) return;
+      unawaited(
+        openPanel('本机文件准备', () => TransfersPage(queue: widget.transfers)),
+      );
+    });
+  }
 
   /// Display material for identities verified during this run. It is never
   /// persisted and authorizes nothing: a saved entry must re-prove its identity
@@ -108,6 +139,7 @@ class _FieldShellState extends State<FieldShell> {
 
   @override
   void dispose() {
+    widget.transfers.removeListener(_onTransfersChanged);
     search.dispose();
     name.dispose();
     super.dispose();

@@ -32,6 +32,7 @@ class TransferQueue extends ChangeNotifier {
   List<TransferItem> get items => List.unmodifiable(_items);
   bool selecting = false;
   String? error;
+  int droppedBatches = 0;
   bool _disposed = false;
   int _selectionGeneration = 0;
   Future<void>? _worker;
@@ -46,20 +47,7 @@ class TransferQueue extends ChangeNotifier {
     return _picker = () async {
       try {
         final files = await access.pickFiles();
-        if (_disposed ||
-            generation != _selectionGeneration ||
-            files.length > maxFiles - _items.length) {
-          for (final file in files) {
-            final item = TransferItem(file)..state = PreparationState.cancelled;
-            if (!await _release(item)) _items.add(item);
-          }
-          if (!_disposed && generation == _selectionGeneration) {
-            error = '队列最多容纳 64 个文件，请先移除部分文件。';
-          }
-          return;
-        }
-        _items.addAll(files.map(TransferItem.new));
-        _ensureWorker();
+        await _addFiles(files, valid: generation == _selectionGeneration);
       } catch (failure) {
         if (!_disposed && generation == _selectionGeneration) {
           error = _message(failure);
@@ -69,6 +57,41 @@ class TransferQueue extends ChangeNotifier {
         _notify();
       }
     }();
+  }
+
+  /// Receives only native-issued tokens. The operating system's drop paths
+  /// never cross into Dart, and all rejection paths release their handles.
+  Future<void> addDroppedFiles(List<SelectedFile> files) async {
+    await _addFiles(files, valid: true, dropped: true);
+    _notify();
+  }
+
+  void reportDropError(String message) {
+    if (_disposed) return;
+    error = message;
+    droppedBatches++;
+    _notify();
+  }
+
+  Future<void> _addFiles(
+    List<SelectedFile> files, {
+    required bool valid,
+    bool dropped = false,
+  }) async {
+    if (_disposed || !valid || files.length > maxFiles - _items.length) {
+      for (final file in files) {
+        final item = TransferItem(file)..state = PreparationState.cancelled;
+        if (!await _release(item)) _items.add(item);
+      }
+      if (!_disposed && valid) {
+        error = '队列最多容纳 64 个文件，请先移除部分文件。';
+      }
+      return;
+    }
+    error = null;
+    _items.addAll(files.map(TransferItem.new));
+    if (dropped && files.isNotEmpty) droppedBatches++;
+    _ensureWorker();
   }
 
   void _ensureWorker() {

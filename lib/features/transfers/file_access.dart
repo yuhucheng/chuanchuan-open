@@ -21,6 +21,43 @@ abstract interface class FileAccess {
 
 class MethodChannelFileAccess implements FileAccess {
   static const _channel = MethodChannel('dev.sharehub.client/platform');
+  static const _drops = MethodChannel('dev.sharehub.client/files/drop');
+
+  void setDropHandler(
+    Future<void> Function(List<SelectedFile>)? onDrop, {
+    void Function(String)? onError,
+  }) {
+    _drops.setMethodCallHandler(
+      onDrop == null
+          ? null
+          : (call) async {
+              if (call.method == 'files.dropError' &&
+                  call.arguments is String) {
+                onError?.call(call.arguments as String);
+                return true;
+              }
+              if (call.method != 'files.dropped' || call.arguments is! List) {
+                throw PlatformException(code: 'invalid_drop');
+              }
+              final files = (call.arguments as List).map((entry) {
+                if (entry is! Map ||
+                    entry['token'] is! String ||
+                    entry['name'] is! String ||
+                    entry['size'] is! int) {
+                  throw PlatformException(code: 'invalid_drop');
+                }
+                return SelectedFile(
+                  token: entry['token'] as String,
+                  name: entry['name'] as String,
+                  size: entry['size'] as int,
+                );
+              }).toList();
+              await onDrop(files);
+              return true;
+            },
+    );
+  }
+
   @override
   Future<List<SelectedFile>> pickFiles() async {
     final result = await _channel.invokeListMethod<dynamic>('files.pick') ?? [];
