@@ -1,13 +1,16 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:share_hub_connection/share_hub_connection.dart';
 import 'package:share_hub_file_transfer/share_hub_file_transfer.dart';
 import 'package:share_hub_open/features/connections/connection_controller.dart';
+import 'package:share_hub_open/features/desktop/desktop_lifecycle.dart';
+import 'package:share_hub_open/features/devices/device_controller.dart';
+import 'package:share_hub_open/features/preview/preview_controller.dart';
 import 'package:share_hub_open/features/transfers/file_access.dart';
 import 'package:share_hub_open/features/transfers/network_transfers.dart';
 import 'package:share_hub_open/features/transfers/receive_access.dart';
@@ -17,6 +20,7 @@ import 'package:share_hub_open/features/transfers/transfer_queue.dart';
 import '../test/connection_controller_test.dart' show FakeConnectionPlatform;
 import '../test/connection_relay.dart';
 import '../test/file_fakes.dart';
+import '../test/fakes.dart';
 import '../test/network_file_fakes.dart';
 import '../test/transfer_queue_test.dart' show drainQueue;
 
@@ -543,7 +547,7 @@ void main() {
   );
 
   testWidgets(
-    'revoking sender grant after first ACK retires native partial file',
+    'desktop lifecycle exit after first ACK retires native partial file',
     (tester) async {
       expect(Platform.isWindows || Platform.isMacOS, isTrue);
       const destinationPath = String.fromEnvironment('NATIVE_RECEIVE_DIR');
@@ -578,8 +582,31 @@ void main() {
         source: MemorySourceAccess({}),
         receive: MethodChannelReceiveAccess(),
       );
+      final desktopPlatform = FakePlatform();
+      final devices = DeviceController(desktopPlatform);
+      final preview = PreviewController(desktopPlatform, FakePreviewEngine());
+      const desktopChannel = MethodChannel('test/network-native-exit');
+      final desktopCalls = <String>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(desktopChannel, (call) async {
+            desktopCalls.add(call.method);
+            if (call.method == 'initialize') {
+              return {'allowConnections': false};
+            }
+            return null;
+          });
+      final desktop = DesktopLifecycle(
+        devices: devices,
+        connections: sender,
+        preview: preview,
+        transfers: senderQueue,
+        closeNetworkTransfers: sent.close,
+        connectionSupported: true,
+        channel: desktopChannel,
+      );
       ConnectionRelay? relay;
       try {
+        await desktop.initialize();
         await receiver.open();
         relay = await ConnectionRelay.open(
           receiverPlatform.advertisements.whereType<int>().last,
@@ -594,7 +621,7 @@ void main() {
           List<int>.generate(3 * 256 * 1024 + 13, (index) => index % 251),
         );
         final name =
-            'chuan-network-off-${DateTime.now().microsecondsSinceEpoch}.bin';
+            'chuan-network-exit-${DateTime.now().microsecondsSinceEpoch}.bin';
         selectedFiles.selection = [
           SelectedFile(token: 'off-source', name: name, size: bytes.length),
         ];
@@ -611,10 +638,12 @@ void main() {
           _temporaryPaths(destination).difference(existingParts),
           hasLength(1),
         );
-        final revoking = sender.disconnectAll();
+        final exiting = desktop.requestExit();
         source.gateRelease!.complete();
-        await revoking.timeout(const Duration(seconds: 20));
+        expect(await exiting.timeout(const Duration(seconds: 20)), isTrue);
         await job.done.timeout(const Duration(seconds: 20));
+        expect(desktop.exited, isTrue);
+        expect(desktopCalls, contains('prepareExit'));
         expect(sender.sessions, isEmpty);
         expect(job.phase, NetworkSendPhase.cancelled);
         expect(job.canResume, isFalse);
@@ -638,7 +667,9 @@ void main() {
           isFalse,
         );
         expect(_temporaryPaths(destination).difference(existingParts), isEmpty);
-        stdout.writeln('NATIVE_NETWORK_OFF_REPORT name=$name');
+        await desktop.finishExit();
+        expect(desktopCalls.last, 'exit');
+        stdout.writeln('NATIVE_NETWORK_EXIT_REPORT name=$name');
       } finally {
         if (source.gateRelease case final release?) {
           if (!release.isCompleted) release.complete();
@@ -657,6 +688,12 @@ void main() {
         sender.dispose();
         receiver.dispose();
         await relay?.close();
+        desktop.dispose();
+        devices.dispose();
+        preview.dispose();
+        await desktopPlatform.events.close();
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(desktopChannel, null);
       }
     },
     timeout: const Timeout(Duration(minutes: 2)),
