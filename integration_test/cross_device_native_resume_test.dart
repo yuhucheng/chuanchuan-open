@@ -1,5 +1,7 @@
 // Explicit Windows/macOS two-computer acceptance probe. Run host and client
 // with WIRE_ROLE, WIRE_HOST, WIRE_HANDSHAKE and WIRE_REPORT --dart-define values.
+// WIRE_SCENARIO=changed verifies same-length source mutation after the cut;
+// the default scenario verifies successful resume.
 // The sender is memory-backed; the receiver uses the production native store.
 import 'dart:async';
 import 'dart:convert';
@@ -26,6 +28,10 @@ const _role = String.fromEnvironment('WIRE_ROLE');
 const _host = String.fromEnvironment('WIRE_HOST');
 const _handshakePath = String.fromEnvironment('WIRE_HANDSHAKE');
 const _reportPath = String.fromEnvironment('WIRE_REPORT');
+const _scenario = String.fromEnvironment(
+  'WIRE_SCENARIO',
+  defaultValue: 'resume',
+);
 
 final class _ProbePlatform implements ConnectionPlatform {
   _ProbePlatform(this._identity);
@@ -69,11 +75,12 @@ final class _GatedSource extends MemorySourceAccess {
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('native receive resumes after a real cross-device TCP cut', (
+  testWidgets('native receive handles a real cross-device TCP cut', (
     tester,
   ) async {
     expect(Platform.isWindows || Platform.isMacOS, isTrue);
     expect(_role, anyOf('host', 'client'));
+    expect(_scenario, anyOf('resume', 'changed'));
     expect(_handshakePath, isNotEmpty);
     expect(_reportPath, isNotEmpty);
     if (_role == 'client') expect(_host, isNotEmpty);
@@ -132,7 +139,7 @@ void main() {
           List<int>.generate(3 * 256 * 1024 + 13, (i) => i % 251),
         );
         final name =
-            'chuan-cross-resume-${DateTime.now().microsecondsSinceEpoch}.bin';
+            'chuan-cross-$_scenario-${DateTime.now().microsecondsSinceEpoch}.bin';
         selected.data['source'] = bytes;
         selected.selection = [
           SelectedFile(token: 'source', name: name, size: bytes.length),
@@ -152,12 +159,21 @@ void main() {
         expect(job.acknowledgedBytes, 256 * 1024);
         relay!.cut();
         await suspended.timeout(const Duration(seconds: 10));
+        if (_scenario == 'changed') {
+          selected.data['source'] = Uint8List(bytes.length);
+        }
         source.release.complete();
         await job.done.timeout(const Duration(seconds: 45));
-        expect(job.phase, NetworkSendPhase.completed, reason: job.error);
-        expect(job.receipt?.size, bytes.length);
-        expect(job.receipt?.sha256, sha256.convert(bytes).toString());
-        expect(job.receipt?.actualName, name);
+        if (_scenario == 'changed') {
+          expect(job.phase, NetworkSendPhase.failed, reason: job.error);
+          expect(job.receipt, isNull);
+          expect(job.error, contains('文件内容已变化'));
+        } else {
+          expect(job.phase, NetworkSendPhase.completed, reason: job.error);
+          expect(job.receipt?.size, bytes.length);
+          expect(job.receipt?.sha256, sha256.convert(bytes).toString());
+          expect(job.receipt?.actualName, name);
+        }
         // The content receipt precedes the receiver's terminal-history ACK.
         // Keep the original grant alive until both sides finish retirement.
         await _until(() => job.retirementComplete);
@@ -167,17 +183,23 @@ void main() {
             'platform': Platform.operatingSystem,
             'acknowledgedBeforeCut': 256 * 1024,
             'name': name,
-            'actualName': job.receipt!.actualName,
-            'size': job.receipt!.size,
-            'sha256': job.receipt!.sha256,
-            'outcome': 'completed',
+            'actualName': job.receipt?.actualName,
+            'size': job.receipt?.size ?? bytes.length,
+            'sha256': job.receipt?.sha256 ?? sha256.convert(bytes).toString(),
+            'outcome': _scenario == 'changed' ? 'failed' : 'completed',
           }),
         );
       } else {
         await suspended.timeout(const Duration(seconds: 45));
         await _until(() => transfers.receiveHistory.length == 1);
         final file = transfers.receiveHistory.single.file;
-        expect(file.outcome, FileRetirementOutcome.completed);
+        expect(
+          file.outcome,
+          _scenario == 'changed'
+              ? FileRetirementOutcome.cancelled
+              : FileRetirementOutcome.completed,
+        );
+        if (_scenario == 'changed') expect(file.actualName, isNull);
         expect(file.size, 3 * 256 * 1024 + 13);
         expect(
           file.sha256,
@@ -194,7 +216,8 @@ void main() {
             'actualName': file.actualName,
             'size': file.size,
             'sha256': file.sha256,
-            'outcome': 'completed',
+            'outcome': _scenario == 'changed' ? 'cancelled' : 'completed',
+            'failureCode': file.failureCode,
           }),
         );
       }
