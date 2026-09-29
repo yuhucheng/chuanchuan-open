@@ -160,6 +160,41 @@ selected service's configured `poll_wait_seconds`; the local TLS probe uses
 
 ## Verification boundary
 
+`tool/meeting_peer_probe.dart` runs one fresh host or joiner process against an
+explicit HTTPS meeting service. From this package directory, run on the host:
+
+```sh
+dart run tool/meeting_peer_probe.dart --role host --origin https://service.example:8443 --code-file /private/exchange/host-code.json
+```
+
+Use a directory owned and accessible only by your account (mode `0700` on Unix,
+or an equivalent Windows ACL). The host creates a new file, restricts it to the
+current account before writing the six-digit code, and removes it on handled
+exit. It refuses to overwrite an existing file. Transfer only this JSON file's
+contents to a separate private file on the joiner's device, then run:
+
+```sh
+dart run tool/meeting_peer_probe.dart --role join --origin https://service.example:8443 --code-file /private/exchange/join-code.json
+```
+
+Remove the joiner's copy afterward. Keep code files out of logs and source
+control; never put the code itself in command arguments. Moving or deleting the
+host's exchange file after handoff is supported. Both peers must use the same
+selected service, which sees the code. No host identity, address, saved grant or
+seed is supplied to the joiner. Each process generates its own new identity.
+
+JSON events report reciprocal identity IDs, grant ID/direction, the eight-hour
+lease duration, an encrypted request/acknowledgement/receipt and final revocation.
+The request does not attach a media implementation or capture a screen. The
+process stopwatch does not establish real sleep or eight-hour expiry behavior.
+`--timeout` bounds the pairing wait to 10–180 seconds (default 120); transport,
+message exchange and cleanup have their own bounds. Normal TLS trust validation
+is mandatory. `--test-ca` is accepted only for a `localhost` fixture and still
+requires a valid certificate. The private service's `--peer-processes` TLS
+fixture exercises this CLI in independent processes on one machine. This is
+preparation for two-device acceptance, not evidence of different-network,
+media, wrong-code/cancellation-matrix or production-UI acceptance.
+
 `dart analyze` and `dart test` cover real local TCP, PAKE, encrypted operation
 traffic, recovery after an owned proxy cuts the socket, old-permit/packet rejection,
 unchanged identity/deadline, forged final proof, lost encrypted final acknowledgement,
