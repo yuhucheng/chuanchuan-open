@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: Apache-2.0
  * REVIEW DRAFT. An internal private candidate exports authority, bounded
- * source query and preview start/stop ownership primitives. Frame leases and
- * remote media remain unimplemented. This is not a stable binary ABI.
+ * source query, preview start/stop and CPU frame-lease ownership primitives.
+ * Preview is not advertised; remote media remains unimplemented. This is not
+ * a stable binary ABI.
  * Normative ownership/authorization rules: README.md in this directory.
  */
 #ifndef SHARE_HUB_MEDIA_BOUNDARY_DRAFT_H

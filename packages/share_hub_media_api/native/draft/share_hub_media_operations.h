@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: Apache-2.0
  * Review draft 2. See MEDIA.md and README.md. Includes no platform/UI types.
  * A private prototype implements authority, bounded macOS source query and
- * preview start/stop ownership. It still reports zero preview/watch/cast
- * capability until frame leases and the complete media session exist.
+ * preview start/stop and CPU frame-lease ownership. It still reports zero
+ * preview/watch/cast capability pending complete media integration/acceptance.
  */
 #ifndef SHARE_HUB_MEDIA_OPERATIONS_DRAFT_H
 #define SHARE_HUB_MEDIA_OPERATIONS_DRAFT_H
