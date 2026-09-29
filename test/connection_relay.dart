@@ -8,9 +8,12 @@ class ConnectionRelay {
   final sockets = <Socket>{};
   bool closed = false;
   int get port => server.port;
-  static Future<ConnectionRelay> open(int targetPort) async {
+  static Future<ConnectionRelay> open(
+    int targetPort, {
+    InternetAddress? bindAddress,
+  }) async {
     final relay = ConnectionRelay._(
-      await ServerSocket.bind(InternetAddress.loopbackIPv4, 0),
+      await ServerSocket.bind(bindAddress ?? InternetAddress.loopbackIPv4, 0),
     );
     relay.server.listen((client) async {
       relay.sockets.add(client);
