@@ -67,8 +67,10 @@ limit. The adapter reuses its existing exact-object mapping instead of importing
 an identical grant/session ID twice.
 
 Task states are PENDING, CANCELLING and FINISHED. result_status/kind/handle only
-carry a result in FINISHED. A cancelled source task awaits real enumeration and
-releases its unused snapshot. Cancelling a start/playback/change task gates the
+carry a result in FINISHED. A cancelled source task finishes once the SDK has
+gated late platform results; it need not await a stalled OS enumeration callback.
+Any unused snapshot is released. A source query also has a bounded platform
+deadline and reports failure if it expires. Cancelling a start/playback/change task gates the
 whole affected operation, not merely its notification, and awaits actual late
 owners. Task release while unfinished returns BUSY and does not cancel it.
 `task_take_result` succeeds once for a successful snapshot result; repeated take
