@@ -1,8 +1,8 @@
 # Native media boundary — review draft 2
 
 **Unreleased draft.** An internal Mac core candidate now exports the 20
-authorization/lifecycle and query/wait symbols, but no media operation; no
-shipping SDK exports this ABI. The ordinary source-based Dart adapter consumes
+authorization/lifecycle and query/wait symbols plus local preview operations; no
+formally distributed SDK exports this ABI. The ordinary source-based Dart adapter consumes
 the public media API, and the installer does not consume this directory. Dart
 media API 0.8.0, session API 0.1.0 and existing wire profiles are unchanged.
 The header is public interface work, not a binary delivery.
@@ -12,7 +12,13 @@ shutdown. [Media operations](MEDIA.md) and `share_hub_media_operations.h` add
 sources, start, playback, recovery, measurements, presentation, wakeup and bounded
 queues/frame storage. A private authority-only prototype implements the lifecycle
 subset and the two capability/limit queries; it reports zero media capabilities.
-All media operations remain declarations without a linked implementation.
+The ordinary Windows development preview runtime implements local sources,
+preview ownership and CPU BGRA frame leases and declares only PREVIEW/CPU_BGRA
+with one local slot and API 0.8.0. Its adapter checks those loaded capability
+fields before enumeration/capture. Independent ownership/fault libraries and
+the Mac candidate still report zero media capabilities; tests must opt in
+explicitly to exercise their unadvertised paths. Remote operations remain
+unimplemented at this C boundary; Dart RTC support does not imply native support.
 [Package layout and compatibility metadata](PACKAGING.md) now have a concrete
 proposal and non-installable examples; production validation, GPU interop and stable
 ABI extension rules remain design/acceptance work. No program can run media by including these headers alone.

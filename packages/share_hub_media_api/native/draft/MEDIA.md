@@ -5,7 +5,12 @@ SDK behavior. A private prototype implements authority, bounded macOS source
 snapshots and preview start/stop ownership. Its linked macOS candidate reports
 source/frame limits and one internal operation slot, but still reports zero
 preview/watch/cast capability: the CPU frame-lease path is an internal prototype
-without a validated usable media session.
+without a validated usable media session. The ordinary Windows development
+preview runtime separately declares PREVIEW and CPU_BGRA, API 0.8.0 and one
+local slot after native and Flutter integration validation. It declares no remote
+protocol or remote slot. These local bits are not a stable ABI, distribution or
+cross-platform acceptance claim. Independent ownership/fault candidates remain
+unadvertised and require an explicit test-only adapter opt-in.
 The standalone authority library has no platform source adapter and
 reports zero source limits. Actual ScreenCaptureKit enumeration has not been
 validated here; synthetic ownership probes are not real source/capture tests.
