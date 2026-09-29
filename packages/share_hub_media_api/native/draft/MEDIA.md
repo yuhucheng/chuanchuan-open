@@ -1,9 +1,13 @@
 # Media operations and bounded ownership — draft 2
 
 These are proposed semantics for `share_hub_media_operations.h`, not shipping
-SDK behavior. A private authority-only prototype implements the capability and
-limit queries, reporting zero media capability and zero media resource limits;
-the media operations are still unimplemented. Read [the authorization/lifetime boundary](README.md) first. Draft
+SDK behavior. A private prototype implements authority and a bounded macOS
+source-query task/snapshot subset. Its linked macOS candidate reports those
+source limits but still reports zero preview/watch/cast capability and no media
+sessions. The standalone authority library has no platform source adapter and
+reports zero source limits. Actual ScreenCaptureKit enumeration has not been
+validated here; synthetic ownership probes are not real source/capture tests.
+Read [the authorization/lifetime boundary](README.md) first. Draft
 revision 2 replaces draft 1 declarations; neither has a compatibility promise.
 The current Dart API and wire formats remain unchanged.
 
