@@ -60,6 +60,11 @@ class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
   late final _platform = widget.platform ?? MethodChannelClientPlatform();
   late final _engine = widget.previewEngine;
   late final _fileAccess = widget.fileAccess ?? MethodChannelFileAccess();
+  late final _fileDropEnabled = switch (widget.targetPlatform ??
+      defaultTargetPlatform) {
+    TargetPlatform.windows || TargetPlatform.macOS => true,
+    _ => false,
+  };
   late final _devices = DeviceController(_platform);
   late final _connections = ConnectionController(
     MethodChannelConnectionPlatform(),
@@ -99,7 +104,7 @@ class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
-    if (defaultTargetPlatform == TargetPlatform.windows) {
+    if (_fileDropEnabled) {
       if (_fileAccess case MethodChannelFileAccess access) {
         access.setDropHandler(
           _transfers.addDroppedFiles,
@@ -138,7 +143,7 @@ class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
       : AppExitResponse.cancel;
   @override
   void dispose() {
-    if (defaultTargetPlatform == TargetPlatform.windows) {
+    if (_fileDropEnabled) {
       if (_fileAccess case MethodChannelFileAccess access) {
         access.setDropHandler(null);
       }

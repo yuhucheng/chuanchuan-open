@@ -1,13 +1,14 @@
 import Cocoa
 import FlutterMacOS
 
-class MainFlutterWindow: NSWindow, FlutterStreamHandler {
+class MainFlutterWindow: NSWindow, FlutterStreamHandler, NSDraggingDestination {
   private let preferences = DevicePreferences()
   private let discovery = LocalDiscovery()
   private let files = FileAccessBridge()
   private var methods: FlutterMethodChannel?
   private var events: FlutterEventChannel?
   private var desktop: FlutterMethodChannel?
+  private var fileDrops: FlutterMethodChannel?
   private var statusItem: NSStatusItem?
   private var allowItem: NSMenuItem?
   private var desktopReady = false
@@ -27,6 +28,15 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     center()
     RegisterGeneratedPlugins(registry: controller)
     methods = FlutterMethodChannel(name: "dev.sharehub.client/platform", binaryMessenger: controller.engine.binaryMessenger)
+    fileDrops = FlutterMethodChannel(name: "dev.sharehub.client/files/drop", binaryMessenger: controller.engine.binaryMessenger)
+    files.sendDrop = { [weak self] batch, acknowledge in
+      guard let channel = self?.fileDrops else { acknowledge(false); return }
+      channel.invokeMethod("files.dropped", arguments: batch) { acknowledge($0 as? Bool == true) }
+    }
+    files.sendDropError = { [weak self] message in
+      self?.fileDrops?.invokeMethod("files.dropError", arguments: message)
+    }
+    registerForDraggedTypes([.fileURL])
     events = FlutterEventChannel(name: "dev.sharehub.client/discovery", binaryMessenger: controller.engine.binaryMessenger)
     events?.setStreamHandler(self)
     methods?.setMethodCallHandler { [weak self] call, result in
@@ -143,6 +153,23 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     discovery.onChange = { events($0) }
     events(discovery.snapshot)
     return nil
+  }
+
+  func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+    guard !quitPending, files.canAcceptDrop, sender.draggingSourceOperationMask.contains(.copy),
+          (try? NativeFileDrop.urls(from: sender.draggingPasteboard)) != nil else { return [] }
+    return .copy
+  }
+
+  func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { draggingEntered(sender) }
+
+  func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+    draggingEntered(sender) == .copy
+  }
+
+  func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+    guard !quitPending, sender.draggingSourceOperationMask.contains(.copy) else { return false }
+    return files.acceptDrop(sender.draggingPasteboard)
   }
 
   func onCancel(withArguments arguments: Any?) -> FlutterError? {
@@ -267,6 +294,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
 
   private func completeTermination() {
     terminationApproved = true
+    unregisterDraggedTypes()
     discovery.stop(); files.close()
     if let status = statusItem { NSStatusBar.system.removeStatusItem(status) }
     statusItem = nil

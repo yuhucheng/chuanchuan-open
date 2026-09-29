@@ -12,6 +12,61 @@ import 'fakes.dart';
 import 'file_fakes.dart';
 
 void main() {
+  for (final target in [TargetPlatform.macOS, TargetPlatform.windows]) {
+    testWidgets(
+      '$target native drop opens local preparation and releases on disposal',
+      (tester) async {
+        tester.view.physicalSize = const Size(1180, 780);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        final platform = FakePlatform();
+        final messenger = tester.binding.defaultBinaryMessenger;
+        const channel = MethodChannel('dev.sharehub.client/platform');
+        const drops = MethodChannel('dev.sharehub.client/files/drop');
+        const codec = StandardMethodCodec();
+        final calls = <String>[];
+        messenger.setMockMethodCallHandler(channel, (call) async {
+          calls.add(call.method);
+          if (call.method == 'files.read') {
+            return Uint8List.fromList([97, 98, 99]);
+          }
+          return null;
+        });
+        addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+        await tester.pumpWidget(
+          ShareHubApp(
+            targetPlatform: target,
+            platform: platform,
+            previewEngine: FakePreviewEngine(),
+          ),
+        );
+        await tester.pumpAndSettle();
+        final response = await messenger.handlePlatformMessage(
+          drops.name,
+          codec.encodeMethodCall(
+            const MethodCall('files.dropped', [
+              {'token': 'native-mac-drop', 'name': '拖入文件.txt', 'size': 3},
+            ]),
+          ),
+          null,
+        );
+        expect(response, isNotNull);
+        expect(codec.decodeEnvelope(response!), true);
+        expect(tester.binding.hasScheduledFrame, true);
+        await tester.pumpAndSettle();
+        expect(find.text('拖入文件.txt'), findsOneWidget);
+        expect(find.textContaining('已检查 · 等待连接'), findsOneWidget);
+        expect(calls, containsAllInOrder(['files.read', 'files.finish']));
+        expect(calls, isNot(contains('files.pick')));
+        await tester.pumpWidget(const SizedBox());
+        await tester.pumpAndSettle();
+        expect(calls.where((call) => call == 'files.release'), hasLength(1));
+        await platform.events.close();
+      },
+    );
+  }
+
   testWidgets(
     'file page shows checked-but-unsent status and releases on removal',
     (tester) async {

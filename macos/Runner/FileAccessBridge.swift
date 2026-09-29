@@ -6,6 +6,51 @@ final class FileAccessBridge {
     private let store = SelectedFileStore()
     private var panel: NSOpenPanel?
     private var closed = false
+    // Main-thread delivery. Only the acknowledgement transfers ownership to Dart.
+    var sendDrop: (([[String: Any]], @escaping (Bool) -> Void) -> Void)?
+    var sendDropError: ((String) -> Void)?
+    var canAcceptDrop: Bool { !closed && panel == nil && sendDrop != nil }
+
+    @discardableResult
+    func acceptDrop(_ pasteboard: NSPasteboard) -> Bool {
+        guard canAcceptDrop else { return false }
+        let urls: [URL]
+        do { urls = try NativeFileDrop.urls(from: pasteboard) }
+        catch { sendDropError?(self.error(error).message ?? "文件拖入失败。"); return false }
+        queue.async {
+            do {
+                let files = try self.store.add(urls)
+                DispatchQueue.main.async {
+                    guard !self.closed, let send = self.sendDrop else {
+                        self.releaseDrop(files); return
+                    }
+                    var settled = false
+                    let settle: (Bool) -> Void = { accepted in
+                        guard !settled else { return }
+                        settled = true
+                        if !accepted || self.closed { self.releaseDrop(files) }
+                    }
+                    // Missing handlers, failed delivery and a silent engine
+                    // must not retain capabilities indefinitely.
+                    let timeout = DispatchWorkItem { settle(false) }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: timeout)
+                    send(files.map(\.dictionary)) { accepted in
+                        DispatchQueue.main.async { timeout.cancel(); settle(accepted) }
+                    }
+                }
+            } catch {
+                let message = self.error(error).message ?? "文件拖入失败。"
+                DispatchQueue.main.async {
+                    if !self.closed { self.sendDropError?(message) }
+                }
+            }
+        }
+        return true
+    }
+
+    private func releaseDrop(_ files: [SelectedFileInfo]) {
+        queue.async { for file in files { self.store.release(token: file.token) } }
+    }
 
     func handle(_ call: FlutterMethodCall, window: NSWindow, result: @escaping FlutterResult) {
         guard !closed else { result(error(SelectedFileError.closed)); return }
@@ -47,6 +92,8 @@ final class FileAccessBridge {
 
     func close() {
         closed = true
+        sendDrop = nil
+        sendDropError = nil
         panel?.cancel(nil)
         panel = nil
         queue.async { self.store.shutdown() }

@@ -23,7 +23,7 @@ public struct SelectedFileInfo {
     public var dictionary: [String: Any] { ["token": token, "name": name, "size": size] }
 }
 
-/// Owns access only to URLs supplied by the native file picker. All methods
+/// Owns access only to URLs supplied by the native picker or drop. All methods
 /// must run on one serial queue. No path from Flutter or a peer is accepted.
 public final class SelectedFileStore {
     public static let maximumFiles = 64

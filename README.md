@@ -46,7 +46,7 @@ macOS 使用相同 `lib/main.dart`，运行 `flutter build macos --debug --no-pu
 | 公共媒体契约 | `packages/share_hub_media_api`，客户端与 SDK 共享 |
 | 媒体实现 | SDK 包；当前内部开发适配器尚不是可分发二进制 SDK |
 | 界面、设备发现 | `lib/ui`、`lib/features/devices`；启动后自动发现，接入开关独立 |
-| 文件准备 | `lib/features/transfers`；macOS 已实现本地选文件和摘要；Windows 系统选择器、令牌读取、摘要与普通退出释放已通过实机验收；尚未发送网络数据 |
+| 文件准备 | `lib/features/transfers`；两平台有系统选择器、受限原生拖入及本地摘要；Windows 选择器/令牌/退出已通过实机验收，Mac 拖入接线与原生桥接测试见[验证边界](docs/validation/2026-09-29-macos-file-drop.md)，Finder 手势与沙箱拖入仍待验；尚未发送网络数据 |
 | 平台宿主 | 全部在本仓库的 `windows`、`macos` |
 | 短接码连接 | `packages/share_hub_connection` 已接入桌面场式客户端；协议和本机回环测试通过，双机/休眠待验收 |
 | 远端画面 | 已接入客户端与内部 SDK 的公共组合端口；真实双机、平台矩阵和正式 SDK 制品待验收 |

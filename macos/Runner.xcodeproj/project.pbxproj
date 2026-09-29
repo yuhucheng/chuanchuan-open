@@ -21,6 +21,7 @@
 /* End PBXAggregateTarget section */
 
 /* Begin PBXBuildFile section */
+		AC0000000000000000000003 /* NativeFileDrop.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD0000000000000000000003 /* NativeFileDrop.swift */; };
 		AC0000000000000000000002 /* FileAccessBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD0000000000000000000002 /* FileAccessBridge.swift */; };
 		AC0000000000000000000001 /* SelectedFileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD0000000000000000000001 /* SelectedFileStore.swift */; };
 		AB0000000000000000000001 /* PlatformServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000002 /* PlatformServices.swift */; };
@@ -64,6 +65,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		AD0000000000000000000003 /* NativeFileDrop.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../Platform/Sources/ShareHubPlatform/NativeFileDrop.swift; sourceTree = "<group>"; };
 		AD0000000000000000000002 /* FileAccessBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileAccessBridge.swift; sourceTree = "<group>"; };
 		AD0000000000000000000001 /* SelectedFileStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../Platform/Sources/ShareHubPlatform/SelectedFileStore.swift; sourceTree = "<group>"; };
 		AB0000000000000000000002 /* PlatformServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../Platform/Sources/ShareHubPlatform/PlatformServices.swift; sourceTree = "<group>"; };
@@ -176,6 +178,7 @@
 				33CC11122044BFA00003C045 /* MainFlutterWindow.swift */,
 				AD0000000000000000000002 /* FileAccessBridge.swift */,
 				AD0000000000000000000001 /* SelectedFileStore.swift */,
+				AD0000000000000000000003 /* NativeFileDrop.swift */,
 				AB0000000000000000000002 /* PlatformServices.swift */,
 				33E51913231747F40026EE4D /* DebugProfile.entitlements */,
 				33E51914231749380026EE4D /* Release.entitlements */,
@@ -366,6 +369,7 @@
 				33CC11132044BFA00003C045 /* MainFlutterWindow.swift in Sources */,
 				AC0000000000000000000002 /* FileAccessBridge.swift in Sources */,
 				AC0000000000000000000001 /* SelectedFileStore.swift in Sources */,
+				AC0000000000000000000003 /* NativeFileDrop.swift in Sources */,
 				AB0000000000000000000001 /* PlatformServices.swift in Sources */,
 				33CC10F12044A3C60003C045 /* AppDelegate.swift in Sources */,
 				335BBD1B22A9A15E00E9071D /* GeneratedPluginRegistrant.swift in Sources */,

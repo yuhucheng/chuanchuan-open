@@ -81,6 +81,9 @@ class _FieldShellState extends State<FieldShell> {
         openPanel('本机文件准备', () => TransfersPage(queue: widget.transfers)),
       );
     });
+    // Native drops can arrive while the field is idle. A post-frame callback
+    // alone does not request a frame, leaving the admitted queue invisible.
+    WidgetsBinding.instance.ensureVisualUpdate();
   }
 
   /// Display material for identities verified during this run. It is never
