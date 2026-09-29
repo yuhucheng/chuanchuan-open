@@ -115,25 +115,38 @@ Future<void> _run(Map<String, String> env, _Reporter report) async {
       throw StateError('receive directory was not selected');
     }
 
-    report.update('选择两个测试文件');
-    await queue.selectFiles();
-    if (queue.items.isEmpty) {
-      throw StateError('no native file selection was returned: ${queue.error}');
-    }
-    await _until(
-      () =>
-          queue.items.isNotEmpty &&
-          queue.items.every(
-            (item) =>
-                item.state != PreparationState.queued &&
-                item.state != PreparationState.preparing,
-          ),
-    );
-    if (queue.items.length != 2 ||
-        queue.items.any((item) => item.state != PreparationState.ready)) {
-      throw StateError(
-        'expected two prepared native file selections: ${queue.error}',
+    var retryReason = '';
+    for (var attempt = 1; attempt <= 3; attempt++) {
+      report.update(
+        attempt == 1 ? '选择两个测试文件' : '上次选择未准备好（$retryReason），请重新选择两个文件',
       );
+      await queue.selectFiles();
+      if (queue.items.isEmpty) {
+        throw StateError(
+          'no native file selection was returned: ${queue.error}',
+        );
+      }
+      await _until(
+        () => queue.items.every(
+          (item) =>
+              item.state != PreparationState.queued &&
+              item.state != PreparationState.preparing,
+        ),
+      );
+      if (queue.items.length == 2 &&
+          queue.items.every((item) => item.state == PreparationState.ready)) {
+        break;
+      }
+      final summary =
+          'count=${queue.items.length} states=${queue.items.map((item) => item.state.name).join(',')}';
+      retryReason = summary;
+      await queue.clear();
+      if (queue.items.isNotEmpty) {
+        throw StateError('could not release invalid selection: $summary');
+      }
+      if (attempt == 3) {
+        throw StateError('expected two prepared native files: $summary');
+      }
     }
 
     if (role == 'host') {

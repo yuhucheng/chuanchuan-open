@@ -1,6 +1,12 @@
 // Opt-in desktop exit probe. Build only in an isolated checkout, then launch
 // the executable directly with NATIVE_RECEIVE_DIR set to the configured native
 // receive directory. The normal client never imports this entry point.
+// NATIVE_PROBE_MODE=restart-check and NATIVE_PREVIOUS_NAME=<first run's name>
+// relaunch the same Runner after its native exit to inspect fresh app state.
+// NATIVE_PROBE_PAUSE_AFTER_ACK=1 briefly holds the native partial open for an
+// external file-descriptor check when the sandboxed destination is opaque.
+// NATIVE_PROBE_EXTERNAL_OBSERVER=1 leaves filesystem checks to that observer;
+// a native bookmark can grant the bridge access without granting dart:io access.
 
 import 'dart:async';
 import 'dart:io';
@@ -71,7 +77,75 @@ void main() {
       home: Scaffold(body: Center(child: Text('退出验收中'))),
     ),
   );
-  WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_run()));
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    unawaited(
+      Platform.environment['NATIVE_PROBE_MODE'] == 'restart-check'
+          ? _checkRestart()
+          : _run(),
+    );
+  });
+}
+
+Future<void> _checkRestart() async {
+  final destinationPath = Platform.environment['NATIVE_RECEIVE_DIR'];
+  final previousName = Platform.environment['NATIVE_PREVIOUS_NAME'];
+  if (destinationPath == null ||
+      destinationPath.isEmpty ||
+      previousName == null ||
+      !RegExp(r'^chuan-network-process-exit-[0-9]+\.bin$')
+          .hasMatch(previousName)) {
+    stderr.writeln('RESTART_PROBE_FAILED missing or invalid prior transfer');
+    exit(2);
+  }
+  final destination = Directory(destinationPath);
+  final externalObserver =
+      Platform.environment['NATIVE_PROBE_EXTERNAL_OBSERVER'] == '1';
+  final connections = ConnectionController(_ClockPlatform());
+  final queue = TransferQueue(TestFileAccess());
+  final transfers = NetworkTransfers(
+    connections: connections,
+    queue: queue,
+    source: MemorySourceAccess({}),
+    receive: MethodChannelReceiveAccess(),
+  );
+  var outcome = 0;
+  try {
+    final configured = await transfers.receive.configuredDirectory();
+    _require(configured.label.isNotEmpty, 'saved destination unavailable');
+    await MethodChannelConnectionPlatform().now();
+    await Future<void>.delayed(const Duration(seconds: 1));
+    _require(connections.sessions.isEmpty, 'old connection restored');
+    _require(queue.items.isEmpty, 'old selection restored');
+    _require(transfers.sends.isEmpty, 'old send restored');
+    _require(transfers.sendHistory.isEmpty, 'old send receipt restored');
+    _require(transfers.receiveHistory.isEmpty, 'old receive restored');
+    if (!externalObserver) {
+      _require(_parts(destination).isEmpty, 'old native partial remains');
+      _require(
+        !File('${destination.path}${Platform.pathSeparator}$previousName')
+            .existsSync(),
+        'old transfer published after restart',
+      );
+    }
+    stdout.writeln('RESTART_PROBE_PASSED pid=$pid name=$previousName');
+    await stdout.flush();
+  } catch (error) {
+    outcome = 1;
+    stderr.writeln('RESTART_PROBE_FAILED $error');
+  } finally {
+    try {
+      await transfers.close();
+      await queue.close();
+      await connections.disconnectAll();
+    } catch (error) {
+      outcome = 1;
+      stderr.writeln('RESTART_PROBE_CLEANUP_FAILED $error');
+    }
+    transfers.dispose();
+    queue.dispose();
+    connections.dispose();
+    exit(outcome);
+  }
 }
 
 Future<void> _run() async {
@@ -81,7 +155,9 @@ Future<void> _run() async {
     exit(2);
   }
   final destination = Directory(destinationPath);
-  final previousParts = _parts(destination);
+  final externalObserver =
+      Platform.environment['NATIVE_PROBE_EXTERNAL_OBSERVER'] == '1';
+  final previousParts = externalObserver ? <String>{} : _parts(destination);
   final senderPlatform = _ClockPlatform();
   final receiverPlatform = _ClockPlatform();
   final receiverIdentity = await DeviceIdentity.fromSeed(
@@ -150,10 +226,17 @@ Future<void> _run() async {
     final job = sent.send(senderQueue.items.single, sender.sessions.single);
     await source.entered.future.timeout(const Duration(seconds: 10));
     _require(job.acknowledgedBytes == 256 * 1024, 'first ACK missing');
-    _require(
-      _parts(destination).difference(previousParts).length == 1,
-      'native partial missing',
-    );
+    if (Platform.environment['NATIVE_PROBE_PAUSE_AFTER_ACK'] == '1') {
+      stdout.writeln('EXIT_PROBE_GATED pid=$pid name=$name');
+      await stdout.flush();
+      await Future<void>.delayed(const Duration(seconds: 15));
+    }
+    if (!externalObserver) {
+      _require(
+        _parts(destination).difference(previousParts).length == 1,
+        'native partial missing',
+      );
+    }
     final exiting = desktop.requestExit();
     source.release.complete();
     _require(
@@ -166,19 +249,21 @@ Future<void> _run() async {
       !job.canResume && job.receipt == null,
       'send still resumable or delivered',
     );
-    final deadline = DateTime.now().add(const Duration(seconds: 10));
-    while (_parts(destination).difference(previousParts).isNotEmpty &&
-        DateTime.now().isBefore(deadline)) {
-      await Future<void>.delayed(const Duration(milliseconds: 25));
+    if (!externalObserver) {
+      final deadline = DateTime.now().add(const Duration(seconds: 10));
+      while (_parts(destination).difference(previousParts).isNotEmpty &&
+          DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 25));
+      }
+      _require(
+        _parts(destination).difference(previousParts).isEmpty,
+        'partial remains',
+      );
+      _require(
+        !File('${destination.path}${Platform.pathSeparator}$name').existsSync(),
+        'published unexpectedly',
+      );
     }
-    _require(
-      _parts(destination).difference(previousParts).isEmpty,
-      'partial remains',
-    );
-    _require(
-      !File('${destination.path}${Platform.pathSeparator}$name').existsSync(),
-      'published unexpectedly',
-    );
     _require(
       received.receiveHistory.every(
         (item) => item.file.outcome != FileRetirementOutcome.completed,
