@@ -34,7 +34,7 @@ flutter test --no-pub
 
 若 Flutter 不在 PATH，可传 `-FlutterCommand` 指定完整路径。Windows 插件 symlink 权限不足时运行 `tool/prepare_windows_plugins.ps1`，再重试配置；不需改变系统安全策略。SDK 更新后建议清理旧构建产物，再获取依赖。
 
-Windows 开发 SDK 还需按 SDK 包内说明准备匹配的原生依赖。构建钩子检查 DLL、版本锁和补丁输入，缺失或不匹配时停止构建；当前没有正式二进制下载包。SDK 的真实窗口图案验收可从本客户端执行 `pwsh -File tool/test_media_sdk_windows.ps1`，脚本结束后恢复普通客户端 Debug 构建。
+Windows 开发 SDK 还需按 SDK 包内说明准备匹配的原生依赖。构建钩子检查 DLL、版本锁和补丁输入，缺失或不匹配时停止构建；当前没有正式二进制下载包。SDK 的真实窗口图案验收可从本客户端执行 `pwsh -File tool/test_media_sdk_windows.ps1`；`-Suite negotiation` 运行无采集的原生协商，`-Suite video` 运行自有生成窗口的同机视频与后台循环。后者需要 SDK 提供对应测试，不代表双机媒体验收。脚本结束后恢复普通客户端 Debug 构建。
 
 macOS 使用相同 `lib/main.dart`，运行 `flutter build macos --debug --no-pub`；输出为 `build/macos/Build/Products/Debug/Share Hub.app`，2026-09-16 已在 Mac 编译并启动，已取得 A/B 真实首帧、持续帧和启停证据，来源退出释放修复已通过单次回归；完整生命周期仍待验收，见[运行验证](docs/validation.md)。
 

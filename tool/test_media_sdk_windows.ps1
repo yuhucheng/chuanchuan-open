@@ -1,12 +1,20 @@
 #Requires -Version 7.0
 [CmdletBinding()]
-param([string]$FlutterCommand = 'flutter')
+param(
+    [string]$FlutterCommand = 'flutter',
+    [ValidateSet('preview', 'negotiation', 'video')][string]$Suite = 'preview'
+)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if (!$IsWindows) { throw 'This test requires an interactive Windows desktop.' }
 $project = Split-Path -Parent $PSScriptRoot
 $sdk = Join-Path $project '.local/media-sdk/package'
-$test = Join-Path $sdk 'integration_test/windows_preview_test.dart'
+$testName = switch ($Suite) {
+    'preview' { 'windows_preview_test.dart' }
+    'negotiation' { 'native_video_negotiation_test.dart' }
+    'video' { 'windows_video_link_test.dart' }
+}
+$test = Join-Path $sdk "integration_test/$testName"
 $fixture = Join-Path $sdk 'tool/windows_preview_fixture.ps1'
 foreach ($required in @($test, $fixture)) {
     if (!(Test-Path -LiteralPath $required -PathType Leaf)) {
@@ -16,7 +24,7 @@ foreach ($required in @($test, $fixture)) {
 # Flutter classifies integration tests by their path under the host project.
 # Passing a test outside integration_test runs it without native plugins.
 $directory = Join-Path $project 'integration_test/.sdk-validation'
-$entry = Join-Path $directory 'windows_preview_test.dart'
+$entry = Join-Path $directory $testName
 foreach ($parent in @($project, (Join-Path $project 'integration_test'), $directory)) {
     $item = Get-Item -LiteralPath $parent -Force -ErrorAction Ignore
     if ($item -and (!$item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint))) {
@@ -24,10 +32,10 @@ foreach ($parent in @($project, (Join-Path $project 'integration_test'), $direct
     }
 }
 if (Test-Path -LiteralPath $entry) { throw "An existing test entry will not be overwritten: $entry" }
-$body = @'
-import '../../.local/media-sdk/package/integration_test/windows_preview_test.dart' as sdk;
+$body = @"
+import '../../.local/media-sdk/package/integration_test/$testName' as sdk;
 void main() => sdk.main();
-'@
+"@
 $oldFixture = $env:SHARE_HUB_PREVIEW_FIXTURE
 $testExit = 1
 $buildExit = 1
@@ -36,7 +44,7 @@ Set-Content -LiteralPath $entry -Value $body -Encoding utf8NoBOM
 Push-Location -LiteralPath $project
 try {
     $env:SHARE_HUB_PREVIEW_FIXTURE = $fixture
-    & $FlutterCommand test integration_test/.sdk-validation/windows_preview_test.dart -d windows --no-pub --reporter expanded
+    & $FlutterCommand test "integration_test/.sdk-validation/$testName" -d windows --no-pub --reporter expanded
     $testExit = $LASTEXITCODE
 } finally {
     $env:SHARE_HUB_PREVIEW_FIXTURE = $oldFixture
@@ -54,4 +62,4 @@ try {
     } finally { Pop-Location }
 }
 if ($buildExit -ne 0) { throw 'Normal Windows application rebuild failed; the Debug executable is not ready.' }
-if ($testExit -ne 0) { throw 'Windows SDK capture validation failed. The normal application has been rebuilt.' }
+if ($testExit -ne 0) { throw "Windows SDK $Suite validation failed. The normal application has been rebuilt." }
