@@ -1,10 +1,11 @@
 # Media operations and bounded ownership — draft 2
 
 These are proposed semantics for `share_hub_media_operations.h`, not shipping
-SDK behavior. A private prototype implements authority and a bounded macOS
-source-query task/snapshot subset. Its linked macOS candidate reports those
-source limits but still reports zero preview/watch/cast capability and no media
-sessions. The standalone authority library has no platform source adapter and
+SDK behavior. A private prototype implements authority, bounded macOS source
+snapshots and preview start/stop ownership. Its linked macOS candidate reports
+source limits and one internal operation slot, but still reports zero
+preview/watch/cast capability: it has no C frame lease or usable media session.
+The standalone authority library has no platform source adapter and
 reports zero source limits. Actual ScreenCaptureKit enumeration has not been
 validated here; synthetic ownership probes are not real source/capture tests.
 Read [the authorization/lifetime boundary](README.md) first. Draft
@@ -19,8 +20,10 @@ names or roadmap plans. A preview-only implementation reports no watch/cast bits
 and zero remote sessions. The current remote profile has at most one video session
 across links/providers; local preview has a separate maximum of one. Thumbnail
 borrowing adds neither. A host may not raise either limit by creating another core.
-Unsupported functions return UNAVAILABLE before creating owners. The reported
-media API tuple is the implemented contract version, not the draft revision;
+Unsupported functions return UNAVAILABLE before creating owners. The private
+candidate's unadvertised preview start/stop path is an internal ownership probe;
+hosts must not expose it as product preview while the capability bit is zero.
+The reported media API tuple is the implemented contract version, not the draft revision;
 peer operation negotiation must still match session protocol 2 and media profile
 3/4. No remote control, file transfer, audio or multiple-video capability is added.
 
