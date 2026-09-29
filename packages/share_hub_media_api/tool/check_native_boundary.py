@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the unimplemented C boundary draft; never claims SDK/runtime acceptance."""
+"""Check draft C declarations and layout; never claims SDK/runtime acceptance."""
 import argparse
 import hashlib
 import json
@@ -130,7 +130,7 @@ def main():
         "compiler": version, "checks": checks,
         "host": {"system": platform.system(), "architecture": platform.machine(), "layout": layout},
         "sdkLoaded": False, "authorizationTested": False, "capturePerformed": False,
-        "scope": "Unimplemented declaration/layout draft only; no target binary, provider or SDK behavior acceptance.",
+        "scope": "Declaration/layout draft only; no target binary, provider or SDK behavior acceptance.",
     }, ensure_ascii=False, indent=2))
 
 

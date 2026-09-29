@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0
- * UNIMPLEMENTED REVIEW DRAFT. No SDK currently exports these symbols.
- * This is not the released Dart API version or a stable binary ABI.
+ * REVIEW DRAFT. An internal private candidate exports only the 20
+ * lifecycle/grant/authorization, capability/limit and change-wait symbols.
+ * Media operations remain unimplemented. This is not a stable binary ABI.
  * Normative ownership/authorization rules: README.md in this directory.
  */
 #ifndef SHARE_HUB_MEDIA_BOUNDARY_DRAFT_H

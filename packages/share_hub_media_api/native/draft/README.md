@@ -1,9 +1,11 @@
 # Native media boundary — review draft 2
 
-**Unreleased draft.** No shipping SDK exports `shm_draft_*`. This directory is
-not consumed by the Dart package, plugin build or installer. Dart media API
-0.8.0, session API 0.1.0 and existing wire profiles are unchanged. The header is
-public interface work, not private SDK implementation or a binary delivery.
+**Unreleased draft.** An internal Mac core candidate now exports the 20
+authorization/lifecycle and query/wait symbols, but no media operation; no
+shipping SDK exports this ABI. The ordinary source-based Dart adapter consumes
+the public media API, and the installer does not consume this directory. Dart
+media API 0.8.0, session API 0.1.0 and existing wire profiles are unchanged.
+The header is public interface work, not a binary delivery.
 
 The boundary header specifies authorization/provider, resource ownership and
 shutdown. [Media operations](MEDIA.md) and `share_hub_media_operations.h` add
