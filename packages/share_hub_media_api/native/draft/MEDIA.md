@@ -158,6 +158,11 @@ Geometry is a copied value at the requested operation/revision: actual positive
 width/height, source type, finite origin, finite positive scale and rotation in
 0/90/180/270. It is neither input authority nor a remote-control implementation.
 Before actual geometry exists the query returns EMPTY, not invented zero dimensions.
+For a local preview, geometry is in the admitted BGRA frame's pixel coordinate
+space: origin (0, 0), one unit per pixel, and zero rotation. Its dimensions
+come from that frame, not from the configured capture size. This value does not
+describe desktop coordinates or authorize input; remote operations must report
+their own observed source geometry when implemented.
 `operation_local_source` supplies an owned one-entry snapshot of the settled local
 source for host labels/current selection; a receiver returns EMPTY, a source
 transition returns BUSY. It does not enumerate, choose a replacement or expose the
