@@ -203,6 +203,7 @@ class _ConnectionDialog extends StatefulWidget {
 
 class _ConnectionDialogState extends State<_ConnectionDialog> {
   final code = TextEditingController();
+  final codeFocus = FocusNode();
   bool submitting = false;
   bool attempted = false;
   bool closing = false;
@@ -211,12 +212,21 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
   void dispose() {
     if (submitting) widget.controller.cancel();
     code.dispose();
+    codeFocus.dispose();
     super.dispose();
+  }
+
+  void refocusCode() {
+    // The next frame must re-enable the field before focus can be requested.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !closing && !submitting) codeFocus.requestFocus();
+    });
   }
 
   Future<void> submit() async {
     if (!RegExp(r'^\d{6}$').hasMatch(code.text)) {
       setState(() => error = '请输入完整的 6 位纯数字短接码。');
+      refocusCode();
       return;
     }
     final device = widget.device;
@@ -229,6 +239,7 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
             port < 1 ||
             port > 65535)) {
       setState(() => error = '该设备的连接信息暂不可用，请等待自动发现更新后重试。');
+      refocusCode();
       return;
     }
     if (widget.controller.busy || submitting) return;
@@ -271,6 +282,7 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
       return;
     }
     setState(() => submitting = false);
+    refocusCode();
   }
 
   @override
@@ -300,6 +312,7 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
               ],
               TextField(
                 controller: code,
+                focusNode: codeFocus,
                 enabled: !submitting,
                 autofocus: true,
                 keyboardType: TextInputType.number,
@@ -321,7 +334,8 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
               if (widget.device?.publicKey != null &&
                   widget.controller.auxiliaryRoutes != null)
                 const Text('本地地址不可达时，将通过所选辅助服务继续验证该设备。'),
-              if (submitting) const Text('正在验证，可随时取消'),
+              if (submitting)
+                Semantics(liveRegion: true, child: const Text('正在验证，可随时取消')),
               if (error != null)
                 Semantics(liveRegion: true, child: Text(error!)),
               if (attempted && widget.controller.message != null)
