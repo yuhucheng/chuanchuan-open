@@ -16,7 +16,7 @@
 
 - 预览控制器、SDK 公共工厂/真实 Dart Mac 适配器加受控原生通道、桌面生命周期定向回归：41/41。覆盖立即停止、SDK 停止结算启动、清理在途预算、迟到分配、重入、早到清理失败与明确重试。
 - `flutter analyze --no-pub`：通过。
-- `flutter test --no-pub --reporter expanded`：329 通过、1 跳过。环境相关的原生检查仍保持跳过。
+- `flutter test --no-pub --reporter expanded`：329 通过、1 个 Windows 专属文件占用用例在 Mac 跳过。
 - `flutter build macos --debug --no-pub`：普通产品入口构建成功。
 
 本轮没有启动采集夹具、枚举真实来源、录屏或执行双机媒体。Windows 编译和实机停止/退出矩阵仍须由 Windows 开发机验证。工作区另有设备命名会话的未提交改动；本轮保留且不暂存它们，完整测试/构建包含该工作区，不能视作干净可复现发行组合。桌面与场式完整任务仍按原验收范围保持开放。
