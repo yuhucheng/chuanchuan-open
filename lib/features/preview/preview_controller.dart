@@ -201,20 +201,51 @@ class PreviewController extends ChangeNotifier {
     return '预览未能启动，请刷新来源后重新选择画面。';
   }
 
-  Future<void> stop({String? reason}) =>
-      _stopPending ??= _stop(reason).whenComplete(() {
+  Future<void> stop({String? reason}) {
+    if (_stopPending case final pending?) return pending;
+    // Publish ownership before notifying listeners: a synchronous observer
+    // may request the same stop while _stop is still entering its first await.
+    final completion = Completer<void>();
+    _stopPending = completion.future;
+    unawaited(() async {
+      try {
+        await _stop(reason);
+        completion.complete();
+      } catch (failure, stack) {
+        completion.completeError(failure, stack);
+      } finally {
         _stopPending = null;
-      });
+      }
+    }());
+    return completion.future;
+  }
 
   Future<void> _stop(String? reason) async {
     ++_generation;
     stopping = true;
+    final pending = _pending;
+    final wasBusy = busy;
     _permissionTimer?.cancel();
     _firstFrameTimer?.cancel();
     _notify();
-    await _pending;
+    // Native startup can itself need stop to finish. Attach its failure handler
+    // now, before waiting for the start continuation, to keep early cleanup
+    // failures owned by this stop rather than the uncaught-error handler.
+    final release = Future<void>.sync(engine.stop)
+        .then<({Object error, StackTrace stack})?>(
+          (_) => null,
+          onError: (Object error, StackTrace stack) =>
+              (error: error, stack: stack),
+        );
     try {
-      await engine.stop();
+      await pending;
+      final failure = await release;
+      if (failure != null) {
+        Error.throwWithStackTrace(failure.error, failure.stack);
+      }
+      // Older engines can finish an allocation after their first stop. Drain
+      // that owner after startup settles; never retry a failed release here.
+      if (wasBusy) await engine.stop();
       active = false;
       firstFrame = false;
       cleanupFailed = false;

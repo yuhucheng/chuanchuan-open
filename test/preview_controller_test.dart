@@ -214,6 +214,79 @@ void main() {
   );
 
   test(
+    'stop reaches a pending startup before waiting for its result',
+    () async {
+      await prepare();
+      engine.startCompleter = Completer<void>();
+      final starting = controller.start();
+      await Future<void>.delayed(Duration.zero);
+      final stopping = controller.stop();
+      try {
+        expect(engine.stops, 1);
+        expect(controller.occupiesPicture, true);
+        expect(controller.stopping, true);
+        await controller.start();
+        expect(engine.starts, 1);
+      } finally {
+        engine.startCompleter!.complete();
+        await Future.wait([starting, stopping]);
+      }
+      // A legacy engine may complete its allocation after its first stop.
+      expect(engine.stops, 2);
+      expect(controller.occupiesPicture, false);
+    },
+  );
+
+  test('reentrant stop notifications join the same cleanup', () async {
+    await prepare();
+    await controller.start();
+    Future<void>? joined;
+    var notified = false;
+    void listener() {
+      if (!controller.stopping || notified) return;
+      notified = true;
+      joined = controller.stop();
+    }
+
+    controller.addListener(listener);
+    final stopping = controller.stop();
+    controller.removeListener(listener);
+    await stopping;
+    expect(identical(joined, stopping), true);
+    expect(engine.stops, 1);
+  });
+
+  test(
+    'early stop failure retains ownership and requires an explicit retry',
+    () async {
+      await prepare();
+      engine.startCompleter = Completer<void>();
+      engine.failStop = true;
+      final starting = controller.start();
+      await Future<void>.delayed(Duration.zero);
+      final stopping = controller.stop();
+      try {
+        await Future<void>.delayed(Duration.zero);
+        expect(engine.stops, 1);
+        expect(controller.stopping, true);
+        expect(controller.occupiesPicture, true);
+      } finally {
+        engine.startCompleter!.complete();
+        await Future.wait([starting, stopping]);
+      }
+      expect(controller.cleanupFailed, true);
+      expect(controller.occupiesPicture, true);
+      expect(engine.stops, 1, reason: 'Do not silently retry a failed release');
+      await controller.start();
+      expect(engine.starts, 1);
+      engine.failStop = false;
+      await controller.stop();
+      expect(engine.stops, 2);
+      expect(controller.occupiesPicture, false);
+    },
+  );
+
+  test(
     'native error cleans resources; cleanup failure requires retry',
     () async {
       await prepare();

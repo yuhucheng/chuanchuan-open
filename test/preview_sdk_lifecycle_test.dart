@@ -23,6 +23,7 @@ void main() {
   Completer<void>? stopReply;
   final calls = <MethodCall>[];
   var failStop = false;
+  var stopCancelsStartup = false;
   var session = '';
 
   Future<void> event(String id, String type) async {
@@ -43,6 +44,7 @@ void main() {
     startEntered = Completer<void>();
     startReply = stopReply = null;
     failStop = false;
+    stopCancelsStartup = false;
     messenger.setMockMethodCallHandler(channel, (call) async {
       calls.add(call);
       switch (call.method) {
@@ -56,6 +58,9 @@ void main() {
           await startReply?.future;
           return {'textureId': 42, 'width': 640, 'height': 360};
         case 'stop':
+          if (stopCancelsStartup && startReply?.isCompleted == false) {
+            startReply!.completeError(PlatformException(code: 'cancelled'));
+          }
           await stopReply?.future;
           if (failStop) throw PlatformException(code: 'cleanup_failed');
           return null;
@@ -80,30 +85,68 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
-  test('cancel waits for SDK start and coalesces release; late frames stay ignored', () async {
-    startReply = Completer<void>();
-    final starting = controller.start();
-    await startEntered.future;
-    final oldSession = session;
-    final stopping = controller.stop();
-    final stoppingAgain = controller.stop();
-    expect(calls.where((call) => call.method == 'stop'), isEmpty);
-    await event(oldSession, 'firstFrame');
-    expect(controller.firstFrame, false);
-    startReply!.complete();
-    await Future.wait([starting, stopping, stoppingAgain]);
-    expect(calls.where((call) => call.method == 'stop'), hasLength(1));
-    expect(controller.active, false);
-    expect(controller.cleanupFailed, false);
-    await controller.start();
-    expect(session, isNot(oldSession));
-    await event(oldSession, 'firstFrame');
-    await event(oldSession, 'ended');
-    expect(controller.active, true);
-    expect(controller.firstFrame, false);
-    await event(session, 'firstFrame');
-    expect(controller.firstFrame, true);
-  });
+  test(
+    'cancel reaches SDK before start settles; late frames stay ignored',
+    () async {
+      startReply = Completer<void>();
+      final starting = controller.start();
+      await startEntered.future;
+      final oldSession = session;
+      final stopping = controller.stop();
+      final stoppingAgain = controller.stop();
+      try {
+        await Future<void>.delayed(Duration.zero);
+        expect(calls.where((call) => call.method == 'stop'), hasLength(1));
+        expect(identical(stopping, stoppingAgain), true);
+        await event(oldSession, 'firstFrame');
+        expect(controller.firstFrame, false);
+      } finally {
+        startReply!.complete();
+        await Future.wait([starting, stopping, stoppingAgain]);
+      }
+      await event(oldSession, 'firstFrame');
+      expect(controller.firstFrame, false);
+      expect(calls.where((call) => call.method == 'stop'), hasLength(1));
+      expect(controller.active, false);
+      expect(controller.cleanupFailed, false);
+      await controller.start();
+      expect(session, isNot(oldSession));
+      await event(oldSession, 'firstFrame');
+      await event(oldSession, 'ended');
+      expect(controller.active, true);
+      expect(controller.firstFrame, false);
+      await event(session, 'firstFrame');
+      expect(controller.firstFrame, true);
+    },
+  );
+
+  test(
+    'SDK stop can settle pending startup while cleanup stays owned',
+    () async {
+      startReply = Completer<void>();
+      stopReply = Completer<void>();
+      stopCancelsStartup = true;
+      final starting = controller.start();
+      await startEntered.future;
+      final stopping = controller.stop();
+      try {
+        await Future<void>.delayed(Duration.zero);
+        expect(startReply!.isCompleted, true);
+        expect(calls.where((call) => call.method == 'stop'), hasLength(1));
+        expect(controller.stopping, true);
+        expect(controller.occupiesPicture, true);
+        await controller.start();
+        expect(calls.where((call) => call.method == 'start'), hasLength(1));
+      } finally {
+        if (!startReply!.isCompleted) startReply!.complete();
+        stopReply!.complete();
+        await Future.wait([starting, stopping]);
+      }
+      expect(controller.occupiesPicture, false);
+      expect(controller.cleanupFailed, false);
+      expect(calls.where((call) => call.method == 'stop'), hasLength(1));
+    },
+  );
 
   test('native end before start reply cannot revive capture', () async {
     startReply = Completer<void>();
