@@ -44,15 +44,14 @@ class ConnectionPanel extends StatelessWidget {
               liveRegion: true,
               child: Text(switch (controller.meetingPublication) {
                 MeetingPublication.none => '短接码已不可用。',
-                MeetingPublication.localOnly => '跨网输码未启用；仍可使用可达地址直连。',
+                MeetingPublication.localOnly => '跨网输码未启用；附近设备仍可通过自动发现连接。',
                 MeetingPublication.publishing => '跨网会合正在准备，请等到显示就绪后再让对方输码。',
                 MeetingPublication.ready => '跨网会合已就绪，可让对方直接输入短接码。',
-                MeetingPublication.retrying => '跨网会合暂不可用，正在重试；可达地址直连仍可使用。',
-                MeetingPublication.failed => '跨网会合不可用，请检查所选辅助服务；可达地址直连仍可使用。',
+                MeetingPublication.retrying => '跨网会合暂不可用，正在重试；附近设备仍可通过自动发现连接。',
+                MeetingPublication.failed =>
+                  '跨网会合不可用，请检查所选辅助服务；附近设备仍可通过自动发现连接。',
               }),
             ),
-            if (controller.address != null)
-              SelectableText('连接地址：${controller.address}'),
             const SizedBox(height: 12),
           ],
           Wrap(
@@ -203,40 +202,33 @@ class _ConnectionDialog extends StatefulWidget {
 }
 
 class _ConnectionDialogState extends State<_ConnectionDialog> {
-  late final host = TextEditingController(text: widget.device?.host ?? '');
-  late final port = TextEditingController(
-    text: widget.device?.port?.toString() ?? '',
-  );
   final code = TextEditingController();
   bool submitting = false;
   bool attempted = false;
   bool closing = false;
-  bool manualAddress = false;
   String? error;
   @override
   void dispose() {
     if (submitting) widget.controller.cancel();
-    host.dispose();
-    port.dispose();
     code.dispose();
     super.dispose();
   }
 
   Future<void> submit() async {
-    final number = int.tryParse(port.text);
-    final direct =
-        widget.device != null ||
-        (manualAddress &&
-            (host.text.trim().isNotEmpty || port.text.isNotEmpty));
-    if (!RegExp(r'^\d{6}$').hasMatch(code.text) ||
-        (direct &&
-            (host.text.trim().isEmpty ||
-                number == null ||
-                number < 1 ||
-                number > 65535))) {
-      setState(
-        () => error = direct ? '请输入有效地址、端口和 6 位纯数字短接码。' : '请输入完整的 6 位纯数字短接码。',
-      );
+    if (!RegExp(r'^\d{6}$').hasMatch(code.text)) {
+      setState(() => error = '请输入完整的 6 位纯数字短接码。');
+      return;
+    }
+    final device = widget.device;
+    final host = device?.host?.trim();
+    final port = device?.port;
+    if (device != null &&
+        (host == null ||
+            host.isEmpty ||
+            port == null ||
+            port < 1 ||
+            port > 65535)) {
+      setState(() => error = '该设备的连接信息暂不可用，请等待自动发现更新后重试。');
       return;
     }
     if (widget.controller.busy || submitting) return;
@@ -244,17 +236,17 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
       submitting = attempted = true;
       error = null;
     });
-    TrustedConnection? connection = direct
+    TrustedConnection? connection = device != null
         ? await widget.controller.connect(
-            host.text.trim(),
-            number!,
+            host!,
+            port!,
             code.text,
             expectedPeerKey: widget.device?.publicKey,
           )
         : await widget.controller.connectByCode(code.text);
     final expectedKey = widget.device?.publicKey;
     if (connection == null &&
-        direct &&
+        device != null &&
         expectedKey != null &&
         widget.controller.auxiliaryRoutes != null &&
         widget.controller.lastConnectionFailureCode == 'signal_unreachable' &&
@@ -320,26 +312,6 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
                 const Text(
                   '首次跨网连接由所选辅助服务按短接码匹配设备。服务若配置错误或遭冒用，可能连到错误设备；连接后请核对设备身份。',
                 ),
-                TextButton(
-                  onPressed: submitting
-                      ? null
-                      : () => setState(() => manualAddress = !manualAddress),
-                  child: Text(manualAddress ? '收起手动直连' : '手动输入地址直连'),
-                ),
-                if (manualAddress) ...[
-                  TextField(
-                    controller: host,
-                    enabled: !submitting,
-                    decoration: const InputDecoration(labelText: '对端地址'),
-                  ),
-                  TextField(
-                    controller: port,
-                    enabled: !submitting,
-                    keyboardType: TextInputType.number,
-                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                    decoration: const InputDecoration(labelText: '端口'),
-                  ),
-                ],
               ],
               Text(
                 widget.nextActionLabel == null
