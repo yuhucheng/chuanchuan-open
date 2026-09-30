@@ -14,6 +14,11 @@ import 'package:share_hub_media_sdk/share_hub_media_sdk.dart'
     show createPreviewEngine;
 import 'package:share_hub_open/features/connections/connection_controller.dart';
 
+import 'owned_video_pixels.dart';
+import 'owned_video_view.dart';
+import 'probe_report.dart';
+import 'atomic_probe_record.dart';
+
 // Two physical hosts, ordinary SDK entry point and authenticated TCP signaling.
 // Config/ready/command files are ephemeral local orchestration, never a network
 // command endpoint. Only Windows may send, and only the exact owned fixture.
@@ -26,12 +31,18 @@ void main() {
     const configPath = String.fromEnvironment('CHUAN_DUAL_PROBE_CONFIG');
     const console = bool.fromEnvironment('CHUAN_DUAL_PROBE_CONSOLE');
     const runId = String.fromEnvironment('CHUAN_DUAL_PROBE_RUN');
+    const receiverRounds = int.fromEnvironment(
+      'CHUAN_DUAL_PROBE_ROUNDS',
+      defaultValue: 1,
+    );
     expect(console ? Platform.isMacOS : configPath.isNotEmpty, isTrue);
     final config = console
         ? <String, dynamic>{'role': 'receiver', 'runId': runId}
         : jsonDecode(await File(configPath).readAsString())
               as Map<String, dynamic>;
     final sends = config['role'] == 'sender';
+    final roundLimit = console ? receiverRounds : config['rounds'] ?? 1;
+    expect(roundLimit, inInclusiveRange(1, 20));
     expect(config['role'], isIn(['sender', 'receiver']));
     expect(sends ? Platform.isWindows : Platform.isMacOS, isTrue);
     final reportFile = console ? null : File(config['report'] as String);
@@ -53,15 +64,26 @@ void main() {
     StreamSubscription<MediaSessionEvent>? subscription;
     final key = GlobalKey();
     final failures = <String>[];
-    final revisions = <int, Map<String, Object?>>{};
-    final markers = <int, Set<bool>>{};
-    final previousMarker = <int, bool>{};
-    final markerTransitions = <int, int>{};
-    final counts = <String, int>{};
+    var revisions = <int, Map<String, Object?>>{};
+    var markers = <int, Set<bool>>{};
+    var previousMarker = <int, bool>{};
+    var markerTransitions = <int, int>{};
+    var counts = <String, int>{};
+    final completedRounds = <Map<String, Object?>>[];
+    final sessionIds = <String>{};
+    var round = 0, stoppedSamples = 0;
+    var stoppedSampleTimes = <int>[];
     var sourceQueries = 0, sequence = 0, ack = 0;
-    var stopped = false, passed = false, checksDone = false, validated = false;
+    var passed = false, checksDone = false, validated = false;
     String? commandError, failureCode;
     final elapsed = Stopwatch()..start();
+    var probePhase = 'initializing', phaseSinceMillis = 0, lastReport = -1000;
+    Timer? heartbeat;
+    Future<T> probeStep<T>(String phase, Future<T> Function() action) {
+      probePhase = phase;
+      phaseSinceMillis = elapsed.elapsedMilliseconds;
+      return action();
+    }
 
     void attach(TrustedConnection value) {
       if (connection != null) throw StateError('duplicate_connection');
@@ -86,11 +108,33 @@ void main() {
           return matches.single;
         },
         onSession: (value) {
-          if (session != null) throw StateError('duplicate_session');
+          if (session != null && !validated) {
+            throw StateError('duplicate_session');
+          }
+          expectSync(completedRounds.length, round);
+          expectSync(round, lessThan(roundLimit));
+          expectSync(sessionIds.add(value.id), isTrue);
+          round++;
+          revisions = {};
+          markers = {};
+          previousMarker = {};
+          markerTransitions = {};
+          counts = {};
+          stoppedSamples = 0;
+          stoppedSampleTimes = [];
+          validated = false;
           session = value;
+          // Each subscription owns this session's maps. Late events must not
+          // satisfy a later session with the same media revision numbers.
+          final ownedCounts = counts, ownedRevisions = revisions;
           subscription = value.events.listen((event) {
-            counts.update(event.kind.name, (n) => n + 1, ifAbsent: () => 1);
-            final summary = revisions.putIfAbsent(
+            expectSync(event.sessionId, value.id);
+            ownedCounts.update(
+              event.kind.name,
+              (n) => n + 1,
+              ifAbsent: () => 1,
+            );
+            final summary = ownedRevisions.putIfAbsent(
               event.mediaRevision,
               () => {},
             );
@@ -126,8 +170,17 @@ void main() {
         'runId': config['runId'],
         'role': config['role'],
         'platform': Platform.operatingSystem,
+        'pid': pid,
+        'round': round,
+        'roundLimit': roundLimit,
+        'uniqueSessionCount': sessionIds.length,
+        'completedRounds': completedRounds,
+        'stoppedSamples': stoppedSamples,
+        'stoppedSampleTimes': stoppedSampleTimes,
         'paired': connection != null,
         'elapsedMillis': elapsed.elapsedMilliseconds,
+        'probePhase': probePhase,
+        'phaseAgeMillis': elapsed.elapsedMilliseconds - phaseSinceMillis,
         'ack': ack,
         'commandError': commandError,
         'budget': budget.activeCount,
@@ -148,16 +201,27 @@ void main() {
         'validated': validated,
       };
       if (console) {
-        debugPrint('DUAL_REPORT=${jsonEncode(result)}', wrapWidth: null);
+        writeProbeRecord('DUAL_REPORT', result);
       } else {
         await _atomicJson(reportFile!, result);
       }
     }
 
-    await tester.pumpWidget(
-      const MaterialApp(home: Text('Dual-device video probe')),
-    );
+    // If a GUI frame/readback stops advancing, expose SDK state independently
+    // of that await. Console-only: never race atomic report-file replacements.
+    if (console) {
+      heartbeat = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (elapsed.elapsedMilliseconds - lastReport >= 1500) {
+          lastReport = elapsed.elapsedMilliseconds;
+          unawaited(publish());
+        }
+      });
+    }
+
     try {
+      await tester.pumpWidget(
+        const MaterialApp(home: Text('Dual-device video probe')),
+      );
       if (sends) {
         attach(
           await PairingAttempt(
@@ -185,6 +249,7 @@ void main() {
         await host.open();
         final ready = <String, Object?>{
           'runId': config['runId'],
+          'rounds': roundLimit,
           'pid': pid,
           'port': host.port,
           'code': host.offer!.code,
@@ -192,58 +257,98 @@ void main() {
         };
         if (console) {
           // Keep this ephemeral pairing material in the ignored runner log.
-          debugPrint('DUAL_READY=${jsonEncode(ready)}', wrapWidth: null);
+          writeProbeRecord('DUAL_READY', ready);
         } else {
           await _atomicJson(readyFile!, ready);
         }
       }
-      var mounted = false;
+      RemoteVideoSession? mountedSession;
       var lastSample = -1000;
-      var lastReport = -1000;
-      while (!checksDone && elapsed.elapsed < const Duration(minutes: 4)) {
+      while (!checksDone && elapsed.elapsed < const Duration(minutes: 10)) {
         expect(failures, isEmpty, reason: 'Actual media failure');
-        if (session != null && !mounted) {
-          expect(session!.sends, sends);
-          await tester.pumpWidget(
-            MaterialApp(
-              home: Scaffold(
-                body: Center(
-                  child: SizedBox(
-                    width: 480,
-                    height: 320,
-                    child: RepaintBoundary(key: key, child: session!.view),
-                  ),
-                ),
-              ),
-            ),
-          );
-          mounted = true;
+        if (connection?.isClosed == true &&
+            (!validated || completedRounds.length != roundLimit)) {
+          throw StateError('peer_closed_before_validation');
         }
-        await tester.pump(const Duration(milliseconds: 50));
+        if (session != null && session != mountedSession) {
+          final mounting = session!;
+          expect(mounting.sends, sends);
+          await probeStep(
+            'mount',
+            () => tester.pumpWidget(ownedVideoProbeView(key, mounting.view)),
+          );
+          mountedSession = mounting;
+        }
+        final beforePumpSession = session;
+        final beforePump = beforePumpSession == null
+            ? null
+            : OwnedVideoSampleState(
+                beforePumpSession,
+                beforePumpSession.mediaRevision,
+                beforePumpSession.stopped,
+              );
+        await probeStep(
+          'pump',
+          () => tester.pump(const Duration(milliseconds: 50)),
+        );
         if (!sends &&
-            mounted &&
-            !stopped &&
+            mountedSession != null &&
             elapsed.elapsedMilliseconds - lastSample >= 200) {
           lastSample = elapsed.elapsedMilliseconds;
           final boundary =
               key.currentContext?.findRenderObject() as RenderRepaintBoundary?;
-          if (boundary != null &&
-              !boundary.debugNeedsPaint &&
-              revisions[session!.mediaRevision]?['firstFrame'] == true) {
-            final sample = await _ownedPixels(boundary);
-            if (sample != null) {
-              final revision = session!.mediaRevision;
+          final sampledSession = session;
+          if (sampledSession != null &&
+              identical(sampledSession, mountedSession) &&
+              boundary != null &&
+              !boundary.debugNeedsPaint) {
+            final sampledState = OwnedVideoSampleState(
+              sampledSession,
+              sampledSession.mediaRevision,
+              sampledSession.stopped,
+            );
+            if (beforePump == null || !beforePump.matches(sampledState)) {
+              continue;
+            }
+            final sample = await probeStep(
+              'pixels',
+              () => readStableOwnedVideoPixels(sampledState, () {
+                final current = session;
+                return current == null || !identical(current, mountedSession)
+                    ? null
+                    : OwnedVideoSampleState(
+                        current,
+                        current.mediaRevision,
+                        current.stopped,
+                      );
+              }, () => _ownedPixels(boundary)),
+            );
+            if (sample == null) continue;
+            if (sampledState.stopped) {
+              if (sample.readable) {
+                expect(
+                  sample.cleared,
+                  isTrue,
+                  reason: 'Stopped view must clear pixels',
+                );
+                stoppedSamples++;
+                stoppedSampleTimes.add(elapsed.elapsedMilliseconds);
+              }
+            } else if (sample.ownedPattern &&
+                sample.marker != null &&
+                revisions[sampledState.revision]?['firstFrame'] == true) {
+              final revision = sampledState.revision;
               revisions.putIfAbsent(revision, () => {})['ownedPattern'] = true;
-              markers.putIfAbsent(revision, () => {}).add(sample);
+              markers.putIfAbsent(revision, () => {}).add(sample.marker!);
               if (previousMarker.containsKey(revision) &&
-                  previousMarker[revision] != sample) {
+                  previousMarker[revision] != sample.marker) {
                 markerTransitions.update(
                   revision,
                   (n) => n + 1,
                   ifAbsent: () => 1,
                 );
               }
-              previousMarker[revision] = sample;
+              previousMarker[revision] = sample.marker!;
             }
           }
         }
@@ -260,10 +365,16 @@ void main() {
             /* The local writer may be replacing it. */
           }
         }
-        if (console && session?.stopped == true && !validated) {
-          command = {'sequence': 1, 'action': 'check'};
-        } else if (console && validated && connection!.isClosed) {
-          command = {'sequence': 2, 'action': 'finish'};
+        if (console &&
+            session?.stopped == true &&
+            !validated &&
+            stoppedSamples >= 3) {
+          command = {'sequence': sequence + 1, 'action': 'check'};
+        } else if (console &&
+            completedRounds.length == roundLimit &&
+            validated &&
+            connection!.isClosed) {
+          command = {'sequence': sequence + 1, 'action': 'finish'};
         }
         if (command != null &&
             command['sequence'] is int &&
@@ -271,8 +382,12 @@ void main() {
             session != null) {
           sequence = command['sequence'] as int;
           final action = command['action'];
+          probePhase = 'command_$action';
+          phaseSinceMillis = elapsed.elapsedMilliseconds;
           try {
             switch (action) {
+              case 'abort':
+                throw StateError('orchestration_aborted');
               case 'pause':
                 await session!.pause().timeout(const Duration(seconds: 35));
                 expect(budget.activeCount, 1);
@@ -283,9 +398,20 @@ void main() {
                 break;
               case 'stop':
                 await session!.stop().timeout(const Duration(seconds: 35));
-                stopped = true;
                 expect(budget.activeCount, 0);
                 await connection!.grant!.checkValidity();
+                break;
+              case 'start':
+                expect(validated, isTrue);
+                expect(round, lessThan(roundLimit));
+                expect(budget.activeCount, 0);
+                await subscription!.cancel();
+                await link!
+                    .start(
+                      SessionOperation.cast,
+                      'dual-${Random.secure().nextInt(1 << 30)}',
+                    )
+                    .timeout(const Duration(seconds: 35));
                 break;
               case 'check':
                 // stopped gates new work before asynchronous native cleanup.
@@ -307,10 +433,28 @@ void main() {
                 await connection!.grant!.checkValidity();
                 expect(failures, isEmpty);
                 validated = true;
+                completedRounds.add({
+                  'round': round,
+                  'counts': counts,
+                  'revisions': {
+                    for (final e in revisions.entries) '${e.key}': e.value,
+                  },
+                  'markers': {
+                    for (final e in markers.entries)
+                      '${e.key}': e.value.toList(),
+                  },
+                  'markerTransitions': {
+                    for (final e in markerTransitions.entries)
+                      '${e.key}': e.value,
+                  },
+                  'budgetAfterStop': budget.activeCount,
+                  'stoppedSamplesAtCheck': stoppedSamples,
+                });
                 break;
               case 'finish':
                 expect(failures, isEmpty);
                 expect(validated, isTrue);
+                expect(completedRounds.length, roundLimit);
                 checksDone = true;
                 break;
               default:
@@ -334,6 +478,9 @@ void main() {
       await publish(failure: error.runtimeType.toString());
       rethrow;
     } finally {
+      heartbeat?.cancel();
+      probePhase = 'cleanup';
+      phaseSinceMillis = elapsed.elapsedMilliseconds;
       final cleanupFailures = <String>[];
       Future<void> clean(String name, Future<void> Function() action) async {
         try {
@@ -369,46 +516,21 @@ void main() {
         }
       }
     }
-  }, timeout: const Timeout(Duration(minutes: 8)));
+  }, timeout: const Timeout(Duration(minutes: 14)));
 }
 
 Future<void> _atomicJson(File target, Map<String, Object?> value) async {
-  final temporary = File('${target.path}.next');
-  await temporary.writeAsString(jsonEncode(value), flush: true);
-  await temporary.rename(target.path);
+  await writeAtomicProbeRecord(target, value);
 }
 
 // Verify the actual displayed texture. The four colors identify the generated
 // owned window; its white/black moving marker establishes changing pixels.
 // No screenshot, source name, address, code or key enters the report.
-Future<bool?> _ownedPixels(RenderRepaintBoundary boundary) async {
+Future<OwnedVideoPixels> _ownedPixels(RenderRepaintBoundary boundary) async {
   final image = await boundary.toImage(pixelRatio: 1);
   try {
     final pixels = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
-    if (pixels == null) return null;
-    const colors = [
-      [224, 32, 32],
-      [32, 208, 64],
-      [32, 64, 224],
-      [224, 208, 32],
-    ];
-    for (var quadrant = 0; quadrant < 4; quadrant++) {
-      final x = (image.width * (quadrant.isEven ? .25 : .75)).floor();
-      final y = (image.height * (quadrant < 2 ? .25 : .75)).floor();
-      final offset = (y * image.width + x) * 4;
-      for (var channel = 0; channel < 3; channel++) {
-        if ((pixels.getUint8(offset + channel) - colors[quadrant][channel])
-                .abs() >
-            45) {
-          return null;
-        }
-      }
-    }
-    final offset = (8 * image.width + image.width ~/ 2) * 4;
-    final rgb = List.generate(3, (i) => pixels.getUint8(offset + i));
-    if (rgb.every((value) => value > 190)) return true;
-    if (rgb.every((value) => value < 65)) return false;
-    return null;
+    return inspectOwnedVideoPixels(pixels, image.width, image.height);
   } finally {
     image.dispose();
   }
