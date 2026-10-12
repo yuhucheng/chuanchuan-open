@@ -6,6 +6,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:share_hub_connection/share_hub_connection.dart';
@@ -219,6 +220,13 @@ void main() {
     }
 
     try {
+      if (console) {
+        // Activating the Mac process does not order its owned window onscreen.
+        // The live binding needs that window to receive real engine frames.
+        await const MethodChannel('dev.sharehub.client/desktop')
+            .invokeMethod<Object?>('window.action', {'action': 'reopen'})
+            .timeout(const Duration(seconds: 5));
+      }
       await tester.pumpWidget(
         const MaterialApp(home: Text('Dual-device video probe')),
       );
