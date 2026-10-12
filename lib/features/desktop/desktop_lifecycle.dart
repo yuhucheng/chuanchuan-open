@@ -132,6 +132,7 @@ class DesktopLifecycle extends ChangeNotifier {
     if (exited) return true;
     exiting = true;
     error = null;
+    preview.prepareForExit();
     _notify();
     try {
       await _exitStep('stop-media+disconnect', () {
@@ -150,6 +151,7 @@ class DesktopLifecycle extends ChangeNotifier {
         ]).then<void>((_) {});
       });
       if (preview.cleanupFailed) throw StateError('capture cleanup');
+      await _exitStep('dispose-media-engine', preview.disposeEngineForExit);
       // Shutdown notifications do not publish a temporary "off" preference.
       // Finish the user's last pre-exit choice before native teardown.
       await _exitStep(

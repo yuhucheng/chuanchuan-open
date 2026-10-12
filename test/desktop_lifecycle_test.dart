@@ -22,6 +22,7 @@ void main() {
   late DeviceController devices;
   late ConnectionController connections;
   late PreviewController preview;
+  late _OwnedPreviewEngine engine;
   late TransferQueue transfers;
   late TestFileAccess files;
   late DesktopLifecycle lifecycle;
@@ -39,7 +40,8 @@ void main() {
     platform = FakePlatform();
     devices = DeviceController(platform);
     connections = _OrderedConnectionController(cleanupOrder);
-    preview = PreviewController(platform, FakePreviewEngine());
+    engine = _OwnedPreviewEngine();
+    preview = PreviewController(platform, engine);
     files = TestFileAccess();
     transfers = TransferQueue(files);
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -81,6 +83,69 @@ void main() {
     await platform.events.close();
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, null);
+  });
+  test(
+    'exit waits for engine disposal after remote cleanup and closes admission',
+    () async {
+      final remoteReleased = Completer<void>();
+      stopRemote = () => remoteReleased.future;
+      engine.disposal = Completer<void>();
+      final exiting = lifecycle.requestExit();
+      await Future<void>.delayed(Duration.zero);
+      expect(engine.disposeCalls, 0);
+      final queries = engine.sourceCalls;
+      await preview.loadSources();
+      await preview.start();
+      expect(engine.sourceCalls, queries);
+      expect(engine.starts, 0);
+      remoteReleased.complete();
+      await Future<void>.delayed(Duration.zero);
+      expect(engine.disposeCalls, 1);
+      expect(lifecycle.exited, false);
+      expect(calls, isNot(contains('prepareExit')));
+      engine.disposal!.complete();
+      expect(await exiting, true);
+      expect(engine.closed, true);
+      await lifecycle.requestExit();
+      expect(engine.disposeCalls, 1);
+    },
+  );
+  test(
+    'failed engine disposal keeps exit unapproved and retries the owner',
+    () async {
+      engine.failDispose = true;
+      expect(await lifecycle.requestExit(), false);
+      expect(engine.disposeCalls, 1);
+      expect(engine.closed, false);
+      await lifecycle.finishExit();
+      expect(calls, isNot(contains('exit')));
+      await preview.loadSources();
+      expect(engine.sourceCalls, 0);
+      engine.failDispose = false;
+      expect(await lifecycle.requestExit(), true);
+      expect(engine.disposeCalls, 2);
+      expect(engine.closed, true);
+    },
+  );
+  testWidgets('engine disposal timeout retry joins the actual pending owner', (
+    tester,
+  ) async {
+    engine.disposal = Completer<void>();
+    final first = lifecycle.requestExit();
+    await tester.pump();
+    expect(engine.disposeCalls, 1);
+    await tester.pump(const Duration(seconds: 10));
+    expect(await first, false);
+    expect(lifecycle.exited, false);
+    await lifecycle.finishExit();
+    expect(calls, isNot(contains('exit')));
+    final retry = lifecycle.requestExit();
+    await tester.pump();
+    expect(engine.disposeCalls, 1);
+    engine.disposal!.complete();
+    await tester.pump();
+    expect(await retry, true);
+    expect(engine.disposeCalls, 1);
   });
   test(
     'discovery is independent from initially closed admission and disconnect',
@@ -481,5 +546,18 @@ class _OrderedConnectionController extends ConnectionController {
   Future<void> disconnectAll() {
     cleanupOrder.add('disconnect');
     return super.disconnectAll();
+  }
+}
+
+class _OwnedPreviewEngine extends FakePreviewEngine {
+  int disposeCalls = 0;
+  bool failDispose = false;
+  Completer<void>? disposal;
+  @override
+  Future<void> dispose() async {
+    disposeCalls++;
+    await disposal?.future;
+    if (failDispose) throw StateError('engine cleanup failed');
+    await super.dispose();
   }
 }

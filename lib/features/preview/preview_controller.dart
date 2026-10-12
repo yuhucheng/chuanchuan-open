@@ -28,6 +28,8 @@ class PreviewController extends ChangeNotifier {
   bool get occupiesPicture => busy || stopping || active || cleanupFailed;
   String? error;
   bool _disposed = false;
+  bool _exitRequested = false, _engineDisposed = false;
+  Future<void>? _engineDisposal;
   int _generation = 0;
   Future<void>? _pending;
   Future<void>? _stopPending;
@@ -36,7 +38,14 @@ class PreviewController extends ChangeNotifier {
   bool _polling = false;
 
   void select(CaptureSource? source) {
-    if (busy || active || stopping || cleanupFailed) return;
+    if (_disposed ||
+        _exitRequested ||
+        busy ||
+        active ||
+        stopping ||
+        cleanupFailed) {
+      return;
+    }
     _explicitSource = true;
     selected = source;
     _notify();
@@ -64,6 +73,7 @@ class PreviewController extends ChangeNotifier {
   });
 
   Future<void> start() {
+    if (_disposed || _exitRequested) return Future.value();
     if (_unavailable()) return Future.value();
     if (_remoteBlocked()) return Future.value();
 
@@ -154,7 +164,12 @@ class PreviewController extends ChangeNotifier {
   }
 
   Future<void> _run(Future<void> Function(int) action) {
-    if (busy || stopping || active || cleanupFailed || _disposed) {
+    if (busy ||
+        stopping ||
+        active ||
+        cleanupFailed ||
+        _disposed ||
+        _exitRequested) {
       return Future.value();
     }
     busy = true;
@@ -202,6 +217,7 @@ class PreviewController extends ChangeNotifier {
   }
 
   Future<void> stop({String? reason}) {
+    if (_engineDisposed) return Future.value();
     if (_stopPending case final pending?) return pending;
     // Publish ownership before notifying listeners: a synchronous observer
     // may request the same stop while _stop is still entering its first await.
@@ -259,7 +275,47 @@ class PreviewController extends ChangeNotifier {
     }
   }
 
-  bool _current(int token) => !_disposed && token == _generation;
+  /// Exit is terminal for admission even when cleanup later fails or times out.
+  /// This gate starts before synchronous UI listeners can submit new work.
+  void prepareForExit() {
+    _exitRequested = true;
+    _permissionTimer?.cancel();
+    _firstFrameTimer?.cancel();
+  }
+
+  /// Called only after remote owners and local stop have actually settled.
+  /// The same backend root may own the catalogue, runtime and C core in addition
+  /// to preview resources. Widget disposal alone cannot approve process exit.
+  Future<void> disposeEngineForExit() {
+    prepareForExit();
+    if (_engineDisposed) return Future.value();
+    if (_engineDisposal case final pending?) return pending;
+    if (busy || stopping || active || cleanupFailed) {
+      return Future.error(
+        StateError('Preview cleanup must settle before engine disposal'),
+      );
+    }
+    final completion = Completer<void>();
+    _engineDisposal = completion.future;
+    unawaited(() async {
+      try {
+        await engine.dispose();
+        _engineDisposed = true;
+        completion.complete();
+      } catch (failure, stack) {
+        cleanupFailed = true;
+        error = '媒体组件释放失败，请重试退出。';
+        _notify();
+        completion.completeError(failure, stack);
+      } finally {
+        _engineDisposal = null;
+      }
+    }());
+    return completion.future;
+  }
+
+  bool _current(int token) =>
+      !_disposed && !_exitRequested && token == _generation;
   void _notify() {
     if (!_disposed) notifyListeners();
   }
@@ -267,7 +323,10 @@ class PreviewController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
-    unawaited(stop().then((_) => engine.dispose()).catchError((Object _) {}));
+    prepareForExit();
+    unawaited(
+      stop().then((_) => disposeEngineForExit()).catchError((Object _) {}),
+    );
     super.dispose();
   }
 }
