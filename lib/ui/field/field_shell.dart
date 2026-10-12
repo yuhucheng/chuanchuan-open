@@ -151,6 +151,9 @@ class _FieldShellState extends State<FieldShell> {
   Future<void> openPanel(String title, Widget Function() content) =>
       showDialog<void>(
         context: context,
+        animationStyle: MediaQuery.disableAnimationsOf(context)
+            ? AnimationStyle.noAnimation
+            : null,
         builder: (context) => AlertDialog(
           title: Text(title),
           content: SizedBox(
@@ -347,6 +350,9 @@ class _FieldShellState extends State<FieldShell> {
 
   Future<void> localActions() => showDialog<void>(
     context: context,
+    animationStyle: MediaQuery.disableAnimationsOf(context)
+        ? AnimationStyle.noAnimation
+        : null,
     builder: (context) => AlertDialog(
       title: const Text('本机与连接'),
       content: _connectionSupported
@@ -428,6 +434,9 @@ class _FieldShellState extends State<FieldShell> {
     if (selected == null || (!selected.online && !selected.recovering)) return;
     final action = await showDialog<String>(
       context: context,
+      animationStyle: MediaQuery.disableAnimationsOf(context)
+          ? AnimationStyle.noAnimation
+          : null,
       builder: (context) => AnimatedBuilder(
         animation: Listenable.merge([
           widget.connections,

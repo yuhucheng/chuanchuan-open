@@ -180,6 +180,9 @@ Future<TrustedConnection?> showConnectionDialog(
 }) async {
   return showDialog<TrustedConnection>(
     context: context,
+    animationStyle: MediaQuery.disableAnimationsOf(context)
+        ? AnimationStyle.noAnimation
+        : null,
     builder: (_) => _ConnectionDialog(
       device: device,
       controller: controller,

@@ -141,6 +141,10 @@ class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
       await _desktop.requestExit()
       ? AppExitResponse.exit
       : AppExitResponse.cancel;
+
+  @override
+  void didChangeAccessibilityFeatures() => setState(() {});
+
   @override
   void dispose() {
     if (_fileDropEnabled) {
@@ -177,6 +181,16 @@ class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
         widget.targetPlatform ?? defaultTargetPlatform,
       ),
       themeMode: _appearance.mode,
+      // Keep the AnimatedTheme owner stable when the system preference changes
+      // so focus, unfinished input and the field's media owners survive.
+      themeAnimationDuration:
+          WidgetsBinding
+              .instance
+              .platformDispatcher
+              .accessibilityFeatures
+              .disableAnimations
+          ? Duration.zero
+          : kThemeAnimationDuration,
       home: FieldShell(
         devices: _devices,
         connections: _connections,
