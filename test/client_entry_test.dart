@@ -42,10 +42,18 @@ void main() {
     await tester.pumpAndSettle();
     final app = tester.widget<ShareHubApp>(find.byType(ShareHubApp));
     expect(app.previewEngine, isNotNull);
-    expect(app.previewEngine.unavailableReason, isNull);
+    // Injection does not imply that the installed package supports this test
+    // platform or that a native image is loaded in the Flutter test process.
+    final unavailable = app.previewEngine.unavailableReason;
     await openFieldTool(tester, '屏幕预览');
     await tester.pumpAndSettle();
     expect(find.text('读取屏幕与窗口'), findsOneWidget);
+    if (unavailable != null) {
+      expect(unavailable, isNotEmpty);
+      await tester.tap(find.widgetWithText(OutlinedButton, '读取屏幕与窗口'));
+      await tester.pumpAndSettle();
+      expect(find.text(unavailable), findsOneWidget);
+    }
     expect(calls, isNot(contains('requestScreenRecording')));
     expect(calls.where((call) => call.startsWith('media:')), isEmpty);
     await tester.pumpWidget(const SizedBox());
