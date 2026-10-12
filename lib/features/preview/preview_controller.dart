@@ -283,28 +283,38 @@ class PreviewController extends ChangeNotifier {
     _firstFrameTimer?.cancel();
   }
 
-  /// Called only after remote owners and local stop have actually settled.
-  /// The same backend root may own the catalogue, runtime and C core in addition
-  /// to preview resources. Widget disposal alone cannot approve process exit.
+  /// The backend root also owns source queries. Begin disposal alongside stop
+  /// so it can cancel a query that stop itself is awaiting. Success still joins
+  /// both actual owners; callers must also wait their remote/transport cleanup.
   Future<void> disposeEngineForExit() {
     prepareForExit();
     if (_engineDisposed) return Future.value();
     if (_engineDisposal case final pending?) return pending;
-    if (busy || stopping || active || cleanupFailed) {
-      return Future.error(
-        StateError('Preview cleanup must settle before engine disposal'),
-      );
-    }
     final completion = Completer<void>();
     _engineDisposal = completion.future;
     unawaited(() async {
+      // Own both results before either can settle. SDK disposal may be the
+      // only operation that cancels a pending source/start; serialized waiting
+      // would leave the cancelling call unreachable until a query timeout.
+      final stopped = stop();
+      final released = Future<void>.sync(engine.dispose)
+          .then<({Object error, StackTrace stack})?>(
+            (_) => null,
+            onError: (Object error, StackTrace stack) =>
+                (error: error, stack: stack),
+          );
       try {
-        await engine.dispose();
+        await Future.wait<void>([stopped, released.then<void>((_) {})]);
+        final failure = await released;
+        if (failure != null) {
+          Error.throwWithStackTrace(failure.error, failure.stack);
+        }
+        if (cleanupFailed) throw StateError('Preview cleanup failed');
         _engineDisposed = true;
         completion.complete();
       } catch (failure, stack) {
+        if (!cleanupFailed) error = '媒体组件释放失败，请重试退出。';
         cleanupFailed = true;
-        error = '媒体组件释放失败，请重试退出。';
         _notify();
         completion.completeError(failure, stack);
       } finally {
@@ -324,9 +334,7 @@ class PreviewController extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     prepareForExit();
-    unawaited(
-      stop().then((_) => disposeEngineForExit()).catchError((Object _) {}),
-    );
+    unawaited(disposeEngineForExit().catchError((Object _) {}));
     super.dispose();
   }
 }

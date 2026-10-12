@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:share_hub_connection/share_hub_connection.dart';
+import 'package:share_hub_media_api/share_hub_media_api.dart'
+    show CaptureSource;
 import 'package:share_hub_open/features/connections/connection_controller.dart';
 import 'package:share_hub_open/features/desktop/desktop_lifecycle.dart';
 import 'package:share_hub_open/features/devices/device_controller.dart';
@@ -84,32 +86,29 @@ void main() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, null);
   });
-  test(
-    'exit waits for engine disposal after remote cleanup and closes admission',
-    () async {
-      final remoteReleased = Completer<void>();
-      stopRemote = () => remoteReleased.future;
-      engine.disposal = Completer<void>();
-      final exiting = lifecycle.requestExit();
-      await Future<void>.delayed(Duration.zero);
-      expect(engine.disposeCalls, 0);
-      final queries = engine.sourceCalls;
-      await preview.loadSources();
-      await preview.start();
-      expect(engine.sourceCalls, queries);
-      expect(engine.starts, 0);
-      remoteReleased.complete();
-      await Future<void>.delayed(Duration.zero);
-      expect(engine.disposeCalls, 1);
-      expect(lifecycle.exited, false);
-      expect(calls, isNot(contains('prepareExit')));
-      engine.disposal!.complete();
-      expect(await exiting, true);
-      expect(engine.closed, true);
-      await lifecycle.requestExit();
-      expect(engine.disposeCalls, 1);
-    },
-  );
+  test('exit waits for both engine disposal and remote cleanup and closes admission', () async {
+    final remoteReleased = Completer<void>();
+    stopRemote = () => remoteReleased.future;
+    engine.disposal = Completer<void>();
+    final exiting = lifecycle.requestExit();
+    await Future<void>.delayed(Duration.zero);
+    expect(engine.disposeCalls, 1);
+    final queries = engine.sourceCalls;
+    await preview.loadSources();
+    await preview.start();
+    expect(engine.sourceCalls, queries);
+    expect(engine.starts, 0);
+    engine.disposal!.complete();
+    await Future<void>.delayed(Duration.zero);
+    expect(engine.disposeCalls, 1);
+    expect(lifecycle.exited, false);
+    expect(calls, isNot(contains('prepareExit')));
+    remoteReleased.complete();
+    expect(await exiting, true);
+    expect(engine.closed, true);
+    await lifecycle.requestExit();
+    expect(engine.disposeCalls, 1);
+  });
   test(
     'failed engine disposal keeps exit unapproved and retries the owner',
     () async {
@@ -146,6 +145,22 @@ void main() {
     await tester.pump();
     expect(await retry, true);
     expect(engine.disposeCalls, 1);
+  });
+  test('exit disposal cancels an unresolved source query and drains its late result', () async {
+    platform.grantPermission = true;
+    engine.sourceReply = Completer<List<CaptureSource>>();
+    engine.cancelQueryOnDispose = true;
+    final reading = preview.loadSources();
+    await Future<void>.delayed(Duration.zero);
+    expect(engine.sourceCalls, 1);
+    final exiting = lifecycle.requestExit();
+    await Future<void>.delayed(Duration.zero);
+    expect(engine.disposeCalls, 1);
+    expect(await exiting, true);
+    await reading;
+    expect(preview.sources, isEmpty);
+    expect(engine.closed, true);
+    expect(engine.starts, 0);
   });
   test(
     'discovery is independent from initially closed admission and disconnect',
@@ -553,9 +568,23 @@ class _OwnedPreviewEngine extends FakePreviewEngine {
   int disposeCalls = 0;
   bool failDispose = false;
   Completer<void>? disposal;
+  Completer<List<CaptureSource>>? sourceReply;
+  bool cancelQueryOnDispose = false;
+  @override
+  Future<List<CaptureSource>> sources() async {
+    if (sourceReply case final pending?) {
+      sourceCalls++;
+      return pending.future;
+    }
+    return super.sources();
+  }
+
   @override
   Future<void> dispose() async {
     disposeCalls++;
+    if (cancelQueryOnDispose && sourceReply?.isCompleted == false) {
+      sourceReply!.complete(availableSources);
+    }
     await disposal?.future;
     if (failDispose) throw StateError('engine cleanup failed');
     await super.dispose();

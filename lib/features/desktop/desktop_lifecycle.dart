@@ -147,7 +147,7 @@ class DesktopLifecycle extends ChangeNotifier {
           remote,
           disconnect,
           auxiliary,
-          Future<void>.sync(preview.stop),
+          Future<void>.sync(preview.disposeEngineForExit),
         ]).then<void>((_) {});
       });
       if (preview.cleanupFailed) throw StateError('capture cleanup');
