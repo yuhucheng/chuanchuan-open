@@ -1,20 +1,26 @@
 # Media operations and bounded ownership — draft 2
 
-These are proposed semantics for `share_hub_media_operations.h`, not shipping
-SDK behavior. A private prototype implements authority, bounded macOS source
-snapshots and preview start/stop ownership. Its linked macOS candidate reports
-source/frame limits and one internal operation slot, but still reports zero
-preview/watch/cast capability: the CPU frame-lease path is an internal prototype
-without a validated usable media session. The ordinary Windows development
-preview runtime separately declares PREVIEW and CPU_BGRA, API 0.8.0 and one
-local slot after native and Flutter integration validation. It declares no remote
-protocol or remote slot. These local bits are not a stable ABI, distribution or
-cross-platform acceptance claim. Independent ownership/fault candidates remain
-unadvertised and require an explicit test-only adapter opt-in.
-The standalone authority library has no platform source adapter and
-reports zero source limits. Actual ScreenCaptureKit enumeration has not been
-validated here; synthetic ownership probes are not real source/capture tests.
-Read [the authorization/lifetime boundary](README.md) first. Draft
+These semantics describe the unreleased `share_hub_media_operations.h` draft,
+not a stable ABI or a formally delivered SDK. The current normal Mac native core
+implements sources, local preview and remote watch/cast, playback, source change,
+recovery, CPU frame leases, progress and statistics. Its loaded capabilities are
+`features=255`, media API 0.8.0, session protocol 2, one local preview and one
+remote video slot. The internal universal candidate has actual generated-media
+and cleanup checks in a non-Flutter caller; the relocated thin package builds the
+normal Mac client without private source access. This does not prove real OS
+source/capture, main-view presentation, Intel hardware, two-device or online
+acceptance. x86_64 candidate checks on the current Mac use Rosetta.
+
+The ordinary Windows development runtime implements native local preview and
+CPU BGRA (`features=33`), API 0.8.0 and one local slot, but no native remote protocol
+or remote slot. Its normal factory's remote path still uses the Dart RTC adapter.
+Standalone authority/ownership/fault libraries remain zero-capability probes;
+unadvertised test paths require explicit test-only opt-in. The standalone
+authority library has no platform source adapter and reports zero source limits.
+These paths must not be confused with the normal Mac runtime.
+
+Read [the authorization/lifetime boundary](README.md) and
+[the consumption matrix](../../../../docs/sdk/consumption-matrix.md) first. Draft
 revision 2 replaces draft 1 declarations; neither has a compatibility promise.
 The current Dart API and wire formats remain unchanged.
 
@@ -26,10 +32,9 @@ names or roadmap plans. A preview-only implementation reports no watch/cast bits
 and zero remote sessions. The current remote profile has at most one video session
 across links/providers; local preview has a separate maximum of one. Thumbnail
 borrowing adds neither. A host may not raise either limit by creating another core.
-Unsupported functions return UNAVAILABLE before creating owners. The private
-candidate's unadvertised preview start/stop path is an internal ownership probe;
-hosts must not expose it as product preview while the capability bit is zero.
-The same applies to its internal CPU frame-lease path.
+Unsupported functions return UNAVAILABLE before creating owners. A standalone
+zero-capability probe's preview and CPU frame-lease paths are internal ownership
+checks; hosts must not expose them while the corresponding capability bit is zero.
 The reported media API tuple is the implemented contract version, not the draft revision;
 peer operation negotiation must still match session protocol 2 and media profile
 3/4. No remote control, file transfer, audio or multiple-video capability is added.
@@ -270,13 +275,15 @@ a blocking wait on the UI thread. No native callbacks enter Dart under a lock.
 
 ## Remaining implementation/review gates
 
-The declarations cover the intended CPU-frame v0.1.0 lifecycle; the private
-candidate implements only preview ownership and bounded frame leases, without
-product integration or platform acceptance. No performance promise exists.
+The declarations cover the intended CPU-frame v0.1.0 lifecycle. The normal Mac
+factory and internal thin candidate integrate the native operations above; native
+Windows remote migration and complete platform acceptance remain outstanding.
+No performance or formal distribution promise exists.
 GPU interop remains an optional capability to design
 and validate; it cannot be silently substituted with unsafe borrowed platform objects.
-Package layout, ABI extension/version negotiation, stable error mapping, provider
-implementation, target tools/minimum OS and actual media/cleanup acceptance still
+Package layout, ABI extension/version negotiation, stable error mapping, complete
+target provider coverage, target tools/minimum OS and actual platform media/cleanup
+acceptance still
 must be resolved before a stable interface or binary is announced. Queue, memory
 and timeout values require actual load/platform tests; compiler layouts do not
 validate behavior, rendering latency or supported resolution.

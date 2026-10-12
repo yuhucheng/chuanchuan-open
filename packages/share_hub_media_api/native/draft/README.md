@@ -1,27 +1,38 @@
 # Native media boundary — review draft 2
 
-**Unreleased draft.** An internal Mac core candidate now exports the 20
-authorization/lifecycle and query/wait symbols plus local preview operations; no
-formally distributed SDK exports this ABI. The ordinary source-based Dart adapter consumes
-the public media API, and the installer does not consume this directory. Dart
-media API 0.8.0, session API 0.1.0 and existing wire profiles are unchanged.
-The header is public interface work, not a binary delivery.
+**Unreleased draft.** The current internal Mac native core and thin adapter
+implement this draft boundary; the normal Mac SDK factory now selects that native
+composition. No formally distributed SDK or stable ABI is delivered. The installer
+does not consume this header directory. Dart media API 0.8.0, session API 0.1.0
+and existing wire profiles are unchanged. Public headers alone are not a binary
+delivery or an authenticated provider implementation.
 
 The boundary header specifies authorization/provider, resource ownership and
 shutdown. [Media operations](MEDIA.md) and `share_hub_media_operations.h` add
 sources, start, playback, recovery, measurements, presentation, wakeup and bounded
-queues/frame storage. A private authority-only prototype implements the lifecycle
-subset and the two capability/limit queries; it reports zero media capabilities.
-The ordinary Windows development preview runtime implements local sources,
-preview ownership and CPU BGRA frame leases and declares only PREVIEW/CPU_BGRA
-with one local slot and API 0.8.0. Its adapter checks those loaded capability
-fields before enumeration/capture. Independent ownership/fault libraries and
-the Mac candidate still report zero media capabilities; tests must opt in
-explicitly to exercise their unadvertised paths. Remote operations remain
-unimplemented at this C boundary; Dart RTC support does not imply native support.
-[Package layout and compatibility metadata](PACKAGING.md) now have a concrete
-proposal and non-installable examples; production validation, GPU interop and stable
-ABI extension rules remain design/acceptance work. No program can run media by including these headers alone.
+queues/frame storage. Current implementation paths differ:
+
+- The normal Mac native runtime reports PREVIEW, WATCH, CAST, SOURCE_CHANGE,
+  RECOVERY, CPU_BGRA, STATISTICS and FRAME_PROGRESS (`features=255`), API 0.8.0,
+  session protocol 2 and separate limits of one local preview and one remote video.
+  Its internal universal candidate has independent non-Flutter generated-media
+  checks and a relocated thin-package client build. These checks do not establish
+  OS capture, real main-view presentation, two-device or full platform acceptance.
+- The ordinary Windows development preview runtime reports PREVIEW/CPU_BGRA
+  (`features=33`), API 0.8.0 and one local slot, with no native remote protocol or
+  slot. The normal Windows factory still composes its remote port through the Dart
+  RTC adapter; that port is not evidence of a native Windows remote worker.
+- Standalone authority and ownership/fault probes report zero media capabilities
+  unless explicitly built for a supported client path. Test-only opt-in does not
+  make their unadvertised media paths available to a product host.
+
+Consumers check the loaded runtime's capabilities and limits before admission;
+these current implementation values are not a permanent ABI capability guarantee.
+[The consumption matrix](../../../../docs/sdk/consumption-matrix.md) records the
+paths and evidence scope. [Package layout and compatibility metadata](PACKAGING.md)
+remain a proposal with non-installable examples. Stable ABI extension rules,
+Windows native migration, complete platform acceptance and formal distribution
+remain outstanding; optional GPU interop is not supplied by these CPU declarations.
 
 ## C representation and compatibility
 
@@ -68,8 +79,8 @@ sealed core; zero providers is valid for local-only preview. The host retains
 provider handles inside the connection adapter, not UI action models. This
 limits accidental misuse, not malicious code already controlling the process.
 
-The planned Dart adapter keeps a private mapping of each native grant handle to
-the exact local `GrantEndpoint` and each authorization handle to its exact sealed
+The current internal Mac Dart adapter keeps a private mapping of each native
+grant handle to the exact local `GrantEndpoint` and each authorization handle to its exact sealed
 `LocalSessionRequest` or `VerifiedSessionMessage`. Before import it awaits
 `GrantRegistry.verify`, checks the original object's current epoch, then performs
 the native call synchronously without another await. Body/kind/operation/identity
@@ -91,7 +102,8 @@ providers in the same core. It must not create a second budget/history domain or
 extend the old deadline. Recovery reuses the existing native grant handle.
 Revoked bindings remain tombstoned for the core lifetime; history exhaustion
 fails closed rather than evicting replay guards. The proposed registry/history bounds and limit errors are specified in
-[MEDIA.md](MEDIA.md); their enforcement still needs implementation and tests.
+[MEDIA.md](MEDIA.md); their implementation checks do not replace actual platform
+load/pressure acceptance.
 
 Activation is called only after the real provider authenticates its transport
 proof. The generation strictly increases in the range 1..2^32−1; binding, policy
@@ -112,8 +124,9 @@ stricter schema limits. Signal delivery is never media-start authority.
 
 A native adapter for a non-Flutter host must implement the same real session
 contract and registry checks, including authentication/replay/epoch behavior.
-Neither that adapter nor the Dart/native mapping is implemented by this draft.
-The intended deliverable includes a distributable public provider adapter/sample;
+The headers do not implement that non-Flutter host adapter. The internal Mac
+Dart/native mapping implements the model above; a distributable public provider
+adapter/sample and complete platform acceptance remain delivery work;
 a callback that always approves cannot satisfy native SDK independence acceptance.
 The provider must keep the real endpoint/transport and exact authorization
 mapping alive while a native operation can still use them, and until all original
@@ -201,7 +214,8 @@ A lease is not authorization to keep showing stopped media. The host removes
 views on invalidation/revision change and releases leases when paint work finishes.
 Already acquired memory cannot be force-freed. The current Mac store bounds each
 size pool to three live buffers; draft 2 specifies cross-size/global budgets in [MEDIA.md](MEDIA.md). These
-limits still require a real allocator and platform-pressure tests.
+limits are enforced by the current native allocator; actual platform-pressure
+acceptance remains outstanding.
 CPU mapping is a baseline draft; optional CVPixelBuffer/D3D interop needs explicit
 format, device/thread, reference ownership and capability negotiation. No Flutter
 texture ID is passed into the media core.
@@ -234,7 +248,7 @@ syntax/layout only: they neither link Windows dependencies nor run on Windows
 or an Intel Mac. The script does not load a media SDK or authenticate a grant.
 
 Before freezing an ABI: settle extension/packaging and optional GPU interfaces,
-implement provider mappings and the media operations, compare behavior with public
-session/media vectors, test revocation/cancellation and bounded native ownership,
-and validate complete non-Flutter media and cleanup with actual binaries.
+complete provider/media implementation and vector coverage across all target
+platforms, retain revocation/cancellation and bounded-owner checks, and validate
+actual platform media and cleanup beyond the internal generated-media probes.
 Source headers compiling is necessary but insufficient for any of those gates.

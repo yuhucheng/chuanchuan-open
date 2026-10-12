@@ -14,7 +14,9 @@ source interface is unchanged; a null `unavailableReason` grants no remote suppo
 | Public provider declaring cast only | Cast entry only; no watch/control/file inference | Public adapter and device-panel widget tests |
 | Provider with zero video capacity | No remote action entry or incompatible factory link creation | Controller and device-panel tests |
 | Provider with incompatible session protocol | No remote action entry or incompatible factory link creation | Controller and device-panel tests |
-| Current Windows/macOS development SDK | Public factory declares watch/cast and one shared video slot; lookup does not capture | SDK platform-selection tests and full SDK regression; normal macOS Debug build |
+| Current normal Mac development SDK | The default factory composes preview and the public remote port through the same native core; one remote video slot, lookup does not capture | Native root/contract tests, normal Mac builds and independent generated-media checks; OS/GUI/two-device acceptance remains separate |
+| Current normal Windows development SDK | Native preview plus the public remote port through Dart RTC; one shared remote video slot | Platform-selection and SDK regression tests; native Windows remote migration and actual Windows acceptance remain outstanding |
+| Current internal Mac universal core and thin package | Same normal Mac entry; relocated SDK without private source access; native API 0.8.0 / draft 2 / protocol 2 / features 255, local and remote limits one each | Source-denied pub get, analysis, 334 client tests (one Windows-only skip), Mac Release build and embedded binary identity checks; application not launched |
 | Authenticated request reaches preview-only client | Bounded unavailable reply; no source enumeration, capture or video slot | Real grant cryptography with controlled transport; close waits for pending replies |
 
 The historical SDK test substitutes the canonical public API via the client's
@@ -25,10 +27,24 @@ permissions still apply. Platform-selection tests are not Windows native tests.
 A Dart bundle is not a signed native app, and the historical probe does not test
 screen capture or load historical native binaries.
 
-The current client, SDK and public API test suites passed (241, 201 and 35 tests)
-with Flutter 3.47.2 / Dart 3.13.2 on macOS arm64. The client and SDK implementation
-remain development sources; formal binary packages, signatures, actual Windows
-acceptance and two-device media acceptance are separate release gates.
+The earlier source-consumption check recorded 241 client, 201 SDK and 35 API
+passes; those are historical counts, not current full-suite totals. Checks use
+Flutter 3.47.2 / Dart 3.13.2. As of 2026-10-13, the internal Mac candidate includes
+preview, watch/cast, source change, recovery, CPU BGRA, frame progress and statistics.
+The candidate's 22 independent binary checks use generated pixels and controlled
+sources/providers; x86_64 checks use Rosetta, not Intel hardware. The source-denied
+client result above belongs to the committed client snapshot tested with that
+candidate, not arbitrary current working-tree edits.
+
+The development source adapter and internal Mac binary/thin candidate are distinct
+artifacts. A formally distributed SDK, stable ABI, complete Windows/macOS matrix,
+final licenses, release source trust/signing and actual media acceptance remain
+outstanding. No formal package download is available. Loaded capabilities decide
+admission; a platform name or these recorded values cannot substitute for a query.
+See the [native boundary status](../../packages/share_hub_media_api/native/draft/README.md)
+and [Mac Release signing check](../validation/2026-10-13-release-hardening.md).
+Internal candidate build evidence does not satisfy Developer ID, notarization,
+application launch or two-device acceptance.
 
 To repeat the isolated historical-source probe, supply a repository you are
 already authorized to read and a full immutable commit containing the SDK package:
