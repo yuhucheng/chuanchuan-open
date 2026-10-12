@@ -1,76 +1,60 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:share_hub_media_sdk/share_hub_media_sdk.dart';
+import 'package:share_hub_media_api/share_hub_media_api.dart';
 import 'package:share_hub_open/features/preview/preview_controller.dart';
 import 'package:share_hub_open/platform/client_platform.dart';
 
 import 'fakes.dart';
 
-// Exercises the public SDK factory and real Dart adapter with a controlled
-// native channel. These tests do not prove ScreenCaptureKit capture/release.
+// Client lifecycle conformance through the public PreviewEngine port.
+// Actual native SDK ownership is verified in the SDK; this controlled backend
+// supplies late callbacks and unresolved work without depending on SDK internals.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  const channel = MethodChannel('dev.sharehub.client/preview');
-  final messenger =
-      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
   late FakePlatform platform;
   late PreviewController controller;
   late Completer<void> startEntered;
   Completer<void>? startReply;
   Completer<void>? stopReply;
-  final calls = <MethodCall>[];
+  final calls = <_Call>[];
+  late _ControlledPreview backend;
   var failStop = false;
   var stopCancelsStartup = false;
   var session = '';
 
   Future<void> event(String id, String type) async {
-    final reply = Completer<void>();
-    ServicesBinding.instance.channelBuffers.push(
-      channel.name,
-      const StandardMethodCodec().encodeMethodCall(
-        MethodCall('event', {'sessionId': id, 'type': type}),
-      ),
-      (_) => reply.complete(),
-    );
-    await reply.future;
+    final callbacks = backend.callbacks[id];
+    if (type == 'firstFrame') callbacks?.$1();
+    if (type == 'ended') callbacks?.$2();
   }
 
   setUp(() async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
     calls.clear();
     startEntered = Completer<void>();
     startReply = stopReply = null;
     failStop = false;
     stopCancelsStartup = false;
-    messenger.setMockMethodCallHandler(channel, (call) async {
-      calls.add(call);
-      switch (call.method) {
-        case 'sources':
-          return [
-            {'id': 'fixture-a', 'name': 'Fixture A', 'type': 'window'},
-          ];
-        case 'start':
-          session = call.arguments['sessionId'] as String;
-          if (!startEntered.isCompleted) startEntered.complete();
-          await startReply?.future;
-          return {'textureId': 42, 'width': 640, 'height': 360};
-        case 'stop':
-          if (stopCancelsStartup && startReply?.isCompleted == false) {
-            startReply!.completeError(PlatformException(code: 'cancelled'));
-          }
-          await stopReply?.future;
-          if (failStop) throw PlatformException(code: 'cleanup_failed');
-          return null;
-        default:
-          throw StateError('Unexpected method ${call.method}');
-      }
-    });
+    backend = _ControlledPreview(
+      begin: (id) async {
+        session = id;
+        calls.add(_Call('start', {'sessionId': id}));
+        if (!startEntered.isCompleted) startEntered.complete();
+        await startReply?.future;
+      },
+      end: (id) async {
+        calls.add(_Call('stop', {'sessionId': id}));
+        if (stopCancelsStartup && startReply?.isCompleted == false) {
+          startReply!.completeError(StateError('cancelled'));
+        }
+        await stopReply?.future;
+        if (failStop) throw StateError('cleanup_failed');
+      },
+    );
     platform = FakePlatform()
       ..status = const PermissionStatus(screenRecording: true);
-    controller = PreviewController(platform, createPreviewEngine());
+    controller = PreviewController(platform, backend);
     await controller.loadSources();
     controller.select(controller.sources.single);
   });
@@ -81,8 +65,6 @@ void main() {
     controller.dispose();
     await Future<void>.delayed(Duration.zero);
     await platform.events.close();
-    messenger.setMockMethodCallHandler(channel, null);
-    debugDefaultTargetPlatformOverride = null;
   });
 
   test(
@@ -195,4 +177,51 @@ void main() {
       expect(session, isNot(oldSession));
     },
   );
+}
+
+final class _Call {
+  _Call(this.method, this.arguments);
+  final String method;
+  final Map<String, String> arguments;
+}
+
+final class _ControlledPreview implements PreviewEngine {
+  _ControlledPreview({required this.begin, required this.end});
+  final Future<void> Function(String) begin, end;
+  final callbacks = <String, (VoidCallback, VoidCallback)>{};
+  String? _current;
+  int _next = 0;
+  @override
+  String? get unavailableReason => null;
+  @override
+  Future<List<CaptureSource>> sources() async => [
+    const CaptureSource(
+      'fixture-a',
+      'Fixture A',
+      type: CaptureSourceType.window,
+    ),
+  ];
+  @override
+  Future<void> start(
+    CaptureSource source, {
+    required VoidCallback onEnded,
+    required VoidCallback onFirstFrame,
+  }) async {
+    final id = _current = 'operation-${++_next}';
+    callbacks[id] = (onFirstFrame, onEnded);
+    await begin(id);
+  }
+
+  @override
+  Future<void> stop() async {
+    final id = _current;
+    if (id == null) return;
+    await end(id);
+    _current = null;
+  }
+
+  @override
+  Future<void> dispose() => stop();
+  @override
+  Widget get view => const SizedBox.shrink();
 }
