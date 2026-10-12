@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:share_hub_connection/share_hub_connection.dart';
 import 'package:share_hub_media_api/share_hub_media_api.dart';
@@ -482,6 +483,50 @@ void main() {
       await openFieldTool(tester, '设置');
       expect(find.byType(AlertDialog), findsOneWidget);
       await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'screen-reader disconnect actions distinguish directional grants for one peer',
+    (tester) async {
+      final semantics = tester.ensureSemantics();
+      try {
+        final connections = _DialogConnections(incoming)..visible.add(outgoing);
+        addTearDown(connections.dispose);
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: SingleChildScrollView(
+                child: ConnectionPanel(
+                  controller: connections,
+                  peerName: (_) => '办公室电脑',
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        final fingerprint = outgoing.peerId.substring(0, 8);
+        final outgoingLabel = '断开并撤销 办公室电脑，指纹 $fingerprint，本机发起的连接';
+        final incomingLabel = '断开并撤销 办公室电脑，指纹 $fingerprint，对方发起的连接';
+        final action = find.bySemanticsLabel(outgoingLabel);
+        await tester.ensureVisible(find.text('断开并撤销').last);
+        await tester.pump();
+        expect(action, findsOneWidget);
+        expect(find.bySemanticsLabel(incomingLabel), findsOneWidget);
+        final button = find.widgetWithText(TextButton, '断开并撤销').last;
+        final data = tester.getSemantics(button).getSemanticsData();
+        expect(data.hasAction(SemanticsAction.tap), isTrue);
+        await tester.runAsync(() async {
+          await tester.tap(action);
+          expect(outgoing.grant!.phase, GrantPhase.revoked);
+          expect(incoming.grant!.phase, GrantPhase.active);
+          await outgoing.whenClosed.timeout(const Duration(seconds: 5));
+        });
+        await tester.pumpWidget(const SizedBox());
+      } finally {
+        semantics.dispose();
+      }
     },
   );
 

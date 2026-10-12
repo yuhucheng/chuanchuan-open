@@ -48,38 +48,52 @@ void main() {
         addTearDown(tester.view.resetPhysicalSize);
         addTearDown(tester.view.resetDevicePixelRatio);
         addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
-        final controller = receiver ? b : a;
-        final pending = controller.recoveringConnections.single;
-        await tester.pumpWidget(
-          MaterialApp(
-            home: Scaffold(
-              body: SingleChildScrollView(
-                child: AnimatedBuilder(
-                  animation: controller,
-                  builder: (_, _) => ConnectionPanel(
-                    controller: controller,
-                    peerName: (_) => '对端电脑',
+        final semantics = tester.ensureSemantics();
+        try {
+          final controller = receiver ? b : a;
+          final pending = controller.recoveringConnections.single;
+          await tester.pumpWidget(
+            MaterialApp(
+              home: Scaffold(
+                body: SingleChildScrollView(
+                  child: AnimatedBuilder(
+                    animation: controller,
+                    builder: (_, _) => ConnectionPanel(
+                      controller: controller,
+                      peerName: (_) => '对端电脑',
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
-        );
-        expect(find.text('对端电脑'), findsOneWidget);
-        expect(
-          find.textContaining(receiver ? '正在等待对方重新认证' : '正在重新认证本机发起'),
-          findsOneWidget,
-        );
-        expect(find.text('断开并撤销'), findsNothing); // No active connection entry.
-        final cancel = find.text('取消恢复并断开');
-        await tester.ensureVisible(cancel);
-        await tester.tap(cancel);
-        await tester.pump();
-        expect(controller.recoveringCount, 0);
-        expect(pending.grant!.phase, GrantPhase.revoked);
-        expect(find.text('取消恢复并断开'), findsNothing);
-        expect(tester.takeException(), isNull);
-        await tester.pumpWidget(const SizedBox.shrink());
+          );
+          expect(find.text('对端电脑'), findsOneWidget);
+          expect(
+            find.textContaining(receiver ? '正在等待对方重新认证' : '正在重新认证本机发起'),
+            findsOneWidget,
+          );
+          expect(
+            find.text('断开并撤销'),
+            findsNothing,
+          ); // No active connection entry.
+          final cancel = find.text('取消恢复并断开');
+          await tester.ensureVisible(cancel);
+          final fingerprint = pending.peerId.substring(0, 8);
+          final direction = receiver ? '对方发起的连接' : '本机发起的连接';
+          final action = find.bySemanticsLabel(
+            '取消恢复并断开 对端电脑，指纹 $fingerprint，$direction',
+          );
+          expect(action, findsOneWidget);
+          await tester.tap(action);
+          await tester.pump();
+          expect(controller.recoveringCount, 0);
+          expect(pending.grant!.phase, GrantPhase.revoked);
+          expect(find.text('取消恢复并断开'), findsNothing);
+          expect(tester.takeException(), isNull);
+          await tester.pumpWidget(const SizedBox.shrink());
+        } finally {
+          semantics.dispose();
+        }
       },
     );
   }

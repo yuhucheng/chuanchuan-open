@@ -123,7 +123,11 @@ class ConnectionPanel extends StatelessWidget {
                     alignment: Alignment.centerRight,
                     child: TextButton(
                       onPressed: connection.close,
-                      child: const Text('断开并撤销'),
+                      child: _SessionActionText(
+                        action: '断开并撤销',
+                        connection: connection,
+                        peerName: peerName?.call(connection.peerKey),
+                      ),
                     ),
                   ),
                 ],
@@ -132,6 +136,30 @@ class ConnectionPanel extends StatelessWidget {
         ],
       ),
     ),
+  );
+}
+
+/// Button navigation must identify the exact grant even when one device has
+/// connections in both directions. Names and short fingerprints are display
+/// material; callbacks still retain the original authenticated connection.
+class _SessionActionText extends StatelessWidget {
+  const _SessionActionText({
+    required this.action,
+    required this.connection,
+    this.peerName,
+  });
+  final String action;
+  final TrustedConnection connection;
+  final String? peerName;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    excludeSemantics: true,
+    label:
+        '$action ${peerName ?? '已验证设备'}，'
+        '指纹 ${connection.peerId.substring(0, 8)}，'
+        '${connection.grant?.role == GrantRole.initiator ? '本机发起的连接' : '对方发起的连接'}',
+    child: Text(action),
   );
 }
 
@@ -164,7 +192,11 @@ class ConnectionRecoveryStatus extends StatelessWidget {
           alignment: Alignment.centerRight,
           child: TextButton(
             onPressed: () => controller.cancelRecovery(connection),
-            child: const Text('取消恢复并断开'),
+            child: _SessionActionText(
+              action: '取消恢复并断开',
+              connection: connection,
+              peerName: peerName,
+            ),
           ),
         ),
       ],
