@@ -55,5 +55,11 @@ extensions, complete platform implementation and actual runtime acceptance.
 Current checks cover four compiler-target layouts and actual non-Flutter Mac
 binary discovery/lifecycle, including short buffers, mismatch gating and larger
 zeroed tails. They do not provide Windows/Intel hardware, OS capture, GPU interop,
-real device pairing/media, signing, stable ABI or release acceptance. Current Dart
-factory/legacy draft calls keep their existing entry path.
+real device pairing/media, signing, stable ABI or release acceptance.
+
+The development Dart composition checks a present table before creating a core:
+it rejects incompatible descriptors, incomplete prefixes or entries that differ
+from the corresponding existing exports. An older library without the optional
+bootstrap retains its original lifecycle-symbol and capability checks. Calls
+still use the checked legacy typed exports; discovery is not source, signing or
+authorization verification.
