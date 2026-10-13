@@ -18,6 +18,8 @@ Agent 配置、OpenSpec 和内部计划已迁至独立私有管理仓，本仓�
 
 安装 Flutter 3.47.2 / Dart 3.13.2；Windows 需要 VS 2022 C++ 桌面工具链和 Windows SDK，脚本使用 PowerShell 7；Mac 需要完整 Xcode。
 
+内部候选的可复验配置、离线接入及路径限制见[接入步骤](docs/sdk/internal-candidate-setup.md)。
+
 SDK 是必需的构建依赖，标准位置为 `.local/media-sdk/package`。当前尚未交付正式二进制包、下载地址或已确定的安装格式。以下命令**仅用于有权取得内部开发适配包的开发环境**，通过脚本将该包链接到标准位置：
 
 ```powershell
