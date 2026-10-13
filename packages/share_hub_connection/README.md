@@ -206,3 +206,22 @@ pending platform admission and deadline cleanup. Recovery cancellation is visibl
 in both connection contexts; it is not an active-connection or first-frame signal.
 The session API additionally rejects stale-epoch clock completions
 before they can alter the new generation's validity.
+
+## Read-only auxiliary HTTPS preflight
+
+Before first-pairing acceptance, use the same Dart 3.13.2 runtime as the client:
+
+```sh
+dart packages/share_hub_connection/tool/auxiliary_health_probe.dart https://chuanchuan.xyz:8443
+```
+
+Run this command from the public client root. It uses normal HTTPS certificate
+validation and reads only `/health`, with bounded time and response size. It
+never registers a device, looks up a code, requests TURN credentials or pairs.
+Exit 0 means validated HTTPS returned HTTP 200 with `status: ok`; exit 1 means
+transport/health failed, and exit 64 rejects invalid origins. URLs containing
+userinfo, a query, fragment or extra path are rejected without echoing them.
+JSON always leaves `pairingVerified` and `relayVerified` false. No raw body or
+exception text is printed. Python/curl health alone does not prove the Dart
+client path works. Different results need deployment/network investigation
+before real device acceptance; retain certificate verification.
