@@ -226,12 +226,16 @@ class _RemotePicturePanelState extends State<RemotePicturePanel>
               else ...[
                 if (controller.phase == RemotePhase.active)
                   OutlinedButton(
-                    onPressed: controller.sourceBusy ? null : controller.pause,
+                    onPressed: controller.sourceBusy || controller.playbackBusy
+                        ? null
+                        : controller.pause,
                     child: const Text('暂停'),
                   ),
                 if (controller.phase == RemotePhase.paused)
                   FilledButton(
-                    onPressed: controller.sourceBusy ? null : controller.resume,
+                    onPressed: controller.sourceBusy || controller.playbackBusy
+                        ? null
+                        : controller.resume,
                     child: const Text('恢复'),
                   ),
               ],

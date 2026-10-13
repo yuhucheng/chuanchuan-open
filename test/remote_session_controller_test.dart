@@ -2003,6 +2003,121 @@ void main() {
     },
   );
 
+  for (final operation in [SessionOperation.watch, SessionOperation.cast]) {
+    test(
+      'pending pause fences repeated playback and source changes for $operation',
+      () async {
+        build();
+        final peer = a.sessions.single.peerKey;
+        await remoteA.start(operation, peerKey: peer);
+        final picture = factoryA.current..emitPausedOnPause = true;
+        picture.emit(MediaEventKind.firstFrame);
+        picture.playbackGate = Completer<void>();
+        final pending = remoteA.pause();
+        final duplicate = remoteA.pause();
+        await remoteA.changeSource(sourcesA.single);
+        picture.playbackGate!.complete();
+        await Future.wait([pending, duplicate]);
+        expect(picture.pauses, 1);
+        expect(picture.changes, isEmpty);
+        expect(remoteA.phase, RemotePhase.paused);
+        await remoteA.resume();
+        expect(picture.resumes, 1);
+      },
+    );
+  }
+
+  test('early resumed frame cannot admit playback or source work before resume completes', () async {
+    build();
+    await remoteA.start(
+      SessionOperation.cast,
+      peerKey: a.sessions.single.peerKey,
+    );
+    final picture = factoryA.current;
+    picture.emit(MediaEventKind.firstFrame);
+    picture.emit(MediaEventKind.paused);
+    picture.playbackGate = Completer<void>();
+    final pending = remoteA.resume();
+    expect(remoteA.playbackBusy, isTrue);
+    picture.emit(MediaEventKind.firstFrame, revision: 1);
+    await remoteA.pause();
+    await remoteA.changeSource(sourcesA.single);
+    expect(picture.pauses, 0);
+    expect(picture.changes, isEmpty);
+    await remoteA.stop();
+    expect(picture.stops, 1, reason: 'stop remains available during playback');
+    picture.playbackGate!.complete();
+    await pending;
+    expect(remoteA.phase, RemotePhase.idle);
+    expect(remoteA.playbackBusy, isFalse);
+  });
+
+  test(
+    'TURN renewal during user pause waits and does not undo the pause',
+    () async {
+      final notices = ValueNotifier<int>(0);
+      var expiry = DateTime.utc(2026, 9, 29, 10, 0);
+      build(
+        relayCredentialAvailable: () => true,
+        relayCredentialChanges: notices,
+        relayCredentialExpiresAt: () => expiry,
+      );
+      await remoteA.start(
+        SessionOperation.watch,
+        peerKey: a.sessions.single.peerKey,
+      );
+      final picture = factoryA.current..emitPausedOnPause = true;
+      picture.emit(MediaEventKind.firstFrame);
+      picture.emit(
+        MediaEventKind.statistics,
+        transportPath: MediaTransportPath.relay,
+      );
+      picture.playbackGate = Completer<void>();
+      final pending = remoteA.pause();
+      expiry = expiry.add(const Duration(minutes: 5));
+      notices.value++;
+      picture.playbackGate!.complete();
+      await pending;
+      await Future<void>.delayed(Duration.zero);
+      expect(picture.pauses, 1);
+      expect(picture.resumes, 0);
+      expect(remoteA.phase, RemotePhase.paused);
+      expect(remoteA.playbackBusy, isFalse);
+      notices.dispose();
+    },
+  );
+
+  for (final resuming in [false, true]) {
+    test(
+      'synchronous stop on playback notification prevents SDK ${resuming ? 'resume' : 'pause'}',
+      () async {
+        build();
+        await remoteA.start(
+          SessionOperation.watch,
+          peerKey: a.sessions.single.peerKey,
+        );
+        final picture = factoryA.current;
+        picture.emit(MediaEventKind.firstFrame);
+        if (resuming) picture.emit(MediaEventKind.paused);
+        Future<void>? stopping;
+        void stopWhenPending() {
+          if (remoteA.playbackBusy && stopping == null) {
+            stopping = remoteA.stop();
+          }
+        }
+
+        remoteA.addListener(stopWhenPending);
+        await (resuming ? remoteA.resume() : remoteA.pause());
+        await stopping;
+        remoteA.removeListener(stopWhenPending);
+        expect(picture.pauses, 0);
+        expect(picture.resumes, 0);
+        expect(picture.stops, 1);
+        expect(remoteA.phase, RemotePhase.idle);
+      },
+    );
+  }
+
   test(
     'repeated playback actions preserve the current presented frame',
     () async {

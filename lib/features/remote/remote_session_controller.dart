@@ -154,6 +154,7 @@ class RemoteSessionController extends ChangeNotifier {
   bool get sourceBusy =>
       (_attempt?.loadingSources ?? false) ||
       (_attempt?.changingSource ?? false);
+  bool get playbackBusy => _attempt?.changingPlayback ?? false;
   CaptureSource? get localSource => switch (session) {
     SourceSelectableRemotePicture picture when picture.sends =>
       picture.localSource,
@@ -164,6 +165,7 @@ class RemoteSessionController extends ChangeNotifier {
   bool get canChangeSource =>
       supportsSourceSelection &&
       !sourceBusy &&
+      !playbackBusy &&
       !_stopping &&
       (_phase == RemotePhase.active || _phase == RemotePhase.paused);
 
@@ -536,10 +538,14 @@ class RemoteSessionController extends ChangeNotifier {
         attempt == null ||
         picture == null ||
         sourceBusy ||
+        playbackBusy ||
         _phase != RemotePhase.active) {
       return;
     }
+    attempt.changingPlayback = true;
     try {
+      _notify();
+      if (!_isCurrent(attempt)) return;
       await picture.pause();
     } catch (failure) {
       if (!_isCurrent(attempt)) return;
@@ -547,6 +553,10 @@ class RemoteSessionController extends ChangeNotifier {
       _phase = RemotePhase.failed;
       _error = _failureMessage(failure);
       _notify();
+    } finally {
+      attempt.changingPlayback = false;
+      _notify();
+      if (_isCurrent(attempt)) _maybeRotateRelayLease();
     }
   }
 
@@ -558,9 +568,11 @@ class RemoteSessionController extends ChangeNotifier {
         attempt == null ||
         picture == null ||
         sourceBusy ||
+        playbackBusy ||
         _phase != RemotePhase.paused) {
       return;
     }
+    attempt.changingPlayback = true;
     try {
       attempt.firstFrame = false;
       attempt.transportReady = false;
@@ -568,6 +580,7 @@ class RemoteSessionController extends ChangeNotifier {
       _clearObservations();
       _phase = RemotePhase.connecting;
       _notify();
+      if (!_isCurrent(attempt)) return;
       await picture.resume();
       if (_isCurrent(attempt)) {
         _armFirstFrameDeadline(attempt, afterSourceChange: true);
@@ -578,6 +591,10 @@ class RemoteSessionController extends ChangeNotifier {
       _phase = RemotePhase.failed;
       _error = _failureMessage(failure);
       _notify();
+    } finally {
+      attempt.changingPlayback = false;
+      _notify();
+      if (_isCurrent(attempt)) _maybeRotateRelayLease();
     }
   }
 
@@ -1329,6 +1346,8 @@ class RemoteSessionController extends ChangeNotifier {
         attempt.relayLeaseExpiresAt == null ||
         !expiry.isAfter(attempt.relayLeaseExpiresAt!) ||
         _relayRefresh != null ||
+        sourceBusy ||
+        playbackBusy ||
         _disposed ||
         _shuttingDown ||
         _stopping ||
@@ -1356,7 +1375,7 @@ class RemoteSessionController extends ChangeNotifier {
   Future<void> _refreshRelayPeer(_Attempt attempt) async {
     final picture = attempt.picture!;
     try {
-      await picture.pause();
+      await pause();
       if (!_isCurrent(attempt) ||
           _stopping ||
           _phase != RemotePhase.paused ||
@@ -1535,6 +1554,7 @@ class RemoteSessionController extends ChangeNotifier {
     } finally {
       attempt.loadingSources = false;
       _notify();
+      if (_isCurrent(attempt)) _maybeRotateRelayLease();
     }
   }
 
@@ -1600,6 +1620,7 @@ class RemoteSessionController extends ChangeNotifier {
     } finally {
       attempt.changingSource = false;
       _notify();
+      if (_isCurrent(attempt)) _maybeRotateRelayLease();
     }
   }
 
@@ -1737,6 +1758,7 @@ class _Attempt {
   bool firstFrame = false;
   int minimumRevision = 0;
   bool loadingSources = false, changingSource = false;
+  bool changingPlayback = false;
   bool cancelled = false;
   bool relayAvailableAtStart = false;
   bool relayRetried = false;
