@@ -482,6 +482,43 @@ void main() {
     );
   }
 
+  for (final operation in [SessionOperation.watch, SessionOperation.cast]) {
+    for (final lateKind in [
+      MediaEventKind.connecting,
+      MediaEventKind.transportReady,
+      MediaEventKind.waitingFirstFrame,
+      MediaEventKind.firstFrame,
+    ]) {
+      test(
+        'paused $operation ignores same-revision $lateKind and accepts resumed frames',
+        () async {
+          build();
+          await remoteA.start(operation, peerKey: a.sessions.single.peerKey);
+          final picture = factoryA.current..emitPausedOnPause = true;
+          picture.emit(MediaEventKind.transportReady);
+          picture.emit(MediaEventKind.firstFrame);
+          await remoteA.pause();
+          expect(remoteA.phase, RemotePhase.paused);
+          expect(remoteA.transportReady, isFalse);
+          final revision = picture.mediaRevision;
+          picture.emit(lateKind, revision: revision);
+          expect(remoteA.phase, RemotePhase.paused);
+          expect(remoteA.transportReady, isFalse);
+          expect(picture.resumes, 0);
+          await remoteA.resume();
+          expect(picture.mediaRevision, revision + 1);
+          expect(remoteA.phase, RemotePhase.waitingFirstFrame);
+          picture.emit(MediaEventKind.firstFrame, revision: revision);
+          expect(remoteA.phase, RemotePhase.waitingFirstFrame);
+          picture.emit(MediaEventKind.transportReady);
+          picture.emit(MediaEventKind.firstFrame);
+          expect(remoteA.phase, RemotePhase.active);
+          expect(remoteA.transportReady, isTrue);
+        },
+      );
+    }
+  }
+
   test('declares the offered operations and one shared picture budget', () {
     build();
     expect(remoteA.offeredOperations, {'watch', 'cast'});

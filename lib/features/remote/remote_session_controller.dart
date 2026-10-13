@@ -1112,6 +1112,20 @@ class RemoteSessionController extends ChangeNotifier {
       return;
     }
     if (event.mediaRevision < attempt.minimumRevision) return;
+    // Pause does not change this revision. Already queued activation events
+    // from it cannot reopen the picture or arm a new first-frame deadline.
+    // Resume/source replacement has a newer revision and remains admissible.
+    if (_phase == RemotePhase.paused &&
+        event.mediaRevision == attempt.minimumRevision &&
+        switch (event.kind) {
+          MediaEventKind.connecting ||
+          MediaEventKind.transportReady ||
+          MediaEventKind.waitingFirstFrame ||
+          MediaEventKind.firstFrame => true,
+          _ => false,
+        }) {
+      return;
+    }
     if (event.kind == MediaEventKind.frameProgress ||
         event.kind == MediaEventKind.peerFrameProgress) {
       final peer = event.kind == MediaEventKind.peerFrameProgress;
