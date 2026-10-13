@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0
- * REVIEW DRAFT. An internal private candidate exports authority, bounded
- * source query, preview start/stop and CPU frame-lease ownership primitives.
- * Preview is not advertised; remote media remains unimplemented. This is not
+ * REVIEW DRAFT. Internal Mac runtime supports the operations described in
+ * README.md; Windows native preview and standalone probe scopes differ.
+ * Capability queries, not header presence, govern media admission. This is not
  * a stable binary ABI.
  * Normative ownership/authorization rules: README.md in this directory.
  */

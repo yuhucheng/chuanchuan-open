@@ -34,6 +34,10 @@ remain a proposal with non-installable examples. Stable ABI extension rules,
 Windows native migration, complete platform acceptance and formal distribution
 remain outstanding; optional GPU interop is not supplied by these CPU declarations.
 
+The optional [versioned function-table bootstrap](API_TABLE.md) now discovers
+the draft-2 calls without creating resources. Table version 1 is not stable ABI
+major 1; old candidates lacking the symbol remain explicit unsupported discovery.
+
 ## C representation and compatibility
 
 The proposed calling surface is C11/C++17 with explicit 32/64-bit fields and

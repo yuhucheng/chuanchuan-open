@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 
 CHECKS = r'''
-#include "share_hub_media_operations.h"
+#include "share_hub_media_api_table.h"
 #include <stddef.h>
 #ifdef __cplusplus
 #define CHECK static_assert
@@ -60,6 +60,10 @@ CHECK(offsetof(shm_progress, image_sequence) == 40, "progress counters");
 CHECK(sizeof(shm_recovery_info) == 40, "recovery info size");
 CHECK(sizeof(shm_send_info) == 48, "send info size");
 CHECK(SHM_DRAFT_REVISION == 2, "draft revision");
+CHECK(sizeof(shm_draft_api_table) == 480, "table v1 size");
+CHECK(offsetof(shm_draft_api_table, create) == 24, "table slots offset");
+CHECK(offsetof(shm_draft_api_table, wait_change) == 472, "table final v1 slot");
+CHECK(ALIGN(shm_draft_api_table) == 8, "table pointer alignment");
 '''
 SIGNATURES = r'''
 void check_declarations(void) {
@@ -71,6 +75,8 @@ void check_declarations(void) {
     shm_status (SHM_DRAFT_CALL *start)(shm_core, const shm_start_options *, shm_operation *, shm_task *) = shm_draft_remote_start;
     shm_status (SHM_DRAFT_CALL *retain)(shm_core, shm_operation, uint64_t, shm_recovery *) = shm_draft_recovery_retain;
     shm_status (SHM_DRAFT_CALL *wait)(shm_core, uint64_t, uint32_t, uint64_t *) = shm_draft_wait_change;
+    shm_status (SHM_DRAFT_CALL *query)(uint32_t, uint32_t, uint32_t, void *) = shm_draft_get_api;
+    (void)query;
     (void)create; (void)import_auth; (void)signal; (void)read_frame; (void)close;
     (void)start; (void)retain; (void)wait;
 }
@@ -96,7 +102,7 @@ def main():
         parser.error("clang is required for the four target syntax/layout checks")
     package = Path(__file__).resolve().parents[1]
     include = package / "native/draft"
-    headers = [include / "share_hub_media_boundary.h", include / "share_hub_media_operations.h"]
+    headers = [include / "share_hub_media_boundary.h", include / "share_hub_media_operations.h", include / "share_hub_media_api_table.h"]
     targets = ["arm64-apple-macos13.0", "x86_64-apple-macos13.0",
                "x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]
     checks = []
