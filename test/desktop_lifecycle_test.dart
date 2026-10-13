@@ -5,7 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:share_hub_connection/share_hub_connection.dart';
 import 'package:share_hub_media_api/share_hub_media_api.dart'
-    show CaptureSource;
+    show CaptureSource, GrantPhase;
 import 'package:share_hub_open/features/connections/connection_controller.dart';
 import 'package:share_hub_open/features/desktop/desktop_lifecycle.dart';
 import 'package:share_hub_open/features/devices/device_controller.dart';
@@ -549,6 +549,120 @@ void main() {
     expect(disabledAt, greaterThan(enabledAt));
     expect(events.indexOf('prepareExit'), greaterThan(disabledAt));
   });
+
+  test(
+    'a later successful tray write clears the earlier state failure',
+    () async {
+      var fail = true;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+            if (call.method == 'state' && fail) {
+              throw PlatformException(code: 'state_write_failed');
+            }
+            return null;
+          });
+      await connections.disconnectAll();
+      await Future<void>.delayed(Duration.zero);
+      expect(lifecycle.error, contains('无法更新后台入口状态'));
+      fail = false;
+      await connections.disconnectAll();
+      await Future<void>.delayed(Duration.zero);
+      expect(lifecycle.error, isNull);
+    },
+  );
+
+  test('late tray failure cannot replace an exit cleanup failure', () async {
+    final stateEntered = Completer<void>();
+    final stateReply = Completer<void>();
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          if (call.method == 'state') {
+            if (!stateEntered.isCompleted) stateEntered.complete();
+            await stateReply.future;
+          }
+          return null;
+        });
+    await connections.disconnectAll();
+    await stateEntered.future;
+    stopRemote = () => throw StateError('cleanup failed');
+    expect(await lifecycle.requestExit(), isFalse);
+    expect(lifecycle.error, contains('退出清理未完成'));
+    stateReply.completeError(PlatformException(code: 'state_write_failed'));
+    await Future<void>.delayed(Duration.zero);
+    expect(lifecycle.error, contains('退出清理未完成'));
+    expect(lifecycle.exited, isFalse);
+    await lifecycle.finishExit();
+    expect(calls, isNot(contains('exit')));
+  });
+
+  test(
+    'concurrent state retries retain the live TCP grant and short code',
+    () async {
+      final hostPlatform = connections.platform as FakeConnectionPlatform;
+      final hostIdentity = await DeviceIdentity.fromSeed(List.filled(32, 81));
+      hostPlatform.seed.complete(hostIdentity);
+      final peerPlatform = FakeConnectionPlatform();
+      peerPlatform.seed.complete(
+        await DeviceIdentity.fromSeed(List.filled(32, 82)),
+      );
+      final peer = ConnectionController(peerPlatform);
+      addTearDown(() async {
+        await peer.shutdown();
+        peer.dispose();
+      });
+      var fail = true;
+      var writes = 0;
+      final retryEntered = Completer<void>();
+      final retryReply = Completer<void>();
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+            if (call.method == 'state') {
+              writes++;
+              if (fail) throw PlatformException(code: 'state_write_failed');
+              if (!retryEntered.isCompleted) retryEntered.complete();
+              await retryReply.future;
+            }
+            return null;
+          });
+      await connections.open();
+      final linked = await peer.connect(
+        '127.0.0.1',
+        hostPlatform.advertisements.whereType<int>().last,
+        connections.code!,
+        expectedPeerKey: hostIdentity.encodedKey,
+      );
+      expect(linked, isNotNull);
+      await Future<void>.delayed(Duration.zero);
+      final session = connections.sessions.single;
+      final grant = session.grant!;
+      final expires = grant.expiresMicros;
+      final generation = grant.generation;
+      final code = connections.code;
+      final advertisements = hostPlatform.advertisements.length;
+      final beforeWrites = writes;
+      expect(grant.phase, GrantPhase.active);
+      expect(lifecycle.canRetryState, isTrue);
+      fail = false;
+      final first = lifecycle.retryState();
+      final second = lifecycle.retryState();
+      expect(second, same(first));
+      await retryEntered.future;
+      expect(lifecycle.error, contains('无法更新后台入口状态'));
+      retryReply.complete();
+      await Future.wait([first, second]);
+      expect(writes, beforeWrites + 1);
+      expect(lifecycle.error, isNull);
+      expect(lifecycle.canRetryState, isFalse);
+      expect(connections.sessions.single, same(session));
+      expect(session.grant, same(grant));
+      expect(session.isClosed, isFalse);
+      expect(grant.phase, GrantPhase.active);
+      expect(grant.expiresMicros, expires);
+      expect(grant.generation, generation);
+      expect(connections.code, code);
+      expect(hostPlatform.advertisements, hasLength(advertisements));
+    },
+  );
 }
 
 class _OrderedConnectionController extends ConnectionController {

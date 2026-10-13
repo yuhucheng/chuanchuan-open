@@ -38,7 +38,24 @@ class DesktopLifecycle extends ChangeNotifier {
   bool? _pendingAdmissionState;
   final _pendingExitSteps = <String, Future<void>>{};
   bool exiting = false, exited = false, _disposed = false, _ready = false;
-  String? error;
+  String? _initializationError, _stateError, _exitError;
+  String? get error => _exitError ?? _initializationError ?? _stateError;
+  bool get canRetryState =>
+      _ready &&
+      !_disposed &&
+      !exiting &&
+      !exited &&
+      _exitError == null &&
+      _initializationError == null &&
+      _stateError != null;
+
+  /// Re-publish the current preference only. This must not reopen admission,
+  /// replace a short code, revoke grants or extend an authorization deadline.
+  Future<void> retryState() {
+    if (!canRetryState) return Future<void>.value();
+    return _publishingState ?? _publish();
+  }
+
   Future<void> initialize() async {
     channel.setMethodCallHandler((call) async {
       switch (call.method) {
@@ -75,7 +92,7 @@ class DesktopLifecycle extends ChangeNotifier {
     } on MissingPluginException {
       // Unit tests and unsupported hosts have no desktop integration.
     } catch (_) {
-      error = '后台入口初始化失败，请保持主窗口打开。';
+      _initializationError = '后台入口初始化失败，请保持主窗口打开。';
       _notify();
     }
   }
@@ -84,8 +101,8 @@ class DesktopLifecycle extends ChangeNotifier {
     if (_ready && !_disposed && !exiting && !exited) unawaited(_publish());
   }
 
-  Future<void> _publish() async {
-    if (!_ready || _disposed || exiting || exited) return;
+  Future<void> _publish() {
+    if (!_ready || _disposed || exiting || exited) return Future<void>.value();
     // Keep only the latest preference while a native write is in flight.
     // Completing calls out of order could restore an old tray/launch state.
     _pendingAdmissionState = connections.accepting;
@@ -101,9 +118,18 @@ class DesktopLifecycle extends ChangeNotifier {
           await channel.invokeMethod<void>('state', {
             'allowConnections': value,
           });
+          // A successful older write is not confirmation of the latest
+          // preference when another value is queued. Clear only this owner's
+          // error; late state replies cannot erase exit or initialization faults.
+          if (!_disposed &&
+              _pendingAdmissionState == null &&
+              _stateError != null) {
+            _stateError = null;
+            _notify();
+          }
         } catch (_) {
           if (!_disposed) {
-            error = '无法更新后台入口状态，请在主窗口操作。';
+            _stateError = '无法更新后台入口状态，请在主窗口操作。';
             _notify();
           }
         }
@@ -131,7 +157,7 @@ class DesktopLifecycle extends ChangeNotifier {
   Future<bool> _shutdown() async {
     if (exited) return true;
     exiting = true;
-    error = null;
+    _exitError = null;
     preview.prepareForExit();
     _notify();
     try {
@@ -171,7 +197,7 @@ class DesktopLifecycle extends ChangeNotifier {
       exited = true;
       return true;
     } catch (_) {
-      error = '退出清理未完成，请保持窗口打开并重试退出。';
+      _exitError = '退出清理未完成，请保持窗口打开并重试退出。';
       return false;
     } finally {
       exiting = false;
@@ -225,7 +251,7 @@ class DesktopLifecycle extends ChangeNotifier {
     try {
       await channel.invokeMethod<void>('exit');
     } catch (_) {
-      error = '资源已清理，请通过系统应用菜单退出。';
+      _exitError = '资源已清理，请通过系统应用菜单退出。';
       _notify();
     }
   }

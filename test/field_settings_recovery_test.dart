@@ -39,6 +39,74 @@ void main() {
   Finder inDialog(Key key) =>
       find.descendant(of: find.byType(AlertDialog), matching: find.byKey(key));
 
+  for (final target in [TargetPlatform.macOS, TargetPlatform.windows]) {
+    testWidgets(
+      'background preference failure has a settings retry on $target',
+      (tester) async {
+        tester.platformDispatcher.textScaleFactorTestValue = 2;
+        addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+        const channel = MethodChannel('dev.sharehub.client/desktop');
+        var fail = true;
+        final writes = <bool>[];
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(channel, (call) async {
+              if (call.method == 'initialize') {
+                return {'allowConnections': false};
+              }
+              if (call.method == 'appearance.read') return 'system';
+              if (call.method == 'state') {
+                writes.add((call.arguments as Map)['allowConnections'] as bool);
+                if (fail) {
+                  throw PlatformException(code: 'state_write_failed');
+                }
+              }
+              return null;
+            });
+        addTearDown(() {
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+              .setMockMethodCallHandler(channel, null);
+        });
+        final platform = FakePlatform()
+          ..status = const PermissionStatus(screenRecording: true);
+        await tester.pumpWidget(
+          ShareHubApp(
+            targetPlatform: target,
+            platform: platform,
+            previewEngine: FakePreviewEngine(),
+          ),
+        );
+        await tester.pumpAndSettle();
+        addTearDown(() async {
+          await tester.pumpWidget(const SizedBox());
+          await tester.pumpAndSettle();
+          await platform.events.close();
+        });
+        await openFieldTool(tester, '设置');
+        final retry = find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.text('重试后台状态'),
+        );
+        expect(retry, findsOneWidget);
+        await tester.ensureVisible(retry);
+        await tester.tap(retry);
+        await tester.pumpAndSettle();
+        expect(retry, findsOneWidget);
+        expect(inDialog(const ValueKey('settings-exit-error')), findsOneWidget);
+        final before = writes.length;
+        fail = false;
+        await tester.tap(retry);
+        await tester.pumpAndSettle();
+        expect(writes, hasLength(before + 1));
+        expect(writes.every((value) => value == false), isTrue);
+        expect(retry, findsNothing);
+        expect(inDialog(const ValueKey('settings-exit-error')), findsNothing);
+        expect(find.byKey(const ValueKey('global-issue')), findsNothing);
+        expect(platform.permissionRequests, 0);
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
   testWidgets('initial device failure retries loading and starts discovery', (
     tester,
   ) async {

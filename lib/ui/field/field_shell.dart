@@ -953,6 +953,14 @@ class _FieldShellState extends State<FieldShell> {
             child: Text(message, key: const ValueKey('settings-exit-error')),
           ),
         ),
+      if (widget.desktop.canRetryState)
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton(
+            onPressed: widget.desktop.retryState,
+            child: const Text('重试后台状态'),
+          ),
+        ),
       Align(
         alignment: Alignment.centerLeft,
         child: OutlinedButton.icon(
