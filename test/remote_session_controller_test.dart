@@ -39,6 +39,7 @@ class _FakePicture
     required this.id,
     required this.operation,
     required this.sends,
+    this.authorization,
   });
   @override
   final String id;
@@ -46,6 +47,9 @@ class _FakePicture
   final SessionOperation operation;
   @override
   final bool sends;
+  final SessionAuthorization? authorization;
+  String eventGrantId = 'unbound-fixture';
+  int eventGeneration = 1;
   final _events = StreamController<MediaSessionEvent>.broadcast(sync: true);
   Stream<MediaSessionEvent>? eventStreamOverride;
   VideoEndReason? endedBy;
@@ -99,13 +103,20 @@ class _FakePicture
     int? frameWidth,
     int? frameHeight,
     MediaFrameProgress? frameProgress,
+    String? eventGrantId,
+    String? eventSessionId,
+    int? eventTransportGeneration,
   }) {
     if (_events.isClosed) return;
     _events.add(
       MediaSessionEvent(
-        grantId: 'grant',
-        sessionId: id,
-        transportGeneration: 1,
+        grantId:
+            eventGrantId ?? authorization?.grant.encodedId ?? this.eventGrantId,
+        sessionId: eventSessionId ?? id,
+        transportGeneration:
+            eventTransportGeneration ??
+            authorization?.transportGeneration ??
+            eventGeneration,
         mediaRevision: revision ?? mediaRevision,
         kind: kind,
         failureCode: failureCode,
@@ -270,8 +281,16 @@ class _FakeFactory implements RemotePictureFactory {
   }
 
   void deliver(RemotePicture picture, {_FakeLink? via}) {
+    final owner = via ?? link;
+    // Manually delivered media is a fixture; bind its event headers to the
+    // actual authenticated transport instead of a constant fake grant tag.
+    if (picture is _FakePicture) {
+      final grant = (owner.transport as TrustedConnection).grant!;
+      picture.eventGrantId = grant.binding.encodedId;
+      picture.eventGeneration = grant.generation;
+    }
     delivered.add(picture);
-    (via ?? link).onSession(picture);
+    owner.onSession(picture);
   }
 
   _FakeLink forConnection(TrustedConnection connection) =>
@@ -303,7 +322,7 @@ class _GrantCheckedLink implements RemotePictureLink {
   ) async {
     _link.starts.add(operation);
     // Throws direction_denied / capability_unavailable for a refused direction.
-    await _transport.createRequest(
+    final authorization = await _transport.createRequest(
       operation,
       sessionId,
       VideoSessionRequest.body,
@@ -326,6 +345,7 @@ class _GrantCheckedLink implements RemotePictureLink {
             id: sessionId,
             operation: operation,
             sends: operation == SessionOperation.cast,
+            authorization: authorization,
           )
           ..failStop = _link.failStop
           ..stopGate = _link.pictureStopGate;
@@ -1618,6 +1638,78 @@ void main() {
       expect(remoteA.phase, RemotePhase.waitingFirstFrame);
     },
   );
+
+  for (final mismatch in ['grant', 'session', 'transport']) {
+    test('foreign $mismatch media events cannot change the current picture', () async {
+      build();
+      await remoteA.start(
+        SessionOperation.watch,
+        peerKey: a.sessions.single.peerKey,
+      );
+      final picture = factoryA.current;
+      final before = remoteA.phase;
+      void foreign(
+        MediaEventKind kind, {
+        int? revision,
+        MediaFrameProgress? progress,
+      }) => picture.emit(
+        kind,
+        revision: revision,
+        eventGrantId: mismatch == 'grant' ? 'other-grant' : null,
+        eventSessionId: mismatch == 'session' ? 'other-session' : null,
+        eventTransportGeneration: mismatch == 'transport'
+            ? picture.authorization!.transportGeneration + 1
+            : null,
+        bitsPerSecond: kind == MediaEventKind.statistics ? 9000 : null,
+        frameProgress: progress,
+      );
+      foreign(MediaEventKind.statistics);
+      expect(remoteA.bitsPerSecond, isNull);
+      foreign(MediaEventKind.transportReady);
+      expect(remoteA.transportReady, isFalse);
+      foreign(MediaEventKind.firstFrame, revision: 3);
+      expect(remoteA.phase, before);
+      foreign(MediaEventKind.paused);
+      expect(remoteA.phase, before);
+      foreign(
+        MediaEventKind.frameProgress,
+        progress: MediaFrameProgress(
+          stage: MediaFrameStage.receiver,
+          active: true,
+          sequence: 1,
+          age: Duration.zero,
+          consumedSequence: 1,
+          consumedFrameAge: Duration.zero,
+        ),
+      );
+      expect(remoteA.frameProgress, isNull);
+      foreign(
+        MediaEventKind.peerFrameProgress,
+        progress: MediaFrameProgress(
+          stage: MediaFrameStage.capture,
+          active: true,
+          sequence: 1,
+          age: Duration.zero,
+          outputSequence: 1,
+          outputAge: Duration.zero,
+          sourceUnchanged: false,
+        ),
+      );
+      expect(remoteA.peerFrameProgress, isNull);
+      foreign(MediaEventKind.failed);
+      foreign(MediaEventKind.ended);
+      expect(remoteA.phase, before);
+      expect(remoteA.occupied, isTrue);
+      expect(picture.stops, 0);
+      // The foreign higher revision must not fence out the actual current one.
+      picture.emit(MediaEventKind.transportReady);
+      picture.emit(MediaEventKind.firstFrame);
+      picture.emit(MediaEventKind.statistics, bitsPerSecond: 1200);
+      expect(remoteA.transportReady, isTrue);
+      expect(remoteA.phase, RemotePhase.active);
+      expect(remoteA.bitsPerSecond, 1200);
+    });
+  }
 
   test(
     'expired statistics become unmeasured without ending a picture',

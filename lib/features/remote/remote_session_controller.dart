@@ -1100,7 +1100,10 @@ class RemoteSessionController extends ChangeNotifier {
   void _onEvent(_Attempt attempt, MediaSessionEvent event) {
     if (_disposed ||
         !identical(_attempt, attempt) ||
-        attempt.token != _generation) {
+        attempt.token != _generation ||
+        event.grantId != attempt.grantId ||
+        event.sessionId != attempt.sessionId ||
+        event.transportGeneration != attempt.transportGeneration) {
       return;
     }
     if ((event.kind == MediaEventKind.failed ||
@@ -1694,9 +1697,15 @@ class RemoteSessionController extends ChangeNotifier {
 }
 
 class _Attempt {
-  _Attempt(this.token, this.connection, this.operation, {this.label});
+  _Attempt(this.token, this.connection, this.operation, {this.label})
+    : grantId = connection.grant?.binding.encodedId,
+      transportGeneration = connection.grant?.generation;
   final int token;
   final TrustedConnection connection;
+  // Capture the authorized transport once. The shared grant endpoint advances
+  // on recovery; that cannot relabel an old picture's callbacks as current.
+  final String? grantId;
+  final int? transportGeneration;
   String get peerKey => connection.peerKey;
   final SessionOperation operation;
   final String? label;
