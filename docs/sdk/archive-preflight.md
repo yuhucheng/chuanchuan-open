@@ -23,8 +23,12 @@ extracted and a successful result always says `installable: false`.
 After the byte preflight, `tool/sdk_package_extract.py` can create a new private
 staging directory under a caller-owned parent. It copies only the pinned
 manifest inventory, writes regular files before Mac links, checks archive bytes
-again, and runs the extracted-tree inventory verifier. On failure it removes its
-new staging directory; it never changes the SDK cache or an active package link.
+again, and runs the extracted-tree inventory verifier. On failure or a handled
+interrupt it removes its new staging directory; it never changes the SDK cache,
+an active package link or another operation's staging directory. `Ctrl+C` reports
+`extraction_cancelled`, leaves `installable: false`, and exits 130 after cleanup.
+Uncatchable termination such as `SIGKILL` or power loss cannot run this cleanup;
+this component does not implement crash recovery or an installation transaction.
 
 ```sh
 python3 tool/sdk_package_extract.py /path/to/sdk.zip \

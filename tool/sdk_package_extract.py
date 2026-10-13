@@ -117,7 +117,9 @@ def extract_to_staging(archive_path, staging_parent, expected_archive_sha256,
                 "notValidated": ["source trust", "runtime binary ABI", "signatures",
                                  "license review", "installation"],
                 "inventory": inventory}
-    except Exception:
+    except BaseException:
+        # Ctrl+C and explicit process exit discard this operation's stage just
+        # like validation failures, then retain their original semantics.
         if stage is not None:
             shutil.rmtree(stage)
         raise
@@ -134,6 +136,9 @@ def main():
         result = extract_to_staging(args.archive, args.staging_parent,
                                     args.expected_archive_sha256,
                                     args.expected_manifest_sha256)
+    except KeyboardInterrupt:
+        print(json.dumps({"error": "extraction_cancelled", "installable": False}))
+        return 130
     except (InventoryError, OSError, zipfile.BadZipFile, UnicodeError) as error:
         code = error.code if isinstance(error, InventoryError) else "extraction_failed"
         print(json.dumps({"error": code, "installable": False}))
