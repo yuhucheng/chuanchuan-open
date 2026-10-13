@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import '../features/connections/connection_controller.dart';
 import '../features/connections/auxiliary_route_controller.dart';
 import 'field/appearance.dart';
+import 'exit_interaction_guard.dart';
 import 'field/field_shell.dart';
 import '../features/desktop/desktop_lifecycle.dart';
 import '../features/devices/device_controller.dart';
@@ -181,6 +182,11 @@ class _ShareHubAppState extends State<ShareHubApp> with WidgetsBindingObserver {
         widget.targetPlatform ?? defaultTargetPlatform,
       ),
       themeMode: _appearance.mode,
+      builder: (context, child) => AnimatedBuilder(
+        animation: _desktop,
+        builder: (context, _) =>
+            ExitInteractionGuard(exiting: _desktop.exiting, child: child!),
+      ),
       // Keep the AnimatedTheme owner stable when the system preference changes
       // so focus, unfinished input and the field's media owners survive.
       themeAnimationDuration:
