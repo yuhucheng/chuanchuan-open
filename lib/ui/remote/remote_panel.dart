@@ -60,9 +60,26 @@ class _RemotePicturePanelState extends State<RemotePicturePanel>
   }
 
   String _title() {
+    if (controller.cleanupFailed) return '画面资源释放未完成';
     final name = controller.peerLabel ?? '已连接设备';
     if (controller.phase == RemotePhase.recovering) return '正在恢复与 $name 的画面连接';
     final operation = controller.operation;
+    final direction = controller.sending
+        ? operation == SessionOperation.cast
+              ? '向 $name 投屏'
+              : '$name 观看本机屏幕'
+        : operation == SessionOperation.cast
+        ? '接收 $name 的投屏'
+        : '观看 $name 的屏幕';
+    final state = switch (controller.phase) {
+      RemotePhase.idle => '未开始',
+      RemotePhase.connecting => '连接中',
+      RemotePhase.waitingFirstFrame => '等待首帧',
+      RemotePhase.paused => '已暂停',
+      RemotePhase.failed => '失败',
+      RemotePhase.active || RemotePhase.recovering => null,
+    };
+    if (state != null) return '$direction · $state';
     if (controller.sending) {
       return operation == SessionOperation.cast
           ? '正在投屏到 $name'

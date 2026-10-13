@@ -2670,6 +2670,97 @@ void main() {
     },
   );
 
+  for (final operation in [SessionOperation.watch, SessionOperation.cast]) {
+    for (final initiatedHere in [true, false]) {
+      testWidgets(
+        'picture heading reports $operation local=$initiatedHere states',
+        (tester) async {
+          build();
+          final controller = initiatedHere ? remoteA : remoteB;
+          late _FakePicture picture;
+          if (initiatedHere) {
+            await tester.runAsync(
+              () => remoteA.start(
+                operation,
+                peerKey: a.sessions.single.peerKey,
+                label: '另一台电脑',
+              ),
+            );
+            picture = factoryA.current;
+          } else {
+            picture = _FakePicture(
+              id: 'incoming-title',
+              operation: operation,
+              sends: operation == SessionOperation.watch,
+            );
+            factoryB.deliver(picture);
+            picture.emit(MediaEventKind.waitingFirstFrame);
+          }
+          picture.emit(MediaEventKind.waitingFirstFrame);
+          final name = initiatedHere ? '另一台电脑' : '已连接设备';
+          final direction = picture.sends
+              ? operation == SessionOperation.cast
+                    ? '向 $name 投屏'
+                    : '$name 观看本机屏幕'
+              : operation == SessionOperation.cast
+              ? '接收 $name 的投屏'
+              : '观看 $name 的屏幕';
+          await tester.pumpWidget(
+            MaterialApp(
+              home: Scaffold(
+                body: SingleChildScrollView(
+                  child: AnimatedBuilder(
+                    animation: controller,
+                    builder: (_, _) =>
+                        RemotePicturePanel(controller: controller),
+                  ),
+                ),
+              ),
+            ),
+          );
+          String title() => tester
+              .widget<Text>(
+                find
+                    .descendant(
+                      of: find.byType(RemotePicturePanel),
+                      matching: find.byType(Text),
+                    )
+                    .first,
+              )
+              .data!;
+          expect(title(), '$direction · 等待首帧');
+          picture.emit(MediaEventKind.connecting);
+          await tester.pump();
+          expect(title(), '$direction · 连接中');
+          picture.emit(MediaEventKind.transportReady);
+          picture.emit(MediaEventKind.waitingFirstFrame);
+          await tester.pump();
+          expect(title(), '$direction · 等待首帧');
+          picture.emit(MediaEventKind.firstFrame);
+          await tester.pump();
+          expect(title(), isNot(contains('等待首帧')));
+          picture.emit(MediaEventKind.paused);
+          await tester.pump();
+          expect(title(), '$direction · 已暂停');
+          picture.emit(
+            MediaEventKind.failed,
+            failureCode: 'source_unavailable',
+          );
+          await tester.pump();
+          expect(title(), '$direction · 失败');
+          picture.failStop = true;
+          await tester.runAsync(controller.stop);
+          await tester.pump();
+          expect(title(), '画面资源释放未完成');
+          picture.failStop = false;
+          expect(tester.takeException(), isNull);
+          await tester.runAsync(controller.stop);
+          await tester.pumpWidget(const SizedBox());
+        },
+      );
+    }
+  }
+
   testWidgets('the panel keeps the real states distinct and mounts the view', (
     tester,
   ) async {
