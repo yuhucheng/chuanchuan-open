@@ -5,7 +5,8 @@ This is a proposed distribution contract, not an available SDK. The
 target combinations. They are explicitly non-installable and contain null
 sizes/hashes because no matching binary exists. Do not invent a
 checksum, download URL, signature or tested platform to fill those fields.
-Existing source-link configuration remains unchanged until real packages exist.
+Development source-link configuration remains separate from binary-package
+validation and installation.
 
 ## Artifacts and paths
 
@@ -104,8 +105,10 @@ hook and generated plugin registration; do not delete them merely from this plan
 ## Manifest fields and compatibility decisions
 
 Each package has UTF-8 `sdk-manifest.json`, schema ID
-`sharehub-sdk-package-draft-1`. Unknown schemas fail closed. The sample field shape
-is review-only; schema finalization and a production validator are still pending.
+`sharehub-sdk-package-draft-1`. Unknown schemas fail closed. The complete [JSON Schema](sdk-package.schema.json) and
+[read-only metadata checker](../../../../docs/sdk/manifest-schema.md) now make the
+review field shape executable. Final format approval, stable ABI implementation
+and the production installer remain pending.
 
 | Field | Meaning / validation |
 | --- | --- |
@@ -115,7 +118,7 @@ is review-only; schema finalization and a production validator are still pending
 | `channel` | `internal-candidate` or `release`; a label alone conveys no trust |
 | `target` | OS, exact architecture set, minimum OS and runtime dependencies from actual build/link inspection |
 | `apiCompatibility` | Package names with inclusive minimum, exclusive maximum, and exact tested versions; media and session separately |
-| `nativeAbi` | Family plus discriminated draft/stable identity; draft uses exact revision, stable uses major/minimum minor plus required feature identifiers |
+| `nativeAbi` | Family plus discriminated draft/stable identity; draft uses exact revision, stable package identity uses actual major/minor plus required feature identifiers; the consumer minimum minor is separate |
 | `capabilities` | Actually verified capabilities of this artifact, not future controls/files/multiscreen features |
 | `nativePayload` | Flutter-only relative directory and expected nested native manifest digest; absent for native kind |
 | `publicSnapshots` | Canonical public package version, source revision/digest and relative path; no private checkout paths |
