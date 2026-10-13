@@ -28,6 +28,8 @@ dependencies:
     sdk: flutter
   share_hub_media_api:
     path: public_api/share_hub_media_api
+  share_hub_session_api:
+    path: public_api/share_hub_session_api
 """
 CLIENT_SPEC = """name: sdk_layout_probe
 version: 0.0.0
@@ -45,10 +47,13 @@ dependencies:
   share_hub_connection:
     path: ../public/share_hub_connection
 """
-OVERRIDE = """
+MEDIA_OVERRIDE = """
 dependency_overrides:
   share_hub_media_api:
     path: ../public/share_hub_media_api
+"""
+OVERRIDE = MEDIA_OVERRIDE + """  share_hub_session_api:
+    path: ../public/share_hub_session_api
 """
 
 
@@ -66,7 +71,7 @@ def resolved_package(package_config, name):
     return Path(path).resolve()
 
 
-def run_pub(flutter, directory, succeeds=True):
+def run_pub(flutter, directory, succeeds=True, conflict_package="share_hub_media_api"):
     run = subprocess.run([flutter, "pub", "get", "--offline"], cwd=directory,
                          text=True, capture_output=True, timeout=120)
     output = run.stdout + run.stderr
@@ -74,7 +79,7 @@ def run_pub(flutter, directory, succeeds=True):
         raise RuntimeError(f"Offline dependency resolution failed: {output[-4000:]}")
     if not succeeds:
         if run.returncode == 0 or not all(term in output for term in (
-            "share_hub_media_api", "public_api", "version solving failed"
+            conflict_package, "public_api", "version solving failed"
         )):
             raise RuntimeError(f"Expected duplicate-source resolution failure: {output[-4000:]}")
     return run.returncode
@@ -130,6 +135,9 @@ def main():
         (client / "pubspec.yaml").write_text(CLIENT_SPEC)
         run_pub(flutter, client, succeeds=False)
         checks.append("different-public-api-paths-rejected-without-override")
+        (client / "pubspec.yaml").write_text(CLIENT_SPEC + MEDIA_OVERRIDE)
+        run_pub(flutter, client, succeeds=False, conflict_package="share_hub_session_api")
+        checks.append("direct-sdk-session-snapshot-conflicts-with-media-only-override")
         (client / "pubspec.yaml").write_text(CLIENT_SPEC + OVERRIDE)
         run_pub(flutter, client)
         check_roots(client, {
@@ -138,7 +146,7 @@ def main():
             "share_hub_connection": public / "share_hub_connection",
             "share_hub_media_sdk": sdk,
         })
-        checks.append("existing-client-media-override-selects-canonical-media-and-session-api")
+        checks.append("client-overrides-select-canonical-media-and-session-api")
         run_pub(flutter, sdk)
         check_roots(sdk, {name: sdk / "public_api" / name for name in PACKAGES[:2]})
         checks.append("standalone-sdk-layout-resolves-bundled-public-snapshots")

@@ -400,7 +400,7 @@ packages:
     source: path
     version: "0.1.0-dev.1"
   share_hub_session_api:
-    dependency: transitive
+    dependency: "direct overridden"
     description:
       path: "packages/share_hub_session_api"
       relative: true

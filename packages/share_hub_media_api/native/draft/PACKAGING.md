@@ -79,20 +79,23 @@ renaming private source files as "bridge" does not make them distributable.
 
 ## Public Dart dependencies without workspace paths
 
-The proposed thin package depends on `public_api/share_hub_media_api` using a
-relative path. That generated package retains its existing sibling session API
-path. The unique client already overrides `share_hub_media_api` to its own
-`packages/share_hub_media_api`; this also selects the canonical sibling session
-API used by the connection package. Do not add a second SDK copy to the client's
-public API imports or edit an installed package's pubspec to absolute local paths.
+The proposed thin package depends on both `public_api/share_hub_media_api` and
+`public_api/share_hub_session_api` using relative paths. The authorization FFI
+adapter uses the pure session package directly, allowing an independent Dart
+host to avoid the Flutter/media display API. The unique client overrides both
+packages to its canonical `packages/` directories; a media-only override cannot
+resolve a separately declared SDK session snapshot. This preserves one runtime
+contract identity for connections, media and native authorization.
 Other Flutter consumers may use the supplied public snapshots, or a compatible
-canonical override after validating the same API/ABI matrix.
+canonical override after validating the same API/ABI matrix. Do not edit an
+installed package's pubspec to local checkout paths.
 
 `tool/check_sdk_package_layout.py --flutter /path/to/flutter` exercises this graph
 with actual public API/connection sources and a dependency-only SDK fixture.
-It rejects two different API paths without override, verifies the client's existing
-override, checks standalone snapshot resolution, and repeats after a Chinese/space
-path relocation. It uses offline pub resolution and no private SDK source. It
+It rejects different API paths without overrides and the session conflict left
+by a media-only override, verifies both canonical overrides, checks standalone
+snapshot resolution, and repeats after a Chinese/space path relocation. It uses
+offline pub resolution and no private SDK source. It
 neither tests the installer nor proves a native binary, plugin build or SDK behavior.
 
 The final thin plugin retains standard Flutter registration and public Texture/

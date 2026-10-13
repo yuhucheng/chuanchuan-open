@@ -28,6 +28,8 @@ dev_dependencies:
 dependency_overrides:
   share_hub_media_api:
     path: packages/share_hub_media_api
+  share_hub_session_api:
+    path: packages/share_hub_session_api
 
 flutter:
   config:
