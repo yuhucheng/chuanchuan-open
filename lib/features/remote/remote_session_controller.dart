@@ -1106,6 +1106,13 @@ class RemoteSessionController extends ChangeNotifier {
         event.transportGeneration != attempt.transportGeneration) {
       return;
     }
+    // Keep the failed owner for cleanup, but no further nonterminal event may
+    // reactivate it or advance its revision past the eventual end receipt.
+    if (_phase == RemotePhase.failed &&
+        event.kind != MediaEventKind.failed &&
+        event.kind != MediaEventKind.ended) {
+      return;
+    }
     if ((event.kind == MediaEventKind.failed ||
             event.kind == MediaEventKind.ended) &&
         _retainRecovery(attempt)) {

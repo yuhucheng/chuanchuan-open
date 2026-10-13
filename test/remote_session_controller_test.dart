@@ -519,6 +519,61 @@ void main() {
     }
   }
 
+  for (final failureOrigin in ['event', 'link']) {
+    for (final lateKind in [
+      MediaEventKind.connecting,
+      MediaEventKind.transportReady,
+      MediaEventKind.waitingFirstFrame,
+      MediaEventKind.firstFrame,
+      MediaEventKind.paused,
+      MediaEventKind.sourceChanged,
+    ]) {
+      test(
+        'failed $failureOrigin ignores later $lateKind until release',
+        () async {
+          build();
+          await remoteA.start(
+            SessionOperation.watch,
+            peerKey: a.sessions.single.peerKey,
+          );
+          final picture = factoryA.current;
+          if (failureOrigin == 'event') {
+            picture.emit(
+              MediaEventKind.failed,
+              failureCode: 'source_unavailable',
+            );
+          } else {
+            factoryA.reportFailure(picture.id, 'source_unavailable');
+          }
+          expect(remoteA.phase, RemotePhase.failed);
+          final error = remoteA.error;
+          expect(error, isNotNull);
+          picture.emit(lateKind, revision: picture.mediaRevision + 3);
+          expect(remoteA.phase, RemotePhase.failed);
+          expect(remoteA.error, error);
+          expect(remoteA.transportReady, isFalse);
+          expect(remoteA.occupied, isTrue);
+          // Model the SDK's terminal receipt after its resources have stopped.
+          // A nonterminal callback must not advance the fence beyond this receipt.
+          picture.stoppedFlag = true;
+          picture.emit(MediaEventKind.ended);
+          picture.finish();
+          expect(remoteA.occupied, isFalse);
+          await remoteA.start(
+            SessionOperation.watch,
+            peerKey: a.sessions.single.peerKey,
+          );
+          final replacement = factoryA.current;
+          expect(replacement.id, isNot(picture.id));
+          replacement.emit(MediaEventKind.transportReady);
+          replacement.emit(MediaEventKind.firstFrame);
+          expect(remoteA.phase, RemotePhase.active);
+          expect(remoteA.error, isNull);
+        },
+      );
+    }
+  }
+
   test('declares the offered operations and one shared picture budget', () {
     build();
     expect(remoteA.offeredOperations, {'watch', 'cast'});
