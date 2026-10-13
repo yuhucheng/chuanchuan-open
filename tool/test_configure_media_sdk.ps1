@@ -13,6 +13,9 @@ function Fixture($Name) {
     Set-Content -LiteralPath (Join-Path $project 'pubspec.yaml') -Value "name: share_hub_open`ndependencies:`n  share_hub_media_sdk:`n    path: .local/media-sdk/package"
     Set-Content -LiteralPath (Join-Path $sdk 'pubspec.yaml') -Value 'name: share_hub_media_sdk'
     Set-Content -LiteralPath (Join-Path $sdk 'lib/share_hub_media_sdk.dart') -Value "// SDK fixture: $Name"
+    New-Item -ItemType Directory -Force -Path (Join-Path $sdk 'macos'),(Join-Path $sdk 'windows') | Out-Null
+    Set-Content -LiteralPath (Join-Path $sdk 'macos/share_hub_media_sdk.podspec') -Value '# Fixture Mac plugin hook'
+    Set-Content -LiteralPath (Join-Path $sdk 'windows/CMakeLists.txt') -Value '# Fixture Windows plugin hook'
     return @{ Project=$project; Sdk=$sdk }
 }
 function Configure($f) { & $tool -ProjectPath $f.Project -SdkPath $f.Sdk -SkipPubGet }
@@ -79,6 +82,49 @@ try {
     Reject { Configure $f } 'SDK package layout is invalid: entry library is missing'
     Assert (!(Test-Path -LiteralPath (Join-Path $f.Project '.local'))) 'Missing SDK entry mutated project'
     Write-Output 'PASS missing SDK entry has a distinct layout diagnostic before mutation'
+
+    $f=Fixture 'missing-host-hook'
+    $hostHook = if ($IsWindows) { 'windows/CMakeLists.txt' } else { 'macos/share_hub_media_sdk.podspec' }
+    Remove-Item -LiteralPath (Join-Path $f.Sdk $hostHook)
+    Reject { Configure $f } 'SDK target layout is unavailable'
+    Assert (!(Test-Path -LiteralPath (Join-Path $f.Project '.local'))) 'Missing platform hook mutated project'
+    Write-Output 'PASS missing host plugin hook rejected before mutation'
+
+    foreach ($target in @('macos', 'windows')) {
+        $f=Fixture "target-only-$target"
+        $otherTarget = if ($target -eq 'macos') { 'windows' } else { 'macos' }
+        Remove-Item -LiteralPath (Join-Path $f.Sdk $otherTarget) -Recurse
+        Reject { & $tool -ProjectPath $f.Project -SdkPath $f.Sdk -TargetPlatform $otherTarget -SkipPubGet } "SDK target layout is unavailable for ${otherTarget}"
+        Assert (!(Test-Path -LiteralPath (Join-Path $f.Project '.local'))) 'Wrong target mutated project'
+        & $tool -ProjectPath $f.Project -SdkPath $f.Sdk -TargetPlatform $target -SkipPubGet
+        Assert (Test-Path -LiteralPath (Join-Path $f.Project '.local/media-sdk/package/lib/share_hub_media_sdk.dart')) 'Valid explicit target was not linked'
+        Write-Output "PASS $target-only layout rejects the other target and accepts its selected target"
+    }
+
+    $f=Fixture 'swift-package-hook'
+    Remove-Item -LiteralPath (Join-Path $f.Sdk 'macos/share_hub_media_sdk.podspec')
+    New-Item -ItemType Directory -Force -Path (Join-Path $f.Sdk 'macos/share_hub_media_sdk') | Out-Null
+    Set-Content -LiteralPath (Join-Path $f.Sdk 'macos/share_hub_media_sdk/Package.swift') -Value '// Fixture Swift package hook'
+    & $tool -ProjectPath $f.Project -SdkPath $f.Sdk -TargetPlatform macos -SkipPubGet
+    Assert (Test-Path -LiteralPath (Join-Path $f.Project '.local/media-sdk/package/lib/share_hub_media_sdk.dart')) 'Swift-only Mac layout was rejected'
+    Write-Output 'PASS Mac Swift package hook is accepted without a podspec'
+
+    $f=Fixture 'invalid-hook-directory'
+    Remove-Item -LiteralPath (Join-Path $f.Sdk 'windows/CMakeLists.txt')
+    New-Item -ItemType Directory -Path (Join-Path $f.Sdk 'windows/CMakeLists.txt') | Out-Null
+    Reject { & $tool -ProjectPath $f.Project -SdkPath $f.Sdk -TargetPlatform windows -SkipPubGet } 'SDK target layout is unavailable for windows'
+    Assert (!(Test-Path -LiteralPath (Join-Path $f.Project '.local'))) 'Directory used as platform hook mutated project'
+    Write-Output 'PASS target hook must be a file'
+
+    $f=Fixture 'wrong-target-preserve'
+    Configure $f
+    $manifestHash=(Get-FileHash -LiteralPath (Join-Path $f.Project 'pubspec.yaml')).Hash
+    $sdkHash=(Get-FileHash -LiteralPath (Join-Path $f.Sdk 'lib/share_hub_media_sdk.dart')).Hash
+    $other=Fixture 'replacement-mac-only'
+    Remove-Item -LiteralPath (Join-Path $other.Sdk 'windows') -Recurse
+    Reject { & $tool -ProjectPath $f.Project -SdkPath $other.Sdk -TargetPlatform windows -SkipPubGet } 'SDK target layout is unavailable for windows'
+    Assert-Preserved $f $manifestHash $sdkHash
+    Write-Output 'PASS wrong-target replacement preserves the existing valid SDK and project'
 
     $f=Fixture 'directory'
     $destination=Join-Path $f.Project '.local/media-sdk/package'

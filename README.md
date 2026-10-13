@@ -30,6 +30,8 @@ flutter test --no-pub
 
 脚本只建立 SDK 包目录链接并执行 pub get，不复制私有源码，不修改 manifest，不生成另一套 main。SDK 路径不存在与包布局错误分别报告；已有 SDK 目录或冲突链接不会被覆盖。缺少 SDK 属于依赖未安装，需先准备 SDK；不会退回缺功能版本。将来正式包的取得、最终目录、校验、平台/API/ABI 兼容和签名步骤，须以实际发布的制品与说明为准；当前不能用内部源码包冒充这些步骤。
 
+配置默认检查本机桌面平台的插件构建入口（Windows CMake 或 Mac podspec/Swift Package）。可用 `-TargetPlatform windows` / `macos` 显式选择；缺少所选入口时，不建立配置目录或改变旧链接。这是开发包布局检查，原生架构、API/ABI和签名仍需分别验证。
+
 若配置在 `pub get` 阶段失败或中断，已建立的正确 SDK 链接会保留，不回滚删除 SDK。处理依赖错误后，以同一 `-SdkPath` 重试即可；切换其他包前脚本仍会拒绝覆盖原链接。可运行 `pwsh -File tool/test_configure_media_sdk.ps1` 验证临时目录中的重复配置、中文/空格路径、失败和中断恢复；该测试使用模拟包及命令，不证明正式二进制或平台加载已验收。
 
 若 Flutter 不在 PATH，可传 `-FlutterCommand` 指定完整路径。Windows 插件 symlink 权限不足时运行 `tool/prepare_windows_plugins.ps1`，再重试配置；不需改变系统安全策略。SDK 更新后建议清理旧构建产物，再获取依赖。

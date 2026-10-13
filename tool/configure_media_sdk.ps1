@@ -4,6 +4,7 @@ param(
     [Parameter(Mandatory = $true)][string]$SdkPath,
     [string]$ProjectPath = (Split-Path -Parent $PSScriptRoot),
     [string]$FlutterCommand = 'flutter',
+    [ValidateSet('windows', 'macos')][string]$TargetPlatform,
     [switch]$SkipPubGet
 )
 $ErrorActionPreference = 'Stop'
@@ -26,6 +27,21 @@ try { Assert-Package $sdk 'share_hub_media_sdk' }
 catch { throw "SDK package layout is invalid: $($_.Exception.Message)" }
 if (!(Test-Path -LiteralPath (Join-Path $sdk 'lib/share_hub_media_sdk.dart') -PathType Leaf)) {
     throw 'SDK package layout is invalid: entry library is missing.'
+}
+# This is a development-link layout check, not a native ABI/signature check.
+# Resolve the target before creating destination directories or changing links.
+$target = if ($TargetPlatform) { $TargetPlatform.ToLowerInvariant() }
+          elseif ($IsWindows) { 'windows' }
+          elseif ($IsMacOS) { 'macos' }
+          else { throw 'Specify -TargetPlatform windows or macos on this host.' }
+$hooks = if ($target -eq 'windows') { @('windows/CMakeLists.txt') }
+         else { @('macos/share_hub_media_sdk.podspec', 'macos/share_hub_media_sdk/Package.swift') }
+$hasHook = $false
+foreach ($hook in $hooks) {
+    if (Test-Path -LiteralPath (Join-Path $sdk $hook) -PathType Leaf) { $hasHook = $true }
+}
+if (!$hasHook) {
+    throw "SDK target layout is unavailable for ${target}: expected $($hooks -join ' or ')."
 }
 $localRoot = Join-Path $project '.local'
 $sdkRoot = Join-Path $localRoot 'media-sdk'
