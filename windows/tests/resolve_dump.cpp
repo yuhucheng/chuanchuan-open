@@ -110,6 +110,14 @@ void WINAPI BrowseComplete(DWORD status, void* context, DNS_RECORD* records) {
   std::cout << "\n=== browse callback === status=" << status << '\n';
   if (status != ERROR_SUCCESS) return;
   for (auto* record = records; record; record = record->pNext) {
+    std::cout << "  record type=" << record->wType << " name=" << Utf8(record->pName) << " ttl=" << record->dwTtl << '\n';
+    if (record->wType == static_cast<WORD>(16)) {
+      const auto& data = record->Data.Txt;
+      for (DWORD i = 0; i < data.dwStringCount; ++i) {
+        const auto* bytes = reinterpret_cast<const char*>(data.pStringArray[i]);
+        std::cout << "    txt[" << i << "] \"" << bytes << "\"\n";
+      }
+    }
     if (record->wType != DNS_TYPE_PTR) continue;
     const auto* instance = record->Data.PTR.pNameHost;
     std::cout << "PTR " << Utf8(instance) << "  ttl=" << record->dwTtl << '\n';

@@ -90,6 +90,8 @@ struct Api {
 };
 using Kind = DiscoveryEventKind;
 struct PointerRecord { std::string instance; uint32_t ttl; };
+struct WireTxt { std::string instance; TxtRecord txt; uint32_t ttl; };
+struct WireAddress { std::string host; std::string address; uint32_t ttl; };
 struct Event {
   Kind kind = Kind::Browse;
   uint64_t token = 0;
@@ -97,11 +99,20 @@ struct Event {
   uintptr_t operation = 0;
   std::string instance;
   TxtRecord txt;
-  // Numeric address from the same resolve answer, used only as a connection
-  // fallback when the advertised ".local" name does not resolve on this host.
-  std::string address;
+  // Fresh records from the browse callback itself (the wire, not the OS
+  // resolver cache). The resolve path returned stale TXT for live peers, so
+  // endpoint state and the numeric fallback address are driven by these.
   std::vector<PointerRecord> pointers;
+  std::vector<WireTxt> wire_txt;
+  std::vector<WireAddress> wire_addresses;
 };
+// Case-insensitive host key for matching A records to the advertised TXT host.
+std::string HostKey(const std::string& value) {
+  std::string key = value;
+  if (!key.empty() && key.back() == '.') key.pop_back();
+  for (char& c : key) if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + ('a' - 'A'));
+  return key;
+}
 struct Mailbox {
   std::mutex mutex;
   HWND target = nullptr;
@@ -228,38 +239,45 @@ void WINAPI BrowseComplete(DWORD status, void* context, DNS_RECORD* records) {
     Event event; event.kind = Kind::Browse; event.status = status;
     size_t count = 0;
     for (auto* record = records; record && count++ < 256; record = record->pNext) {
-      if (record->wType != DNS_TYPE_PTR) continue;
-      auto instance = InstanceName(record->Data.PTR.pNameHost);
-      if (instance) event.pointers.push_back({*instance, record->dwTtl});
-    }
-    Post(operation, std::move(event));
-  }
-  if (records) DnsRecordListFree(records, DnsFreeRecordList);
-}
-void WINAPI ResolveComplete(DWORD status, void* context, DNS_SERVICE_INSTANCE* instance) {
-  auto operation = Operations::Get().Find(context, true);
-  if (operation) {
-    Event event; event.kind = Kind::Resolved; event.status = status;
-    event.instance = Utf8(operation->query.c_str());
-    if (status == ERROR_SUCCESS && instance && instance->ip4Address) {
-      IN_ADDR first{};
-      first.s_addr = *instance->ip4Address;
-      char text[INET_ADDRSTRLEN]{};
-      if (inet_ntop(AF_INET, &first, text, sizeof(text))) event.address = text;
-    }
-    if (status == ERROR_SUCCESS && instance && instance->dwPropertyCount <= 16 &&
-        instance->keys && instance->values) {
-      for (DWORD i = 0; i < instance->dwPropertyCount; ++i) {
-        auto key = Utf8(instance->keys[i]);
-        // Same contract every platform advertises with; see IsAcceptedTxtKey.
-        if (!IsAcceptedTxtKey(key)) continue;
-        if (event.txt.count(key)) { event.txt.clear(); event.status = ERROR_INVALID_DATA; break; }
-        event.txt[key] = Utf8(instance->values[i]);
+      if (record->wType == DNS_TYPE_PTR) {
+        auto instance = InstanceName(record->Data.PTR.pNameHost);
+        if (instance) event.pointers.push_back({*instance, record->dwTtl});
+        continue;
+      }
+      if (record->wType == static_cast<WORD>(16)) {  // DNS_TYPE_TXT
+        // The browse callback carries the live advertisement itself: fresh TXT
+        // arrives here even while DnsServiceResolve keeps serving a cached copy.
+        auto instance = InstanceName(record->pName);
+        if (!instance) continue;
+        TxtRecord txt;
+        bool malformed = false;
+        const auto& data = record->Data.Txt;
+        // Browse TXT strings are wide, unlike the resolve property list.
+        for (DWORD i = 0; i < data.dwStringCount && !malformed; ++i) {
+          const auto entry = Utf8(reinterpret_cast<const wchar_t*>(data.pStringArray[i]));
+          const auto split = entry.find('=');
+          if (split == std::string::npos) continue;
+          const auto key = entry.substr(0, split);
+          if (!IsAcceptedTxtKey(key)) continue;
+          if (txt.count(key)) { malformed = true; break; }
+          txt[key] = entry.substr(split + 1);
+        }
+        // A malformed record is ignored, never allowed to flush a healthy peer.
+        if (!malformed) event.wire_txt.push_back({*instance, std::move(txt), record->dwTtl});
+        continue;
+      }
+      if (record->wType == DNS_TYPE_A) {
+        IN_ADDR value{};
+        value.s_addr = record->Data.A.IpAddress;
+        char text[INET_ADDRSTRLEN]{};
+        const auto host = HostKey(Utf8(record->pName));
+        if (!host.empty() && inet_ntop(AF_INET, &value, text, sizeof(text)))
+          event.wire_addresses.push_back({host, text, record->dwTtl});
       }
     }
     Post(operation, std::move(event));
   }
-  if (instance) Api::Get().free_instance(instance);
+  if (records) DnsRecordListFree(records, DnsFreeRecordList);
 }
 // Presence only: accept then immediately close without reading any input.
 struct Listener {
@@ -307,8 +325,8 @@ struct NativeDiscovery::Impl {
   std::shared_ptr<Mailbox> mailbox;
   std::shared_ptr<Registration> registration;
   std::shared_ptr<Operation> browser;
-  struct Resolving { std::shared_ptr<Operation> operation; uint32_t ttl; uint64_t seen; };
-  std::map<std::string, Resolving> resolving;
+  // Latest A-record answers by host key, used for the numeric connect fallback.
+  std::map<std::string, std::string> host_addresses;
   std::unique_ptr<Listener> listener;
   // Presence values and the advertised endpoint are kept so a TXT change can
   // rebuild the registration without the caller re-supplying the identity.
@@ -330,8 +348,7 @@ struct NativeDiscovery::Impl {
   }
   void StopOperations() {
     CancelBrowser();
-    for (const auto& pair : resolving) Api::Get().cancel_resolve(&pair.second.operation->cancel);
-    resolving.clear();
+    host_addresses.clear();
     if (registration) { registration->stopping = true; Deregister(registration); registration.reset(); }
     listener.reset();
   }
@@ -344,29 +361,6 @@ struct NativeDiscovery::Impl {
     auto status = Api::Get().browse(&request, &operation->cancel);
     if (status != DNS_REQUEST_PENDING) { Operations::Get().Remove(operation->number); return false; }
     browser = operation; last_browse = Now(); model.Browsing(model.generation(), operation->number); return true;
-  }
-  void Resolve(const PointerRecord& pointer) {
-    if (pointer.ttl == 0) {
-      auto pending = resolving.find(pointer.instance);
-      if (pending != resolving.end()) {
-        Api::Get().cancel_resolve(&pending->second.operation->cancel);
-        resolving.erase(pending);
-      }
-      model.Remove(model.generation(), pointer.instance); return;
-    }
-    if (resolving.count(pointer.instance) || resolving.size() >= 128) return;
-    auto operation = std::make_shared<Operation>(mailbox, model.generation());
-    operation->query = Wide(pointer.instance); Operations::Get().Add(operation);
-    auto& request = operation->resolve;
-    request.Version = DNS_QUERY_REQUEST_VERSION1; request.QueryName = operation->query.data();
-    request.pResolveCompletionCallback = ResolveComplete; request.pQueryContext = reinterpret_cast<void*>(operation->number);
-    resolving[pointer.instance] = {operation, pointer.ttl, Now()};
-    model.ResolveStarted(model.generation(), pointer.instance, operation->number);
-    auto status = Api::Get().resolve(&request, &operation->cancel);
-    if (status != DNS_REQUEST_PENDING) {
-      resolving.erase(pointer.instance); Operations::Get().Remove(operation->number);
-      model.Remove(model.generation(), pointer.instance);
-    }
   }
 };
 NativeDiscovery::NativeDiscovery(HWND target) : impl_(std::make_unique<Impl>(target)) {}
@@ -464,18 +458,30 @@ void NativeDiscovery::Pump() {
     }
     if (disposition == EventDisposition::Ignore) continue;
     if (event.kind == Kind::Browse && !impl_->browser) continue;
-    if (event.kind == Kind::Resolved) {
-      auto pending = impl_->resolving.find(event.instance);
-      if (pending == impl_->resolving.end() || pending->second.operation->number != event.operation) continue;
-      const auto ttl = pending->second.ttl; const auto seen = pending->second.seen;
-      impl_->resolving.erase(pending);
-      if (event.status == ERROR_SUCCESS) impl_->model.Resolved(event.token, event.instance, event.operation, event.txt, ttl, seen, event.address);
-      else impl_->model.Remove(event.token, event.instance);
-    } else if (event.status != ERROR_SUCCESS) {
+    if (event.status != ERROR_SUCCESS) {
       impl_->StopOperations();
       impl_->model.Fail(event.token, u8"局域网发现失败（" + std::to_string(event.status) + u8"），请检查网络与防火墙后重试。");
     } else if (event.kind == Kind::Registered) impl_->model.Registered(event.token);
-    else for (const auto& pointer : event.pointers) impl_->Resolve(pointer);
+    else {
+      // Wire-driven updates: fresh A answers first so a TXT in the same batch
+      // can attach its numeric fallback, then goodbyes, then live TXT state.
+      for (const auto& wire : event.wire_addresses) {
+        if (wire.ttl == 0) impl_->host_addresses.erase(wire.host);
+        else impl_->host_addresses[wire.host] = wire.address;
+      }
+      for (const auto& pointer : event.pointers) {
+        if (pointer.ttl == 0) impl_->model.Remove(event.token, pointer.instance);
+      }
+      for (const auto& wire : event.wire_txt) {
+        std::string address;
+        const auto host = wire.txt.find("host");
+        if (host != wire.txt.end()) {
+          const auto found = impl_->host_addresses.find(HostKey(host->second));
+          if (found != impl_->host_addresses.end()) address = found->second;
+        }
+        impl_->model.Update(event.token, wire.instance, wire.txt, wire.ttl, Now(), address);
+      }
+    }
     Emit();
   }
 }
