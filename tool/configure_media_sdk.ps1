@@ -5,6 +5,9 @@ param(
     [string]$ProjectPath = (Split-Path -Parent $PSScriptRoot),
     [string]$FlutterCommand = 'flutter',
     [ValidateSet('windows', 'macos')][string]$TargetPlatform,
+    [string]$CandidateManifestSha256,
+    [string]$CandidateConsumerPolicy,
+    [string]$PythonCommand = 'python3',
     [switch]$SkipPubGet
 )
 $ErrorActionPreference = 'Stop'
@@ -42,6 +45,27 @@ foreach ($hook in $hooks) {
 }
 if (!$hasHook) {
     throw "SDK target layout is unavailable for ${target}: expected $($hooks -join ' or ')."
+}
+# Explicit internal-candidate preflight uses the caller's pinned identity and
+# policy. All checks precede link creation or reuse and never load SDK binaries.
+if ([bool]$CandidateManifestSha256 -ne [bool]$CandidateConsumerPolicy) {
+    throw 'Candidate preflight requires both -CandidateManifestSha256 and -CandidateConsumerPolicy.'
+}
+if ($CandidateManifestSha256) {
+    if ($CandidateManifestSha256 -cnotmatch '^[a-f0-9]{64}$') {
+        throw 'Candidate manifest checksum must be a lowercase SHA256 digest.'
+    }
+    $preflightTool = Join-Path $PSScriptRoot 'sdk_candidate_preflight.py'
+    try {
+        $preflightOutput = & $PythonCommand $preflightTool $sdk $CandidateConsumerPolicy $project `
+            --target $target --expected-manifest-sha256 $CandidateManifestSha256
+        if ($LASTEXITCODE -ne 0) { throw "Rejected candidate: $($preflightOutput -join ' ')" }
+        $preflight = ($preflightOutput -join "`n") | ConvertFrom-Json
+        if (!$preflight.ok -or $preflight.installable) { throw 'Invalid candidate preflight response.' }
+    } catch {
+        throw "SDK candidate preflight failed before link configuration. Use Python with tool/sdk_schema_requirements.txt installed. $($_.Exception.Message)"
+    }
+    Write-Output 'Internal candidate declarations and inventory checked; publisher trust, runtime and release readiness remain unverified.'
 }
 $localRoot = Join-Path $project '.local'
 $sdkRoot = Join-Path $localRoot 'media-sdk'

@@ -65,6 +65,23 @@ try {
     Assert (!(Test-Path -LiteralPath (Join-Path $f.Project '.local/media-sdk/main.dart'))) 'Unexpected alternate entry'
     Write-Output 'PASS SDK linking is idempotent, handles non-ASCII and space paths, preserves manifest and normal entry'
 
+    $f=Fixture 'candidate-half-options'
+    Reject { & $tool -ProjectPath $f.Project -SdkPath $f.Sdk -SkipPubGet -CandidateManifestSha256 ('0' * 64) } 'requires both'
+    Assert (!(Test-Path -LiteralPath (Join-Path $f.Project '.local'))) 'Half candidate options mutated project'
+    Write-Output 'PASS partial candidate options rejected before configuration'
+
+    $f=Fixture 'candidate-bad-digest'
+    $policy=Join-Path (Split-Path $f.Project -Parent) 'policy.json'
+    Set-Content -LiteralPath $policy -Value '{}'
+    Reject { & $tool -ProjectPath $f.Project -SdkPath $f.Sdk -SkipPubGet -CandidateManifestSha256 'bad' -CandidateConsumerPolicy $policy } 'lowercase SHA256'
+    Assert (!(Test-Path -LiteralPath (Join-Path $f.Project '.local'))) 'Bad digest mutated project'
+    Write-Output 'PASS invalid candidate digest rejected before configuration'
+
+    $f=Fixture 'candidate-missing-python'
+    Reject { & $tool -ProjectPath $f.Project -SdkPath $f.Sdk -SkipPubGet -CandidateManifestSha256 ('0' * 64) -CandidateConsumerPolicy $policy -PythonCommand 'nonexistent-sdk-preflight-python' } 'preflight failed before link'
+    Assert (!(Test-Path -LiteralPath (Join-Path $f.Project '.local'))) 'Missing preflight runtime mutated project'
+    Write-Output 'PASS unavailable preflight runtime preserves project'
+
     $f=Fixture 'missing-sdk'
     $missing=Join-Path (Split-Path $f.Sdk -Parent) 'not-installed'
     Reject { & $tool -ProjectPath $f.Project -SdkPath $missing -SkipPubGet } 'SDK package directory is missing'

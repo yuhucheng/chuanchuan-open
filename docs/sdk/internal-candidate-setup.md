@@ -3,7 +3,7 @@
 Formal binary SDK distribution, signing, licensing and the final installation
 format are not yet delivered. This workflow is for developers authorized to
 obtain a matching internal candidate. It does not download a package or verify
-its publisher, signatures, ABI or runtime behavior. Keep the original package
+its publisher, signatures, binary ABI or runtime behavior. Keep the original package
 and its recorded identity separate from the client checkout.
 
 Use Flutter 3.47.2 / Dart 3.13.2 and PowerShell 7. The normal client requires the
@@ -45,3 +45,28 @@ LSP initialize JSON parsing to fail before source analysis. Use an ASCII project
 path for the current analysis/build workflow; full Chinese-path toolchain
 acceptance remains pending. This limitation does not justify rewriting an
 installed SDK or claiming the failed analysis passed.
+
+For an authorized candidate with a recorded manifest digest, the configurator
+can perform the existing **review draft** checks before creating or reusing the
+link. Create your consumer policy from the actual selected build/bridge as
+explained in [compatibility preflight](compatibility-preflight.md), independently
+of the candidate. Use Python with `tool/sdk_schema_requirements.txt` installed:
+
+```powershell
+pwsh -NoProfile -File tool/configure_media_sdk.ps1 -SdkPath /absolute/path/to/package -TargetPlatform macos -SkipPubGet -CandidateManifestSha256 <recorded-lowercase-sha256> -CandidateConsumerPolicy /absolute/path/to/consumer.json -PythonCommand /absolute/path/to/schema-python
+```
+
+Both candidate options are required together. This opt-in checks the pinned
+manifest, review schema, nested payload/inventory and compatibility declarations;
+it also requires the policy's product/API/ABI values to match this client's
+VERSION, canonical public pubspecs and draft C header. Bad identity, bytes or
+policy leaves an existing link intact and creates no new link. Policy targets
+are caller-selected declarations, not automatically observed binary/platform
+facts. `installable` remains false; trust, signatures, final licensing and native
+runtime behavior remain separate gates.
+
+This combined byte verifier currently requires a POSIX host. Windows declaration
+checks are possible there, but the explicit configuration mode does not claim
+Windows filesystem acceptance. The existing development-source link workflow
+remains available on Windows/macOS and still only checks layout when candidate
+options are omitted. Neither mode is a formal installer or SDK replacement flow.
