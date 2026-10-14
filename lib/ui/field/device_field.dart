@@ -26,6 +26,12 @@ class DeviceField extends StatefulWidget {
   final FutureOr<void> Function() onLocal;
   final Future<void> Function(DirectoryDevice) onDevice;
 
+  /// How long an unverified slot that vanished from discovery stays as an
+  /// offline reminder before it is swept. Verified saved material and any slot
+  /// still present in the current snapshot are never swept; rediscovery within
+  /// this window cancels the pending sweep.
+  static const Duration offlineRetention = Duration(minutes: 1);
+
   /// Presentation only: the caller may borrow an existing authorized picture.
   /// It must never start capture or enumerate sources from this callback.
   final Widget? Function(BuildContext, DirectoryDevice)? thumbnailBuilder;
@@ -36,6 +42,7 @@ class DeviceField extends StatefulWidget {
 class _DeviceFieldState extends State<DeviceField> {
   final _known = <String, DirectoryDevice>{};
   final _focus = <String, FocusNode>{};
+  final _offlineSweeps = <String, Timer>{};
   final _localFocus = FocusNode(debugLabel: 'local-device');
   final _aggregateFocus = FocusNode(debugLabel: 'aggregate');
   bool _expanded = false;
@@ -103,10 +110,53 @@ class _DeviceFieldState extends State<DeviceField> {
         () => FocusNode(debugLabel: entry.identityId),
       );
     }
+    _scheduleOfflineSweeps(current);
+  }
+
+  /// Unverified slots that left the snapshot get a bounded offline reminder;
+  /// rediscovery cancels the pending sweep. Verified saved material is exempt.
+  /// Display bookkeeping only: sweeping never revokes a grant or drops a
+  /// connection, and verified slots are never touched.
+  void _scheduleOfflineSweeps(Set<String> current) {
+    for (final id in _offlineSweeps.keys.toList()) {
+      if (!_known.containsKey(id)) _offlineSweeps.remove(id)?.cancel();
+    }
+    for (final entry in _known.values) {
+      final id = entry.identityId;
+      if (entry.verified || current.contains(id)) {
+        _offlineSweeps.remove(id)?.cancel();
+      } else {
+        _offlineSweeps.putIfAbsent(
+          id,
+          () => Timer(DeviceField.offlineRetention, () => _sweepOffline(id)),
+        );
+      }
+    }
+  }
+
+  void _sweepOffline(String id) {
+    _offlineSweeps.remove(id);
+    if (!mounted) return;
+    final entry = _known[id];
+    if (entry == null || entry.verified) return;
+    if (widget.entries.any((candidate) => candidate.identityId == id)) return;
+    setState(() {
+      _known.remove(id);
+      if (_hovered == id) _hovered = null;
+      if (_focused == id) _focused = null;
+    });
+    final focus = _focus.remove(id);
+    if (focus != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => focus.dispose());
+    }
   }
 
   @override
   void dispose() {
+    for (final timer in _offlineSweeps.values) {
+      timer.cancel();
+    }
+    _offlineSweeps.clear();
     for (final node in _focus.values) {
       node.dispose();
     }

@@ -314,4 +314,117 @@ void main() {
       isNull,
     );
   });
+
+  testWidgets(
+    'unverified offline slots are swept; verified saved material stays',
+    (tester) async {
+      var discovered = true;
+      late StateSetter refresh;
+      List<DirectoryDevice> entries() => [
+        if (discovered)
+          const DirectoryDevice(
+            identityId: 'probe-uuid',
+            name: 'diagnostic-probe',
+            platform: 'windows',
+            trust: DeviceTrust.unverified,
+            reachability: DeviceReachability.reachable,
+            discoveryId: 'probe-uuid',
+          ),
+        const DirectoryDevice(
+          identityId: _trusted,
+          name: '办公室电脑',
+          platform: 'windows',
+          trust: DeviceTrust.verified,
+          reachability: DeviceReachability.offline,
+          publicKey: _trusted,
+        ),
+      ];
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setState) {
+                refresh = setState;
+                return DeviceField(
+                  entries: entries(),
+                  localName: '本机',
+                  allowConnections: false,
+                  onLocal: () {},
+                  onDevice: (_) async {},
+                );
+              },
+            ),
+          ),
+        ),
+      );
+      expect(find.text('windows · 未认证发现'), findsOneWidget);
+      refresh(() => discovered = false);
+      await tester.pump();
+      expect(find.text('已离线'), findsOneWidget);
+      // Just before the deadline the offline reminder is still retained.
+      await tester.pump(
+        DeviceField.offlineRetention - const Duration(seconds: 1),
+      );
+      expect(find.byKey(const ValueKey('device-probe-uuid')), findsOneWidget);
+      await tester.pump(const Duration(seconds: 2));
+      expect(find.byKey(const ValueKey('device-probe-uuid')), findsNothing);
+      expect(find.text('diagnostic-probe'), findsNothing);
+      // The verified offline identity remains saved material, never swept.
+      expect(find.byKey(const ValueKey('device-$_trusted')), findsOneWidget);
+      expect(find.text('已保存资料 · 需重新输码'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('rediscovery before the deadline cancels the offline sweep', (
+    tester,
+  ) async {
+    var discovered = true;
+    late StateSetter refresh;
+    List<DirectoryDevice> entries() => [
+      if (discovered)
+        const DirectoryDevice(
+          identityId: 'probe-uuid',
+          name: 'diagnostic-probe',
+          platform: 'windows',
+          trust: DeviceTrust.unverified,
+          reachability: DeviceReachability.reachable,
+          discoveryId: 'probe-uuid',
+        ),
+    ];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) {
+              refresh = setState;
+              return DeviceField(
+                entries: entries(),
+                localName: '本机',
+                allowConnections: false,
+                onLocal: () {},
+                onDevice: (_) async {},
+              );
+            },
+          ),
+        ),
+      ),
+    );
+    refresh(() => discovered = false);
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 30));
+    // Rediscovery cancels the pending sweep; vanishing again starts a full
+    // new retention window rather than inheriting the first deadline.
+    refresh(() => discovered = true);
+    await tester.pump();
+    refresh(() => discovered = false);
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 45));
+    expect(find.byKey(const ValueKey('device-probe-uuid')), findsOneWidget);
+    expect(find.text('已离线'), findsOneWidget);
+    await tester.pump(const Duration(seconds: 30));
+    expect(find.byKey(const ValueKey('device-probe-uuid')), findsNothing);
+    expect(find.text('diagnostic-probe'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
 }
