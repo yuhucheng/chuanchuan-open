@@ -74,12 +74,30 @@ bool CheckPreferences() {
   CHECK(first.Load());
   CHECK(first.error().empty());
   CHECK(share_hub::NormalizeUuid(first.device().id) == first.device().id);
-  CHECK(first.device().name == "我的 Windows");
+  wchar_t computer_name[256]{};
+  DWORD name_length = 256;
+  CHECK(GetComputerNameExW(ComputerNamePhysicalDnsHostname, computer_name, &name_length));
+  const int name_bytes = WideCharToMultiByte(CP_UTF8, 0, computer_name,
+      static_cast<int>(name_length), nullptr, 0, nullptr, nullptr);
+  CHECK(name_bytes > 0);
+  std::string expected_name(static_cast<size_t>(name_bytes), '\0');
+  CHECK(WideCharToMultiByte(CP_UTF8, 0, computer_name, static_cast<int>(name_length),
+      expected_name.data(), name_bytes, nullptr, nullptr) == name_bytes);
+  expected_name = share_hub::NormalizeName(expected_name).value_or("Windows");
+  CHECK(first.device().name == expected_name);
   CHECK(first.device().platform == "windows");
   const auto stable_id = first.device().id;
   share_hub::DevicePreferences second(temporary.path);
   CHECK(second.Load());
   CHECK(second.device().id == stable_id);
+  CHECK(WriteString(temporary.key, L"deviceName", L"我的 Windows"));
+  CHECK(RegDeleteValueW(temporary.key, L"deviceNameDefaultVersion") == ERROR_SUCCESS);
+  CHECK(second.Load());
+  CHECK(second.device().name == expected_name);
+  CHECK(second.device().id == stable_id);
+  CHECK(first.SetName("我的 Windows"));
+  CHECK(second.Load());
+  CHECK(second.device().name == "我的 Windows");
   CHECK(first.SetName("　 我的工作电脑 \t"));
   CHECK(first.device().name == "我的工作电脑");
   CHECK(second.Load());
@@ -133,7 +151,7 @@ bool CheckPreferences() {
   CHECK(WriteString(temporary.key, L"deviceName", L"bad\nname"));
   CHECK(first.Load());
   CHECK(first.device().id != repaired_id);
-  CHECK(first.device().name == "我的 Windows");
+  CHECK(first.device().name == expected_name);
   CHECK(second.Load());
   CHECK(second.device().id == first.device().id);
   CHECK(second.device().name == first.device().name);

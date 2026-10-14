@@ -10,7 +10,8 @@ public final class DevicePreferences {
     private let defaults: UserDefaults
     public let discoveryID: String
 
-    public init(defaults: UserDefaults = .standard) {
+    public init(defaults: UserDefaults = .standard,
+                computerName: String? = SCDynamicStoreCopyComputerName(nil, nil) as String?) {
         self.defaults = defaults
         if let saved = defaults.string(forKey: "discoveryID"), UUID(uuidString: saved) != nil {
             discoveryID = saved
@@ -18,19 +19,32 @@ public final class DevicePreferences {
             discoveryID = UUID().uuidString.lowercased()
             defaults.set(discoveryID, forKey: "discoveryID")
         }
+        let saved = defaults.string(forKey: "deviceName")
+        let legacyDefault = saved == "我的 Mac" && defaults.integer(forKey: "deviceNameDefaultVersion") < 2
+        if saved == nil || legacyDefault || Self.normalizedName(saved!) == nil {
+            defaults.set(computerName.flatMap(Self.normalizedName) ?? "Mac", forKey: "deviceName")
+        }
+        defaults.set(2, forKey: "deviceNameDefaultVersion")
     }
 
     public var name: String {
-        defaults.string(forKey: "deviceName") ?? "我的 Mac"
+        defaults.string(forKey: "deviceName") ?? "Mac"
     }
 
     public func setName(_ value: String) throws {
-        let value = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty, value.utf8.count <= 128,
-              !value.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else {
+        guard let value = Self.normalizedName(value) else {
             throw PlatformFailure.invalidName
         }
         defaults.set(value, forKey: "deviceName")
+    }
+
+    private static func normalizedName(_ value: String) -> String? {
+        let value = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty, value.utf8.count <= 128,
+              !value.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else {
+            return nil
+        }
+        return value
     }
 }
 

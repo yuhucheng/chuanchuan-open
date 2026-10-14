@@ -11,7 +11,8 @@ namespace share_hub {
 namespace {
 constexpr wchar_t kIdValue[] = L"discoveryID";
 constexpr wchar_t kNameValue[] = L"deviceName";
-constexpr char kDefaultName[] = "我的 Windows";
+constexpr wchar_t kNameDefaultVersion[] = L"deviceNameDefaultVersion";
+constexpr char kLegacyDefaultName[] = "我的 Windows";
 
 class RegistryKey {
  public:
@@ -51,6 +52,19 @@ std::optional<std::wstring> ToWide(const std::string& text) {
   if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), length,
                         result.data(), needed) != needed) return std::nullopt;
   return result;
+}
+
+std::string DefaultDeviceName() {
+  wchar_t buffer[256]{};
+  DWORD length = 256;
+  if (GetComputerNameExW(ComputerNamePhysicalDnsHostname, buffer, &length)) {
+    const auto name = ToUtf8(std::wstring(buffer, length));
+    if (name) {
+      const auto normalized = NormalizeName(*name);
+      if (normalized) return *normalized;
+    }
+  }
+  return "Windows";
 }
 
 enum class ReadStatus { kValue, kAbsentOrInvalid, kError };
@@ -105,10 +119,12 @@ bool DevicePreferences::Load() {
     error_ = "Unable to access the local device settings.";
     return false;
   }
-  std::string saved_id, saved_name;
+  std::string saved_id, saved_name, name_default_version;
   const auto id_status = ReadString(key.value, kIdValue, &saved_id);
   const auto name_status = ReadString(key.value, kNameValue, &saved_name);
-  if (id_status == ReadStatus::kError || name_status == ReadStatus::kError) {
+  const auto version_status = ReadString(key.value, kNameDefaultVersion, &name_default_version);
+  if (id_status == ReadStatus::kError || name_status == ReadStatus::kError ||
+      version_status == ReadStatus::kError) {
     error_ = "Unable to read the local device settings.";
     return false;
   }
@@ -118,11 +134,15 @@ bool DevicePreferences::Load() {
     error_ = "Unable to create a local discovery identifier.";
     return false;
   }
-  const auto name = NormalizeName(saved_name).value_or(kDefaultName);
+  const auto normalized_name = NormalizeName(saved_name);
+  const bool legacy_default = saved_name == kLegacyDefaultName && name_default_version != "2";
+  const auto name = normalized_name && !legacy_default
+      ? *normalized_name : DefaultDeviceName();
   // Publish memory only after necessary repairs/defaults are persisted. If a
   // later write fails, a future Load can reuse any successfully repaired UUID.
   if ((saved_id != *id && !WriteString(key.value, kIdValue, *id)) ||
-      (saved_name != name && !WriteString(key.value, kNameValue, name))) {
+      (saved_name != name && !WriteString(key.value, kNameValue, name)) ||
+      (name_default_version != "2" && !WriteString(key.value, kNameDefaultVersion, "2"))) {
     error_ = "Unable to save the local device settings.";
     return false;
   }

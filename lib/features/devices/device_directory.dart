@@ -48,6 +48,7 @@ class DirectoryDevice {
     required this.trust,
     required this.reachability,
     this.publicKey,
+    this.discoveryId,
     this.host,
     this.port,
     this.connected = false,
@@ -65,6 +66,7 @@ class DirectoryDevice {
         trust: DeviceTrust.unverified,
         reachability: DeviceReachability.reachable,
         publicKey: device.publicKey,
+        discoveryId: device.id,
         host: device.host,
         port: device.port,
       );
@@ -77,6 +79,9 @@ class DirectoryDevice {
   final DeviceTrust trust;
   final DeviceReachability reachability;
   final String? publicKey;
+
+  /// Display correlation only. Never establishes or transfers trust.
+  final String? discoveryId;
   final String? host;
   final int? port;
   final bool connected;
@@ -130,6 +135,7 @@ List<DirectoryDevice> buildDeviceDirectory({
             ? DeviceReachability.reachable
             : DeviceReachability.offline,
         publicKey: peer.publicKey,
+        discoveryId: match?.id,
         host: match?.host,
         port: match?.port,
         connected: peer.connected,

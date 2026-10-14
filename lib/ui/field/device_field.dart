@@ -53,7 +53,50 @@ class _DeviceFieldState extends State<DeviceField> {
   }
 
   void _remember() {
+    final current = widget.entries.map((entry) => entry.identityId).toSet();
     for (final entry in widget.entries) {
+      if (entry.discoveryId != null) {
+        final previous = _known.values
+            .where(
+              (old) =>
+                  !old.verified &&
+                  !current.contains(old.identityId) &&
+                  old.discoveryId == entry.discoveryId &&
+                  old.platform == entry.platform &&
+                  (old.publicKey == null || entry.publicKey == null),
+            )
+            .toList();
+        // The admission switch adds/removes the advertised key. Replace only
+        // one obsolete, unverified presentation slot, never a verified peer or
+        // a different key. Names and addresses are not correlation evidence.
+        if (previous.length == 1) {
+          final oldId = previous.single.identityId;
+          final hasTarget = _known.containsKey(entry.identityId);
+          final ordered = <String, DirectoryDevice>{};
+          for (final item in _known.entries) {
+            if (item.key == oldId) {
+              if (!hasTarget) ordered[entry.identityId] = entry;
+            } else {
+              ordered[item.key] = item.value;
+            }
+          }
+          _known
+            ..clear()
+            ..addAll(ordered);
+          final focus = _focus.remove(oldId);
+          if (focus != null) {
+            if (hasTarget) {
+              WidgetsBinding.instance.addPostFrameCallback(
+                (_) => focus.dispose(),
+              );
+            } else {
+              _focus[entry.identityId] = focus;
+            }
+          }
+          if (_hovered == oldId) _hovered = entry.identityId;
+          if (_focused == oldId) _focused = entry.identityId;
+        }
+      }
       _known[entry.identityId] = entry;
       _focus.putIfAbsent(
         entry.identityId,

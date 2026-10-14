@@ -23,9 +23,7 @@ void main() {
           publicKey: _stranger,
         ),
       ]),
-      verified: const [
-        VerifiedPeer(publicKey: _trusted, name: '书房 Mac'),
-      ],
+      verified: const [VerifiedPeer(publicKey: _trusted, name: '书房 Mac')],
     );
     expect(entries.length, 2);
     final trusted = entries.singleWhere((e) => e.identityId == _trusted);
@@ -139,6 +137,137 @@ void main() {
     expect(entries.single.name, '平板');
   });
 
+  testWidgets(
+    'admission TXT changes replace one unverified slot in both directions',
+    (tester) async {
+      var key = 'windows-key';
+      List<DirectoryDevice> entries() => buildDeviceDirectory(
+        discovery: snapshotOf([
+          NearbyDevice(
+            'windows-uuid',
+            '办公室电脑',
+            'windows',
+            publicKey: key.isEmpty ? null : key,
+            host: key.isEmpty ? null : 'office.local',
+            port: key.isEmpty ? null : 4100,
+          ),
+        ]),
+      );
+      late StateSetter refresh;
+      String? openedKey;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setState) {
+                refresh = setState;
+                return DeviceField(
+                  entries: entries(),
+                  localName: '本机',
+                  allowConnections: false,
+                  onLocal: () {},
+                  onDevice: (entry) async {
+                    openedKey = entry.publicKey;
+                  },
+                );
+              },
+            ),
+          ),
+        ),
+      );
+      final initial = find.byKey(const ValueKey('device-windows-key'));
+      final position = tester.getTopLeft(initial);
+      final focus = tester.widget<OutlinedButton>(initial).focusNode!;
+      focus.requestFocus();
+      await tester.pump();
+      // An enabled listener advertised a key. Disabling removes it, but does not
+      // remove the presence UUID. Previously this produced an offline ghost.
+      refresh(() => key = '');
+      await tester.pump();
+      final anonymous = find.byKey(const ValueKey('device-windows-uuid'));
+      expect(find.text('办公室电脑'), findsOneWidget);
+      expect(find.textContaining('已离线'), findsNothing);
+      expect(initial, findsNothing);
+      expect(tester.getTopLeft(anonymous), position);
+      expect(tester.widget<OutlinedButton>(anonymous).focusNode, same(focus));
+      expect(focus.hasFocus, isTrue);
+      refresh(() => key = 'windows-key');
+      await tester.pump();
+      expect(find.text('办公室电脑'), findsOneWidget);
+      expect(anonymous, findsNothing);
+      expect(tester.widget<OutlinedButton>(initial).focusNode, same(focus));
+      await tester.tap(initial);
+      await tester.pump();
+      expect(openedKey, 'windows-key');
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'reused UUID never replaces a different key or verified history',
+    (tester) async {
+      var key = _trusted;
+      var verified = false;
+      late StateSetter refresh;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setState) {
+                refresh = setState;
+                return DeviceField(
+                  entries: [
+                    DirectoryDevice(
+                      identityId: key,
+                      name: '同名电脑',
+                      platform: 'windows',
+                      trust: verified
+                          ? DeviceTrust.verified
+                          : DeviceTrust.unverified,
+                      reachability: DeviceReachability.reachable,
+                      discoveryId: 'shared-uuid',
+                      publicKey: key == 'shared-uuid' ? null : key,
+                    ),
+                  ],
+                  localName: '本机',
+                  allowConnections: false,
+                  onLocal: () {},
+                  onDevice: (_) async {},
+                );
+              },
+            ),
+          ),
+        ),
+      );
+      refresh(() => key = _stranger);
+      await tester.pump();
+      expect(find.text('同名电脑'), findsNWidgets(2));
+      refresh(() {
+        key = _trusted;
+        verified = true;
+      });
+      await tester.pump();
+      refresh(() {
+        key = 'shared-uuid';
+        verified = false;
+      });
+      await tester.pump();
+      // The unverified stranger can be replaced by anonymous presence. The
+      // verified identity must remain separate and cannot inherit that record.
+      expect(find.byKey(const ValueKey('device-$_trusted')), findsOneWidget);
+      expect(find.byKey(const ValueKey('device-shared-uuid')), findsOneWidget);
+      expect(find.textContaining('已保存资料'), findsOneWidget);
+      refresh(() {
+        key = _trusted;
+        verified = true;
+      });
+      await tester.pump();
+      expect(find.byKey(const ValueKey('device-$_trusted')), findsOneWidget);
+      expect(find.byKey(const ValueKey('device-shared-uuid')), findsNothing);
+      expect(find.text('同名电脑'), findsOneWidget);
+    },
+  );
+
   testWidgets('the field offers no operation a peer did not negotiate', (
     tester,
   ) async {
@@ -173,10 +302,7 @@ void main() {
         ),
       ),
     );
-    expect(
-      find.text('android · 已验证连接 · 暂无可用操作'),
-      findsOneWidget,
-    );
+    expect(find.text('android · 已验证连接 · 暂无可用操作'), findsOneWidget);
     expect(find.text('已保存资料 · 需重新输码'), findsOneWidget);
     // A saved, unreachable identity cannot be acted on from the field.
     expect(
