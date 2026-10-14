@@ -31,6 +31,7 @@ std::string NewId() {
 std::string Describe(const Device& device) {
   std::ostringstream text;
   text << "platform=" << device.platform << "  id=" << device.id << "  name=" << device.name;
+  if (!device.address.empty()) text << "  address=" << device.address;
   if (device.host.empty()) {
     text << "  endpoint=none";
   } else {
