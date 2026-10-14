@@ -27,6 +27,8 @@ Both: `peer_key` identical to the advertised key, stable `peer_id=f69eebc0c5796b
 - Plain HTTP on the same port: `403 Forbidden`, `Server: Beaver`, body title **"Non-compliance ICP Filing"** with an iframe to `www.aliyun.com/beian/beian-block` — the ICP-filing block page.
 - HTTPS by IP (`-k`, diagnostic only): `404 {"error":"not_found"}` from `Server: BaseHTTP/0.6 Python/3.12.3` — **the real auxiliary service is up and serving TLS**. Only domain-based access is intercepted.
 
+Cross-reference with [2026-10-13 auxiliary TLS records](2026-10-13-auxiliary-tls-segmentation.md): that session found Dart/curl handshakes reset while Python/OpenSSL succeeded, cause then marked "link device intervention, unconfirmed". Today's differential uses **one client** (curl schannel): domain SNI fails, IP succeeds — so at least one interference layer matches the **SNI/Host domain**, and the ICP block page identifies it as Aliyun's compliance interception. This does not exclude an additional ClientHello-fingerprint-sensitive layer (which would explain the Python-vs-Dart difference by domain). The earlier decision stands: no diagnostic segmentation/padding in the product client.
+
 This is an operations/compliance blocker for trusted-connection 7.4/8.4 online acceptance (needs a filing, a different filed domain, or a non-mainland node), not a client defect. No cloud changes were made.
 
 ## Fix: direct connect now tries host → resolve-answer address → auxiliary
