@@ -33,10 +33,15 @@ class NearbyDevice {
     this.host,
     this.port,
     this.publicKey,
+    this.address,
   });
   final String? host;
   final int? port;
   final String? publicKey;
+  // Numeric address from the discovery resolve answer. Only a connection
+  // fallback when the advertised ".local" host does not resolve on this
+  // platform; the advertised publicKey still pins the peer identity.
+  final String? address;
   final String id;
   final String name;
   final String platform;
@@ -66,6 +71,7 @@ class DiscoverySnapshot {
                 host: item['host'] as String?,
                 port: int.tryParse(item['port']?.toString() ?? ''),
                 publicKey: item['key'] as String?,
+                address: item['address'] as String?,
               ),
             )
             .toList(growable: false),

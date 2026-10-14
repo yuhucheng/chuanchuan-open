@@ -97,6 +97,9 @@ struct Event {
   uintptr_t operation = 0;
   std::string instance;
   TxtRecord txt;
+  // Numeric address from the same resolve answer, used only as a connection
+  // fallback when the advertised ".local" name does not resolve on this host.
+  std::string address;
   std::vector<PointerRecord> pointers;
 };
 struct Mailbox {
@@ -238,6 +241,12 @@ void WINAPI ResolveComplete(DWORD status, void* context, DNS_SERVICE_INSTANCE* i
   if (operation) {
     Event event; event.kind = Kind::Resolved; event.status = status;
     event.instance = Utf8(operation->query.c_str());
+    if (status == ERROR_SUCCESS && instance && instance->ip4Address) {
+      IN_ADDR first{};
+      first.s_addr = *instance->ip4Address;
+      char text[INET_ADDRSTRLEN]{};
+      if (inet_ntop(AF_INET, &first, text, sizeof(text))) event.address = text;
+    }
     if (status == ERROR_SUCCESS && instance && instance->dwPropertyCount <= 16 &&
         instance->keys && instance->values) {
       for (DWORD i = 0; i < instance->dwPropertyCount; ++i) {
@@ -460,7 +469,7 @@ void NativeDiscovery::Pump() {
       if (pending == impl_->resolving.end() || pending->second.operation->number != event.operation) continue;
       const auto ttl = pending->second.ttl; const auto seen = pending->second.seen;
       impl_->resolving.erase(pending);
-      if (event.status == ERROR_SUCCESS) impl_->model.Resolved(event.token, event.instance, event.operation, event.txt, ttl, seen);
+      if (event.status == ERROR_SUCCESS) impl_->model.Resolved(event.token, event.instance, event.operation, event.txt, ttl, seen, event.address);
       else impl_->model.Remove(event.token, event.instance);
     } else if (event.status != ERROR_SUCCESS) {
       impl_->StopOperations();

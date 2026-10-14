@@ -704,6 +704,7 @@ class _FieldShellState extends State<FieldShell> {
           host: target.host,
           port: target.port,
           publicKey: target.publicKey,
+          address: target.address,
         ),
       );
       if (!mounted ||

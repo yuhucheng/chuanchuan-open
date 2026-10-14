@@ -51,6 +51,7 @@ class DirectoryDevice {
     this.discoveryId,
     this.host,
     this.port,
+    this.address,
     this.connected = false,
     this.recovering = false,
     this.capabilities = const {},
@@ -69,6 +70,7 @@ class DirectoryDevice {
         discoveryId: device.id,
         host: device.host,
         port: device.port,
+        address: device.address,
       );
 
   /// Stable per identity: the claimed key when one is advertised, otherwise the
@@ -84,6 +86,9 @@ class DirectoryDevice {
   final String? discoveryId;
   final String? host;
   final int? port;
+  /// Numeric resolve-answer address, only a connection fallback for an
+  /// unresolvable ".local" host; identity stays pinned by [publicKey].
+  final String? address;
   final bool connected;
   final bool recovering;
   final Set<String> capabilities;
@@ -138,6 +143,7 @@ List<DirectoryDevice> buildDeviceDirectory({
         discoveryId: match?.id,
         host: match?.host,
         port: match?.port,
+        address: match?.address,
         connected: peer.connected,
         recovering: peer.recovering,
         capabilities: peer.connected ? peer.capabilities : const {},

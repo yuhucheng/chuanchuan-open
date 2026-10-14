@@ -140,11 +140,12 @@ void DiscoveryModel::Fail(uint64_t token, const std::string& message) {
   Stop(); snapshot_.state = "failed"; snapshot_.message = message;
 }
 void DiscoveryModel::Update(uint64_t token, const std::string& instance, const TxtRecord& record,
-                            uint32_t ttl, uint64_t now) {
+                            uint32_t ttl, uint64_t now, const std::string& address) {
   if (token != generation_ || snapshot_.state == "stopped" || snapshot_.state == "failed") return;
   if (ttl == 0) { Remove(token, instance); return; }
   auto device = ParseDevice(record, local_id_);
   if (!device) { Remove(token, instance); return; }
+  device->address = address;
   if (!entries_.count(instance) && entries_.size() >= 128) return;
   // A bounded lease prevents hostile records from keeping a peer forever.
   entries_[instance] = {*device, now + std::min<uint32_t>(ttl, 120)};
@@ -159,11 +160,12 @@ void DiscoveryModel::ResolveStarted(uint64_t token, const std::string& instance,
   resolve_requests_[instance] = request;
 }
 void DiscoveryModel::Resolved(uint64_t token, const std::string& instance, uintptr_t request,
-                              const TxtRecord& record, uint32_t ttl, uint64_t now) {
+                              const TxtRecord& record, uint32_t ttl, uint64_t now,
+                              const std::string& address) {
   auto pending = resolve_requests_.find(instance);
   if (token != generation_ || pending == resolve_requests_.end() || pending->second != request) return;
   resolve_requests_.erase(pending);
-  Update(token, instance, record, ttl, now);
+  Update(token, instance, record, ttl, now, address);
 }
 void DiscoveryModel::Expire(uint64_t now) {
   for (auto it = entries_.begin(); it != entries_.end();) {

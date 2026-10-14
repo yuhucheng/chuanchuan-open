@@ -60,6 +60,7 @@ Value SnapshotValue(const DiscoverySnapshot& snapshot) {
     if (!device.host.empty()) entry[Value("host")] = Value(device.host);
     if (!device.port.empty()) entry[Value("port")] = Value(device.port);
     if (!device.key.empty()) entry[Value("key")] = Value(device.key);
+    if (!device.address.empty()) entry[Value("address")] = Value(device.address);
     devices.emplace_back(std::move(entry));
   }
   Map value{{Value("state"), Value(snapshot.state)}, {Value("devices"), Value(devices)}};

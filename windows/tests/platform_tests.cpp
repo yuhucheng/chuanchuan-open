@@ -152,10 +152,30 @@ void TxtContract() {
             device->key.size() == 44,
         "whitelisted macOS advertisement stays connectable");
 }
+void ResolveAddress() {
+  DiscoveryModel model;
+  const auto token = model.Start(local);
+  model.Registered(token); model.Browsing(token);
+  model.ResolveStarted(token, "one", 1);
+  model.Resolved(token, "one", 1, Record(), 120, 100, "172.20.102.31");
+  Check(model.snapshot().devices.size() == 1 &&
+            model.snapshot().devices[0].address == "172.20.102.31",
+        "resolve answer supplies numeric fallback address");
+  Check(model.snapshot().devices[0].host.empty(),
+        "address without advertised endpoint stays non-connectable");
+  model.Update(token, "one", Record(), 120, 101);
+  Check(model.snapshot().devices.size() == 1 &&
+            model.snapshot().devices[0].address.empty(),
+        "refresh without an address clears the stale fallback");
+  model.ResolveStarted(token, "one", 2);
+  model.Resolved(token, "one", 2, Record(), 120, 102, "172.20.102.49");
+  Check(model.snapshot().devices[0].address == "172.20.102.49",
+        "fresh resolve replaces the fallback address");
+}
 }
 int main() {
   NamesAndRecords(); Lifecycle(); ResolveInvalidation(); BrowseInvalidation(); MailboxFailureAcrossGenerations();
-  EndpointRecords(); TxtContract();
+  EndpointRecords(); TxtContract(); ResolveAddress();
   std::cout << "native model checks=" << checks << " failures=" << failures << '\n';
   return failures ? 1 : 0;
 }

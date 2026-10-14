@@ -16,6 +16,10 @@ struct Device {
   // Ed25519 public key. Empty means discoverable but not connectable, so the UI
   // never offers a connection the peer cannot answer.
   std::string host, port, key;
+  // Numeric IPv4 address from the resolve answer, empty when unavailable.
+  // Only a connection fallback for an unresolvable ".local" host; never an
+  // identity credential (the advertised key still pins the peer).
+  std::string address;
 };
 struct DiscoverySnapshot {
   std::string state = "stopped";
@@ -48,10 +52,11 @@ class DiscoveryModel {
   EventDisposition ClassifyEvent(DiscoveryEventKind kind, uint64_t token, uintptr_t request) const;
   void Fail(uint64_t token, const std::string& message);
   void Update(uint64_t token, const std::string& instance, const TxtRecord& record,
-              uint32_t ttl, uint64_t now);
+              uint32_t ttl, uint64_t now, const std::string& address = "");
   void ResolveStarted(uint64_t token, const std::string& instance, uintptr_t request);
   void Resolved(uint64_t token, const std::string& instance, uintptr_t request,
-                const TxtRecord& record, uint32_t ttl, uint64_t now);
+                const TxtRecord& record, uint32_t ttl, uint64_t now,
+                const std::string& address = "");
   void Remove(uint64_t token, const std::string& instance);
   void Expire(uint64_t now);
   const DiscoverySnapshot& snapshot() const { return snapshot_; }

@@ -17,4 +17,27 @@ void main() {
       expect(connectionHostSupported(platform), isFalse, reason: '$platform');
     }
   });
+
+  test('discovery snapshot decodes the numeric fallback address', () {
+    final snapshot = DiscoverySnapshot.fromMap({
+      'state': 'searching',
+      'devices': [
+        {
+          'id': 'peer',
+          'name': '对端电脑',
+          'platform': 'macos',
+          'host': 'peer.local',
+          'port': '31000',
+          'key': 'k' * 44,
+          'address': '172.20.102.31',
+        },
+        {'id': 'legacy', 'name': '旧端', 'platform': 'macos'},
+      ],
+    });
+    expect(snapshot.devices[0].address, '172.20.102.31');
+    expect(snapshot.devices[0].host, 'peer.local');
+    expect(snapshot.devices[0].port, 31000);
+    // Older native hosts never send the key; absence stays null, never ''.
+    expect(snapshot.devices[1].address, isNull);
+  });
 }

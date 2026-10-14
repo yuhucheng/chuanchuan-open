@@ -291,6 +291,28 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
           )
         : await widget.controller.connectByCode(code.text);
     final expectedKey = widget.device?.publicKey;
+    final address = device?.address?.trim();
+    if (connection == null &&
+        device != null &&
+        address != null &&
+        address.isNotEmpty &&
+        address != host &&
+        widget.controller.lastConnectionFailureCode == 'signal_unreachable' &&
+        !widget.controller.busy &&
+        mounted &&
+        !closing &&
+        submitting) {
+      // The advertised ".local" name can be unresolvable on this host (Windows
+      // mDNS cache/resolver). The resolve answer's numeric address reaches the
+      // same peer; the expected key still pins its identity. Only an
+      // unreachable TCP endpoint falls back, never a bad code or rejection.
+      connection = await widget.controller.connect(
+        address,
+        port!,
+        code.text,
+        expectedPeerKey: expectedKey,
+      );
+    }
     if (connection == null &&
         device != null &&
         expectedKey != null &&

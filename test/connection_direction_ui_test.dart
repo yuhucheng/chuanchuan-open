@@ -37,6 +37,10 @@ class _DialogConnections extends ConnectionController {
   String? relayExpectedKey;
   String? submittedCode;
   String? directFailureCode;
+  // When set, a direct connect to exactly this host succeeds despite
+  // directFailureCode, modelling a reachable numeric fallback address.
+  String? directSuccessHost;
+  final hosts = <String>[];
   int connects = 0, relayConnects = 0, cancels = 0, revision = 0;
   @override
   String? get lastConnectionFailureCode => directFailureCode;
@@ -60,13 +64,14 @@ class _DialogConnections extends ConnectionController {
     String? expectedPeerKey,
   }) async {
     connects++;
+    hosts.add(host);
     final current = ++revision;
     expectedKey = expectedPeerKey;
     busy = true;
     final result = await (pending?.future ?? Future.value(nextResult));
     if (current != revision) return null;
     busy = false;
-    if (directFailureCode != null) {
+    if (directFailureCode != null && host != directSuccessHost) {
       notifyListeners();
       return null;
     }
@@ -187,6 +192,7 @@ void main() {
     WidgetTester tester, {
     bool endpoint = true,
     bool auxiliary = false,
+    String? address,
   }) async {
     tester.view.physicalSize = const Size(1100, 950);
     tester.view.devicePixelRatio = 1;
@@ -214,6 +220,7 @@ void main() {
           host: endpoint ? 'peer.local' : null,
           port: endpoint ? 31000 : null,
           publicKey: incoming.peerKey,
+          address: endpoint ? address : null,
         ),
       ],
     );
@@ -410,6 +417,92 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     });
   }
+
+  testWidgets('unreachable local name retries the resolved address first', (
+    tester,
+  ) async {
+    final (connections, remote, _) = await mount(
+      tester,
+      auxiliary: true,
+      address: '172.20.102.31',
+    );
+    connections.directFailureCode = 'signal_unreachable';
+    connections.directSuccessHost = '172.20.102.31';
+    connections.nextResult = outgoing;
+    await openDevice(tester);
+    await tester.tap(find.text('连接并观看'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.byType(TextField),
+      ),
+      '123456',
+    );
+    await tester.tap(find.text('连接'));
+    await tester.pumpAndSettle();
+    expect(connections.hosts, ['peer.local', '172.20.102.31']);
+    expect(connections.relayConnects, 0);
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(remote.starts, [(SessionOperation.watch, incoming.peerKey)]);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('unreachable address continues to the auxiliary fallback', (
+    tester,
+  ) async {
+    final (connections, _, _) = await mount(
+      tester,
+      auxiliary: true,
+      address: '172.20.102.31',
+    );
+    connections.directFailureCode = 'signal_unreachable';
+    connections.nextResult = outgoing;
+    await openDevice(tester);
+    await tester.tap(find.text('连接并观看'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.byType(TextField),
+      ),
+      '123456',
+    );
+    await tester.tap(find.text('连接'));
+    await tester.pumpAndSettle();
+    expect(connections.hosts, ['peer.local', '172.20.102.31']);
+    expect(connections.relayConnects, 1);
+    expect(connections.relayExpectedKey, incoming.peerKey);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('rejected identity never retries the resolved address', (
+    tester,
+  ) async {
+    final (connections, remote, _) = await mount(
+      tester,
+      auxiliary: true,
+      address: '172.20.102.31',
+    );
+    connections.directFailureCode = 'identity_mismatch';
+    await openDevice(tester);
+    await tester.tap(find.text('连接并观看'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.byType(TextField),
+      ),
+      '123456',
+    );
+    await tester.tap(find.text('连接'));
+    await tester.pumpAndSettle();
+    expect(connections.hosts, ['peer.local']);
+    expect(connections.relayConnects, 0);
+    expect(remote.starts, isEmpty);
+    expect(find.byType(AlertDialog), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
 
   testWidgets(
     'missing reverse endpoint offers refresh instead of unusable operations',
